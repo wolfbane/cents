@@ -6,6 +6,8 @@ from datetime import date, datetime
 from typing import Optional
 
 from cents.models import (
+    Alert,
+    AlertType,
     Evidence,
     EvidenceType,
     Outcome,
@@ -15,6 +17,7 @@ from cents.models import (
     Thesis,
     ThesisAccuracy,
     ThesisStatus,
+    WatchlistItem,
 )
 from cents.db.schema import get_connection
 
@@ -312,4 +315,138 @@ class OutcomeRepository:
             agent_performance=json.loads(row["agent_performance"]),
             retrospective=row["retrospective"],
             recorded_at=datetime.fromisoformat(row["recorded_at"]),
+        )
+
+
+class WatchlistRepository:
+    """CRUD operations for watchlist."""
+
+    def __init__(self, conn: sqlite3.Connection | None = None):
+        self.conn = conn or get_connection()
+
+    def add(self, item: WatchlistItem) -> WatchlistItem:
+        """Add a symbol to watchlist."""
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO watchlist (id, symbol, notes, thesis_id, last_scanned, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item.id,
+                item.symbol.upper(),
+                item.notes,
+                item.thesis_id,
+                item.last_scanned.isoformat() if item.last_scanned else None,
+                item.created_at.isoformat(),
+            ),
+        )
+        self.conn.commit()
+        return item
+
+    def remove(self, symbol: str) -> bool:
+        """Remove a symbol from watchlist."""
+        cursor = self.conn.execute(
+            "DELETE FROM watchlist WHERE symbol = ?", (symbol.upper(),)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get(self, symbol: str) -> Optional[WatchlistItem]:
+        """Get watchlist item by symbol."""
+        row = self.conn.execute(
+            "SELECT * FROM watchlist WHERE symbol = ?", (symbol.upper(),)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_item(row)
+
+    def list(self) -> list[WatchlistItem]:
+        """List all watchlist items."""
+        rows = self.conn.execute(
+            "SELECT * FROM watchlist ORDER BY created_at DESC"
+        ).fetchall()
+        return [self._row_to_item(row) for row in rows]
+
+    def update_scanned(self, symbol: str) -> None:
+        """Update last_scanned timestamp."""
+        self.conn.execute(
+            "UPDATE watchlist SET last_scanned = ? WHERE symbol = ?",
+            (datetime.now().isoformat(), symbol.upper()),
+        )
+        self.conn.commit()
+
+    def _row_to_item(self, row: sqlite3.Row) -> WatchlistItem:
+        return WatchlistItem(
+            id=row["id"],
+            symbol=row["symbol"],
+            notes=row["notes"],
+            thesis_id=row["thesis_id"],
+            last_scanned=datetime.fromisoformat(row["last_scanned"]) if row["last_scanned"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+
+class AlertRepository:
+    """CRUD operations for alerts."""
+
+    def __init__(self, conn: sqlite3.Connection | None = None):
+        self.conn = conn or get_connection()
+
+    def create(self, alert: Alert) -> Alert:
+        """Create a new alert."""
+        self.conn.execute(
+            """
+            INSERT INTO alerts (id, symbol, alert_type, message, data, read, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                alert.id,
+                alert.symbol,
+                alert.alert_type.value,
+                alert.message,
+                json.dumps(alert.data),
+                1 if alert.read else 0,
+                alert.created_at.isoformat(),
+            ),
+        )
+        self.conn.commit()
+        return alert
+
+    def list_unread(self) -> list[Alert]:
+        """List unread alerts."""
+        rows = self.conn.execute(
+            "SELECT * FROM alerts WHERE read = 0 ORDER BY created_at DESC"
+        ).fetchall()
+        return [self._row_to_alert(row) for row in rows]
+
+    def list_all(self, limit: int = 50) -> list[Alert]:
+        """List all alerts."""
+        rows = self.conn.execute(
+            "SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [self._row_to_alert(row) for row in rows]
+
+    def mark_read(self, alert_id: str) -> bool:
+        """Mark an alert as read."""
+        cursor = self.conn.execute(
+            "UPDATE alerts SET read = 1 WHERE id = ?", (alert_id,)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def mark_all_read(self) -> int:
+        """Mark all alerts as read."""
+        cursor = self.conn.execute("UPDATE alerts SET read = 1 WHERE read = 0")
+        self.conn.commit()
+        return cursor.rowcount
+
+    def _row_to_alert(self, row: sqlite3.Row) -> Alert:
+        return Alert(
+            id=row["id"],
+            symbol=row["symbol"],
+            alert_type=AlertType(row["alert_type"]),
+            message=row["message"],
+            data=json.loads(row["data"]),
+            read=bool(row["read"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
         )

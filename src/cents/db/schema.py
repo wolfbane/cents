@@ -58,9 +58,31 @@ CREATE TABLE IF NOT EXISTS outcomes (
     FOREIGN KEY (position_id) REFERENCES positions(id)
 );
 
+CREATE TABLE IF NOT EXISTS watchlist (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL UNIQUE,
+    notes TEXT DEFAULT '',
+    thesis_id TEXT,
+    last_scanned TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (thesis_id) REFERENCES theses(id)
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    alert_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    data TEXT DEFAULT '{}',
+    read INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_theses_status ON theses(status);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_evidence_thesis ON evidence(thesis_id);
+CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol);
+CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 """
 
 

@@ -4,6 +4,8 @@ from cents.models.thesis import Thesis, ThesisStatus
 from cents.models.evidence import Evidence, EvidenceType
 from cents.models.position import Position, PositionSide, PositionStatus
 from cents.models.outcome import Outcome, ThesisAccuracy
+from cents.models.watchlist import WatchlistItem
+from cents.models.alert import Alert, AlertType
 
 __all__ = [
     "Thesis",
@@ -15,4 +17,7 @@ __all__ = [
     "PositionStatus",
     "Outcome",
     "ThesisAccuracy",
+    "WatchlistItem",
+    "Alert",
+    "AlertType",
 ]

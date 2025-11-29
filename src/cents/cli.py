@@ -5,7 +5,14 @@ from typing import Optional
 
 import click
 
-from cents.db import ThesisRepository, PositionRepository, OutcomeRepository, EvidenceRepository
+from cents.db import (
+    ThesisRepository,
+    PositionRepository,
+    OutcomeRepository,
+    EvidenceRepository,
+    WatchlistRepository,
+    AlertRepository,
+)
 from cents.models import (
     Thesis,
     ThesisStatus,
@@ -15,6 +22,9 @@ from cents.models import (
     Outcome,
     ThesisAccuracy,
     EvidenceType,
+    WatchlistItem,
+    Alert,
+    AlertType,
 )
 from cents.agents import AGENTS
 
@@ -373,6 +383,166 @@ def outcome_list():
         click.echo(
             f"[{acc}] {o.id}: position {o.position_id} {sign}${o.pnl:.2f} ({sign}{o.pnl_pct:.1f}%)"
         )
+
+
+# --- Scan command ---
+
+
+@cli.command("scan")
+@click.option("--threshold", "-t", type=float, default=5.0, help="Conviction change threshold for alerts")
+@click.option("--webhook", "-w", help="Webhook URL for notifications")
+def scan(threshold: float, webhook: Optional[str]):
+    """Scan watchlist and generate alerts for significant changes."""
+    from cents.agents import OrchestratorAgent
+    from cents.notify import notify
+
+    watch_repo = WatchlistRepository()
+    alert_repo = AlertRepository()
+    thesis_repo = ThesisRepository()
+
+    items = watch_repo.list()
+    if not items:
+        click.echo("Watchlist is empty. Add symbols with: cents watch add <SYMBOL>")
+        return
+
+    click.echo(f"Scanning {len(items)} symbols...\n")
+    alerts_generated = 0
+
+    for item in items:
+        click.echo(f"--- {item.symbol} ---")
+
+        # Get linked thesis if any
+        thesis = None
+        if item.thesis_id:
+            thesis = thesis_repo.get(item.thesis_id)
+
+        # Run orchestrator
+        agent = OrchestratorAgent()
+        result = agent.research(item.symbol, thesis)
+
+        click.echo(f"  {result.summary}")
+
+        # Check for significant conviction change
+        if abs(result.conviction_delta) >= threshold:
+            direction = "bullish" if result.conviction_delta > 0 else "bearish"
+            alert = Alert(
+                symbol=item.symbol,
+                alert_type=AlertType.CONVICTION_CHANGE,
+                message=f"Significant {direction} signal: {result.conviction_delta:+.1f} conviction",
+                data={
+                    "conviction_delta": result.conviction_delta,
+                    "evidence_count": len(result.evidence),
+                },
+            )
+            alert_repo.create(alert)
+            alerts_generated += 1
+            click.echo(f"  [!] Alert: {alert.message}")
+            notify(alert, webhook)
+
+        # Update last_scanned
+        watch_repo.update_scanned(item.symbol)
+        click.echo()
+
+    click.echo(f"Scan complete. Generated {alerts_generated} alerts.")
+    if alerts_generated > 0:
+        click.echo("View alerts with: cents alert list")
+
+
+# --- Watch commands ---
+
+
+@cli.group()
+def watch():
+    """Manage watchlist."""
+    pass
+
+
+@watch.command("add")
+@click.argument("symbol")
+@click.option("--thesis", "-t", "thesis_id", help="Link to thesis ID")
+@click.option("--notes", "-n", default="", help="Notes for this watch")
+def watch_add(symbol: str, thesis_id: Optional[str], notes: str):
+    """Add a symbol to watchlist."""
+    repo = WatchlistRepository()
+    existing = repo.get(symbol)
+    if existing:
+        click.echo(f"{symbol.upper()} is already on watchlist.")
+        return
+
+    item = WatchlistItem(symbol=symbol.upper(), thesis_id=thesis_id, notes=notes)
+    repo.add(item)
+    click.echo(f"Added {symbol.upper()} to watchlist")
+
+
+@watch.command("remove")
+@click.argument("symbol")
+def watch_remove(symbol: str):
+    """Remove a symbol from watchlist."""
+    repo = WatchlistRepository()
+    if repo.remove(symbol):
+        click.echo(f"Removed {symbol.upper()} from watchlist")
+    else:
+        click.echo(f"{symbol.upper()} not found in watchlist.", err=True)
+
+
+@watch.command("list")
+def watch_list():
+    """List watched symbols."""
+    repo = WatchlistRepository()
+    items = repo.list()
+
+    if not items:
+        click.echo("Watchlist is empty.")
+        return
+
+    for item in items:
+        scanned = item.last_scanned.strftime("%Y-%m-%d %H:%M") if item.last_scanned else "never"
+        thesis_str = f" (thesis: {item.thesis_id})" if item.thesis_id else ""
+        click.echo(f"  {item.symbol}{thesis_str} - last scanned: {scanned}")
+
+
+# --- Alert commands ---
+
+
+@cli.group()
+def alert():
+    """Manage alerts."""
+    pass
+
+
+@alert.command("list")
+@click.option("--all", "show_all", is_flag=True, help="Show all alerts including read")
+def alert_list(show_all: bool):
+    """List alerts."""
+    repo = AlertRepository()
+    alerts = repo.list_all() if show_all else repo.list_unread()
+
+    if not alerts:
+        click.echo("No alerts." if show_all else "No unread alerts.")
+        return
+
+    for a in alerts:
+        icon = " " if a.read else "*"
+        time = a.created_at.strftime("%m-%d %H:%M")
+        click.echo(f"[{icon}] {a.id} {time} {a.symbol}: {a.message}")
+
+
+@alert.command("read")
+@click.argument("alert_id", required=False)
+@click.option("--all", "mark_all", is_flag=True, help="Mark all as read")
+def alert_read(alert_id: Optional[str], mark_all: bool):
+    """Mark alert(s) as read."""
+    repo = AlertRepository()
+    if mark_all:
+        count = repo.mark_all_read()
+        click.echo(f"Marked {count} alerts as read")
+    elif alert_id:
+        if repo.mark_read(alert_id):
+            click.echo(f"Marked alert {alert_id} as read")
+        else:
+            click.echo(f"Alert {alert_id} not found.", err=True)
+    else:
+        click.echo("Specify alert ID or use --all", err=True)
 
 
 if __name__ == "__main__":
