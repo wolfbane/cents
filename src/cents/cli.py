@@ -5,7 +5,7 @@ from typing import Optional
 
 import click
 
-from cents.db import ThesisRepository, PositionRepository, OutcomeRepository
+from cents.db import ThesisRepository, PositionRepository, OutcomeRepository, EvidenceRepository
 from cents.models import (
     Thesis,
     ThesisStatus,
@@ -14,7 +14,9 @@ from cents.models import (
     PositionStatus,
     Outcome,
     ThesisAccuracy,
+    EvidenceType,
 )
+from cents.agents import AGENTS
 
 
 @click.group()
@@ -22,6 +24,76 @@ from cents.models import (
 def cli():
     """Cents: Agentic investing guidance."""
     pass
+
+
+# --- Research command ---
+
+
+@cli.command("research")
+@click.argument("symbol")
+@click.option("--thesis", "-t", "thesis_id", help="Thesis ID to evaluate against")
+@click.option(
+    "--agent",
+    "-a",
+    "agent_name",
+    type=click.Choice(list(AGENTS.keys())),
+    help="Run specific agent only",
+)
+@click.option("--save/--no-save", default=True, help="Save evidence to database")
+def research(symbol: str, thesis_id: Optional[str], agent_name: Optional[str], save: bool):
+    """Run research agents on a symbol."""
+    # Get thesis if specified
+    thesis = None
+    if thesis_id:
+        thesis_repo = ThesisRepository()
+        thesis = thesis_repo.get(thesis_id)
+        if thesis is None:
+            click.echo(f"Thesis {thesis_id} not found.", err=True)
+            raise SystemExit(1)
+        click.echo(f"Evaluating against thesis: {thesis.title}\n")
+
+    # Determine which agents to run
+    if agent_name:
+        agents_to_run = {agent_name: AGENTS[agent_name]}
+    else:
+        agents_to_run = AGENTS
+
+    total_conviction_delta = 0.0
+    all_evidence = []
+
+    for name, agent_class in agents_to_run.items():
+        click.echo(f"--- {name.upper()} ---")
+        agent = agent_class()
+        result = agent.research(symbol.upper(), thesis)
+
+        click.echo(f"Summary: {result.summary}")
+        click.echo(f"Conviction delta: {result.conviction_delta:+.1f}")
+
+        if result.evidence:
+            click.echo("Evidence:")
+            for e in result.evidence:
+                icon = {"supporting": "+", "contradicting": "-", "neutral": "~"}[e.type.value]
+                click.echo(f"  [{icon}] {e.content}")
+
+        total_conviction_delta += result.conviction_delta
+        all_evidence.extend(result.evidence)
+        click.echo()
+
+    # Save evidence and update thesis if requested
+    if save and all_evidence and thesis:
+        evidence_repo = EvidenceRepository()
+        for e in all_evidence:
+            e.thesis_id = thesis.id
+            evidence_repo.create(e)
+
+        thesis_repo = ThesisRepository()
+        thesis.update_conviction(total_conviction_delta)
+        thesis_repo.update(thesis)
+
+        click.echo(f"Saved {len(all_evidence)} evidence items")
+        click.echo(f"Thesis conviction: {thesis.conviction:.1f}% ({total_conviction_delta:+.1f})")
+    elif not thesis and all_evidence:
+        click.echo(f"Generated {len(all_evidence)} evidence items (not saved - no thesis linked)")
 
 
 # --- Thesis commands ---
