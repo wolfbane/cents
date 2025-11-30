@@ -25,7 +25,7 @@ class TechnicalAgent(BaseAgent):
 
         try:
             # Get historical data
-            hist = ticker.history(period="6mo")
+            hist = self._with_retries(lambda: ticker.history(period="6mo"))
             if hist.empty:
                 return AgentResult(
                     evidence=[],
@@ -36,7 +36,7 @@ class TechnicalAgent(BaseAgent):
             return AgentResult(
                 evidence=[],
                 conviction_delta=0,
-                summary=f"Failed to fetch data for {symbol}: {e}",
+                summary=f"Failed to fetch data for {symbol} after retries: {e}",
             )
 
         close = hist["Close"]

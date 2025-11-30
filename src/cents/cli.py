@@ -47,7 +47,7 @@ def _evidence_to_dict(evidence):
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.1.0", package_name="cents")
 def cli():
     """Cents: Agentic investing guidance."""
     pass

@@ -2,7 +2,11 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+import time
+from typing import Callable, Optional, TypeVar
+
+
+_T = TypeVar("_T")
 
 from cents.models import Evidence, EvidenceType, Thesis
 from cents.db import EvidenceRepository, ThesisRepository
@@ -25,6 +29,29 @@ class BaseAgent(ABC):
     def __init__(self):
         self.evidence_repo = EvidenceRepository()
         self.thesis_repo = ThesisRepository()
+
+    def _with_retries(
+        self,
+        func: Callable[[], "_T"],
+        retries: int = 3,
+        backoff: float = 0.5,
+        exceptions: tuple[type[Exception], ...] = (Exception,),
+    ) -> "_T":
+        """Execute a callable with simple exponential backoff retries."""
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(retries):
+            try:
+                return func()
+            except exceptions as exc:
+                last_exc = exc
+                if attempt == retries - 1:
+                    break
+                time.sleep(backoff * (2**attempt))
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Retry helper exited without executing")
 
     @abstractmethod
     def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:

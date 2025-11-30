@@ -43,7 +43,7 @@ class SentimentAgent(BaseAgent):
             return self._research_without_api(symbol, thesis_id)
 
         try:
-            articles = self._fetch_news(symbol)
+            articles = self._with_retries(lambda: self._fetch_news(symbol))
             if not articles:
                 return AgentResult(
                     evidence=[],
@@ -55,7 +55,7 @@ class SentimentAgent(BaseAgent):
             return AgentResult(
                 evidence=[],
                 conviction_delta=0,
-                summary=f"{symbol}: Failed to fetch news - {e}",
+                summary=f"{symbol}: Failed to fetch news after retries - {e}",
             )
 
     def _fetch_news(self, symbol: str) -> list[dict]:
@@ -137,15 +137,21 @@ class SentimentAgent(BaseAgent):
         evidence = [
             self.create_evidence(
                 thesis_id=thesis_id,
-                content="News API key not configured. Set NEWS_API_KEY env var for sentiment data.",
+                content=(
+                    "News API key missing - sentiment scan skipped. "
+                    "Set NEWS_API_KEY env var for NewsAPI access."
+                ),
                 source="system",
-                evidence_type=EvidenceType.NEUTRAL,
+                evidence_type=EvidenceType.CONTRADICTING,
                 confidence=0.0,
-                metadata={"error": "no_api_key"},
+                metadata={"error": "missing_news_api_key"},
             )
         ]
         return AgentResult(
             evidence=evidence,
             conviction_delta=0,
-            summary=f"{symbol}: News API key not configured (get free key at newsapi.org)",
+            summary=(
+                f"WARNING: {symbol} sentiment skipped - NEWS_API_KEY not configured "
+                "(get a free key at newsapi.org)"
+            ),
         )
