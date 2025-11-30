@@ -94,6 +94,7 @@ class PriceDataProvider(Protocol):
         self,
         symbol: str,
         days: int = 180,
+        as_of: Optional[date] = None,
     ) -> PriceHistory:
         """
         Get historical price data.
@@ -101,6 +102,7 @@ class PriceDataProvider(Protocol):
         Args:
             symbol: Ticker symbol
             days: Number of days of history (default 180 = ~6 months)
+            as_of: End date for history (default: today). For backtesting.
 
         Returns:
             PriceHistory with daily bars
@@ -110,8 +112,16 @@ class PriceDataProvider(Protocol):
         """
         ...
 
-    def get_latest_price(self, symbol: str) -> Optional[float]:
-        """Get current/latest price for symbol."""
+    def get_latest_price(
+        self, symbol: str, as_of: Optional[date] = None
+    ) -> Optional[float]:
+        """
+        Get current/latest price for symbol.
+
+        Args:
+            symbol: Ticker symbol
+            as_of: Date to get price for (default: current quote)
+        """
         ...
 
 
@@ -119,12 +129,17 @@ class PriceDataProvider(Protocol):
 class FundamentalsDataProvider(Protocol):
     """Protocol for company fundamentals data providers."""
 
-    def get_fundamentals(self, symbol: str) -> FundamentalsData:
+    def get_fundamentals(
+        self, symbol: str, as_of: Optional[date] = None
+    ) -> FundamentalsData:
         """
         Get fundamental data for a symbol.
 
         Args:
             symbol: Ticker symbol
+            as_of: Date to get fundamentals for (default: latest).
+                   For backtesting, returns most recent quarterly data
+                   as of that date.
 
         Returns:
             FundamentalsData (fields may be None if unavailable)

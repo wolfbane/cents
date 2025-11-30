@@ -3,6 +3,7 @@
 import urllib.request
 import urllib.error
 import json
+from datetime import date
 from typing import Optional
 
 from cents.config import get_settings
@@ -40,16 +41,26 @@ class FMPFundamentalsProvider:
         except (urllib.error.URLError, json.JSONDecodeError):
             return None
 
-    def get_fundamentals(self, symbol: str) -> FundamentalsData:
+    def get_fundamentals(
+        self, symbol: str, as_of: Optional[date] = None
+    ) -> FundamentalsData:
         """
         Get fundamental data for a symbol from FMP.
 
         Args:
             symbol: Ticker symbol (e.g., "AAPL")
+            as_of: Date to get fundamentals for (default: latest TTM)
 
         Returns:
             FundamentalsData with available metrics
         """
+        if as_of:
+            return self._get_historical_fundamentals(symbol, as_of)
+
+        return self._get_current_fundamentals(symbol)
+
+    def _get_current_fundamentals(self, symbol: str) -> FundamentalsData:
+        """Get current/TTM fundamentals."""
         # Fetch company profile for basic info and some metrics
         profile_data = self._fetch_json(f"profile/{symbol}")
         profile = profile_data[0] if profile_data and len(profile_data) > 0 else {}
@@ -93,6 +104,65 @@ class FMPFundamentalsProvider:
                 "rating": rating,
             },
         )
+
+    def _get_historical_fundamentals(
+        self, symbol: str, as_of: date
+    ) -> FundamentalsData:
+        """Get fundamentals as of a historical date using quarterly data."""
+        # Fetch company profile (static info)
+        profile_data = self._fetch_json(f"profile/{symbol}")
+        profile = profile_data[0] if profile_data and len(profile_data) > 0 else {}
+
+        # Fetch historical quarterly ratios
+        ratios_data = self._fetch_json(f"ratios/{symbol}?period=quarter&limit=40")
+        ratios = self._find_quarter_data(ratios_data, as_of)
+
+        # Fetch historical quarterly key metrics
+        metrics_data = self._fetch_json(f"key-metrics/{symbol}?period=quarter&limit=40")
+        metrics = self._find_quarter_data(metrics_data, as_of)
+
+        return FundamentalsData(
+            symbol=symbol,
+            name=profile.get("companyName"),
+            # Valuation
+            pe_ratio=ratios.get("priceEarningsRatio"),
+            forward_pe=None,
+            peg_ratio=ratios.get("priceEarningsToGrowthRatio"),
+            # Growth
+            revenue_growth=metrics.get("revenuePerShare"),
+            earnings_growth=None,
+            # Profitability
+            profit_margin=ratios.get("netProfitMargin"),
+            return_on_equity=ratios.get("returnOnEquity"),
+            # Balance sheet
+            debt_to_equity=ratios.get("debtEquityRatio"),
+            current_ratio=ratios.get("currentRatio"),
+            # No historical recommendations available
+            recommendation=None,
+            raw={
+                "profile": profile,
+                "ratios": ratios,
+                "metrics": metrics,
+                "as_of": as_of.isoformat(),
+            },
+        )
+
+    def _find_quarter_data(
+        self, data: Optional[list], as_of: date
+    ) -> dict:
+        """Find the most recent quarterly data before as_of date."""
+        if not data:
+            return {}
+
+        as_of_str = as_of.isoformat()
+        for item in data:
+            # FMP quarterly data has 'date' field in YYYY-MM-DD format
+            item_date = item.get("date", "")
+            if item_date <= as_of_str:
+                return item
+
+        # If no data before as_of, return empty
+        return {}
 
     def _map_rating(self, fmp_rating: Optional[str]) -> Optional[str]:
         """Map FMP rating to standard recommendation string."""

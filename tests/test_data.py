@@ -1,6 +1,6 @@
 """Tests for data providers."""
 
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -256,6 +256,85 @@ class TestFMPFundamentalsProvider:
 
             assert provider._map_rating(None) is None
 
+    @patch("cents.data.fmp.urllib.request.urlopen")
+    @patch("cents.data.fmp.get_settings")
+    def test_get_fundamentals_with_as_of(self, mock_settings, mock_urlopen):
+        """Get historical fundamentals with as_of date."""
+        mock_settings.return_value.fmp_api_key = "test_key"
+
+        # Mock responses for historical queries
+        responses = [
+            [{"companyName": "Apple Inc."}],  # profile
+            [
+                {"date": "2024-06-30", "priceEarningsRatio": 30.0, "netProfitMargin": 0.26},
+                {"date": "2024-03-31", "priceEarningsRatio": 28.0, "netProfitMargin": 0.25},
+                {"date": "2023-12-31", "priceEarningsRatio": 27.0, "netProfitMargin": 0.24},
+            ],  # ratios (quarterly)
+            [
+                {"date": "2024-06-30", "revenuePerShare": 12.0},
+                {"date": "2024-03-31", "revenuePerShare": 11.5},
+                {"date": "2023-12-31", "revenuePerShare": 11.0},
+            ],  # metrics (quarterly)
+        ]
+        call_count = [0]
+
+        def mock_response(*args, **kwargs):
+            response = MagicMock()
+            response.read.return_value = __import__("json").dumps(responses[call_count[0]]).encode()
+            response.__enter__ = MagicMock(return_value=response)
+            response.__exit__ = MagicMock(return_value=False)
+            call_count[0] += 1
+            return response
+
+        mock_urlopen.side_effect = mock_response
+
+        provider = FMPFundamentalsProvider()
+        # Request data as of April 15, 2024 - should get Q1 2024 data
+        data = provider.get_fundamentals("AAPL", as_of=date(2024, 4, 15))
+
+        assert data.symbol == "AAPL"
+        assert data.name == "Apple Inc."
+        assert data.pe_ratio == 28.0  # Q1 2024 data
+        assert data.profit_margin == 0.25
+        assert data.raw["as_of"] == "2024-04-15"
+
+    @patch("cents.data.fmp.get_settings")
+    def test_find_quarter_data(self, mock_settings):
+        """Test quarter data lookup."""
+        mock_settings.return_value.fmp_api_key = "test_key"
+        provider = FMPFundamentalsProvider()
+
+        data = [
+            {"date": "2024-06-30", "value": 3},
+            {"date": "2024-03-31", "value": 2},
+            {"date": "2023-12-31", "value": 1},
+        ]
+
+        # Should find Q1 2024 (most recent before May 1)
+        result = provider._find_quarter_data(data, date(2024, 5, 1))
+        assert result["value"] == 2
+        assert result["date"] == "2024-03-31"
+
+        # Should find Q2 2024 (exact match on date)
+        result = provider._find_quarter_data(data, date(2024, 6, 30))
+        assert result["value"] == 3
+
+        # Should return empty for date before all data
+        result = provider._find_quarter_data(data, date(2023, 1, 1))
+        assert result == {}
+
+    @patch("cents.data.fmp.get_settings")
+    def test_find_quarter_data_empty(self, mock_settings):
+        """Test quarter data lookup with empty data."""
+        mock_settings.return_value.fmp_api_key = "test_key"
+        provider = FMPFundamentalsProvider()
+
+        result = provider._find_quarter_data(None, date(2024, 5, 1))
+        assert result == {}
+
+        result = provider._find_quarter_data([], date(2024, 5, 1))
+        assert result == {}
+
 
 @pytest.mark.skipif(not ALPACA_DATA_AVAILABLE, reason="alpaca-py not installed")
 class TestAlpacaPriceProvider:
@@ -412,3 +491,71 @@ class TestAlpacaPriceProvider:
         price = provider.get_latest_price("AAPL")
 
         assert price == 150.10
+
+    @patch("cents.data.alpaca.StockHistoricalDataClient")
+    @patch("cents.data.alpaca.get_settings")
+    def test_get_history_with_as_of(self, mock_settings, mock_client_class):
+        """Get historical price data with as_of date."""
+        mock_settings.return_value.alpaca_api_key = "test_key"
+        mock_settings.return_value.alpaca_secret_key = "test_secret"
+
+        mock_bar = MagicMock()
+        mock_bar.timestamp = datetime(2024, 1, 15, 16, 0)
+        mock_bar.open = 150.0
+        mock_bar.high = 155.0
+        mock_bar.low = 149.0
+        mock_bar.close = 154.0
+        mock_bar.volume = 1000000
+
+        mock_response = MagicMock()
+        mock_response.data = {"AAPL": [mock_bar]}
+
+        mock_client = MagicMock()
+        mock_client.get_stock_bars.return_value = mock_response
+        mock_client_class.return_value = mock_client
+
+        provider = AlpacaPriceProvider()
+        history = provider.get_history("AAPL", days=30, as_of=date(2024, 1, 15))
+
+        assert history.symbol == "AAPL"
+        assert len(history.bars) == 1
+        assert history.bars[0].close == 154.0
+
+        # Verify the request used the as_of date
+        call_args = mock_client.get_stock_bars.call_args
+        request = call_args[0][0]
+        # End date should be based on as_of
+        assert request.end.date() == date(2024, 1, 15)
+
+    @patch("cents.data.alpaca.StockHistoricalDataClient")
+    @patch("cents.data.alpaca.get_settings")
+    def test_get_latest_price_with_as_of(self, mock_settings, mock_client_class):
+        """Get historical price using as_of date."""
+        mock_settings.return_value.alpaca_api_key = "test_key"
+        mock_settings.return_value.alpaca_secret_key = "test_secret"
+
+        # Mock bar data for historical lookup
+        mock_bar = MagicMock()
+        mock_bar.timestamp = datetime(2024, 1, 15, 16, 0)
+        mock_bar.open = 150.0
+        mock_bar.high = 155.0
+        mock_bar.low = 149.0
+        mock_bar.close = 154.0
+        mock_bar.volume = 1000000
+
+        mock_response = MagicMock()
+        mock_response.data = {"AAPL": [mock_bar]}
+
+        mock_client = MagicMock()
+        mock_client.get_stock_bars.return_value = mock_response
+        mock_client_class.return_value = mock_client
+
+        provider = AlpacaPriceProvider()
+        price = provider.get_latest_price("AAPL", as_of=date(2024, 1, 15))
+
+        # Should return the close price from historical data
+        assert price == 154.0
+        # Should NOT call get_stock_latest_quote
+        mock_client.get_stock_latest_quote.assert_not_called()
+        # Should call get_stock_bars instead
+        mock_client.get_stock_bars.assert_called_once()

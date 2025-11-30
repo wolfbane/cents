@@ -1,6 +1,6 @@
 """Alpaca market data provider."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from cents.config import get_settings
@@ -44,18 +44,24 @@ class AlpacaPriceProvider:
 
         self._client = StockHistoricalDataClient(self._api_key, self._secret_key)
 
-    def get_history(self, symbol: str, days: int = 180) -> PriceHistory:
+    def get_history(
+        self, symbol: str, days: int = 180, as_of: Optional[date] = None
+    ) -> PriceHistory:
         """
         Get historical daily bars for a symbol.
 
         Args:
             symbol: Ticker symbol (e.g., "AAPL")
             days: Number of days of history
+            as_of: End date for history (default: today)
 
         Returns:
             PriceHistory with daily OHLCV bars
         """
-        end = datetime.now()
+        if as_of:
+            end = datetime.combine(as_of, datetime.max.time())
+        else:
+            end = datetime.now()
         start = end - timedelta(days=days)
 
         request = StockBarsRequest(
@@ -84,17 +90,25 @@ class AlpacaPriceProvider:
 
         return PriceHistory(symbol=symbol, bars=bars)
 
-    def get_latest_price(self, symbol: str) -> Optional[float]:
+    def get_latest_price(
+        self, symbol: str, as_of: Optional[date] = None
+    ) -> Optional[float]:
         """
         Get latest quote midpoint for a symbol.
 
         Args:
             symbol: Ticker symbol
+            as_of: Date to get closing price for (default: current quote)
 
         Returns:
-            Latest price (bid/ask midpoint) or None
+            Latest price (bid/ask midpoint) or close price for as_of date
         """
         try:
+            if as_of:
+                # For historical date, fetch the bar and return close
+                history = self.get_history(symbol, days=5, as_of=as_of)
+                return history.latest_close()
+
             request = StockLatestQuoteRequest(symbol_or_symbols=symbol)
             quotes = self._client.get_stock_latest_quote(request)
 
