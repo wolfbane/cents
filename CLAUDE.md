@@ -17,5 +17,15 @@ cents outcome record <id> --accuracy correct
 - **agents/**: Research agents (Phase 2)
 - **broker/**: Alpaca integration (Phase 5)
 
+### Known Gaps
+- **Network fragility**: Agents call APIs without retries/caching; missing API keys silently degrade
+- **Data quality**: Evidence lacks raw payloads; broker sync uses current date vs actual entry timestamps
+- **UX**: No JSON output or config file; single global threshold for alerts
+
+### Next Priorities
+1. Config file for API keys + `--output json` flag
+2. Retry/backoff for external APIs + explicit warnings when keys missing
+3. Per-symbol alert thresholds
+
 ### Beads tracked (`bd help`)
 Non-traditional project focused on real outcomes
