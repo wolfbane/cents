@@ -157,6 +157,20 @@ class TestFundamentalsAgent:
         assert "Failed to fetch" in result.summary
 
     @patch("cents.agents.fundamentals.yf.Ticker")
+    def test_research_retries_on_transient_failure(self, mock_ticker_class):
+        """Retries yfinance info fetch before failing."""
+        mock_ticker = MagicMock()
+        type(mock_ticker).info = PropertyMock(
+            side_effect=[Exception("temporary"), {"shortName": "Retry Corp"}]
+        )
+        mock_ticker_class.return_value = mock_ticker
+
+        agent = FundamentalsAgent()
+        result = agent.research("TEST")
+
+        assert "Retry Corp" in result.summary
+
+    @patch("cents.agents.fundamentals.yf.Ticker")
     def test_research_no_signals(self, mock_ticker_class):
         """No significant signals when data is neutral."""
         mock_ticker = MagicMock()
@@ -299,6 +313,7 @@ class TestMacroAgent:
 
         assert result.conviction_delta == 0
         assert "not configured" in result.summary
+        assert result.evidence[0].type == EvidenceType.CONTRADICTING
 
     @patch.dict("os.environ", {"FRED_API_KEY": "test_key"})
     def test_research_high_rates_bearish(self):
@@ -442,6 +457,16 @@ class TestSentimentAgent:
 
         assert result.conviction_delta == 0
         assert "No recent news" in result.summary
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_research_missing_news_api_key_warns(self):
+        """Explicit warning is returned when NEWS_API_KEY is absent."""
+        agent = SentimentAgent()
+        result = agent.research("TEST")
+
+        assert result.conviction_delta == 0
+        assert result.evidence[0].type == EvidenceType.CONTRADICTING
+        assert "WARNING" in result.summary
 
 
 class TestOrchestratorAgent:

@@ -22,12 +22,12 @@ class FundamentalsAgent(BaseAgent):
 
         # Get basic info
         try:
-            info = ticker.info
+            info = self._with_retries(lambda: ticker.info)
         except Exception as e:
             return AgentResult(
                 evidence=[],
                 conviction_delta=0,
-                summary=f"Failed to fetch data for {symbol}: {e}",
+                summary=f"Failed to fetch data for {symbol} after retries: {e}",
             )
 
         thesis_id = thesis.id if thesis else "standalone"
