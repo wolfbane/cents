@@ -13,6 +13,8 @@ class WatchlistItem:
     symbol: str
     notes: str = ""
     thesis_id: Optional[str] = None  # Optional link to thesis
+    threshold: Optional[float] = None  # Custom conviction delta threshold
+    alert_destination: Optional[str] = None  # Custom webhook/alert target
     last_scanned: Optional[datetime] = None
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)

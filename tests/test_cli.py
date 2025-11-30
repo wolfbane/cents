@@ -259,6 +259,27 @@ class TestWatchlistCLI:
             assert "AAPL" in result.output
             assert "GOOG" in result.output
 
+    def test_watch_add_with_threshold_and_webhook(self, runner, mock_db):
+        """Add watchlist item with custom threshold and webhook."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            add_result = runner.invoke(
+                cli,
+                [
+                    "watch",
+                    "add",
+                    "AAPL",
+                    "--threshold",
+                    "3.5",
+                    "--webhook",
+                    "https://example.com/hook",
+                ],
+            )
+            assert add_result.exit_code == 0
+
+            list_result = runner.invoke(cli, ["watch", "list"])
+            assert "threshold: 3.5" in list_result.output
+            assert "alert: custom" in list_result.output
+
 
 class TestAlertCLI:
     """Tests for alert CLI commands."""
