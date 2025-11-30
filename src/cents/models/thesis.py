@@ -25,6 +25,13 @@ class TimeHorizon(str, Enum):
     LONG = "long"        # > 12 months
 
 
+class ThesisOutcome(str, Enum):
+    CORRECT = "correct"
+    INCORRECT = "incorrect"
+    PARTIAL = "partial"
+    UNCLEAR = "unclear"
+
+
 @dataclass
 class Thesis:
     """An investment thesis - a testable hypothesis about an investment."""
@@ -42,6 +49,11 @@ class Thesis:
     time_horizon: Optional[TimeHorizon] = None
     horizon_end: Optional[datetime] = None
     key_risks: list[str] = field(default_factory=list)
+    # Resolution triggers
+    target_price: Optional[float] = None
+    stop_price: Optional[float] = None
+    outcome: Optional[ThesisOutcome] = None
+    closed_at: Optional[datetime] = None
     # Metadata
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)
@@ -52,9 +64,11 @@ class Thesis:
         self.conviction = max(0.0, min(100.0, self.conviction + delta))
         self.updated_at = datetime.now()
 
-    def close(self) -> None:
-        """Mark thesis as closed."""
+    def close(self, outcome: Optional[ThesisOutcome] = None) -> None:
+        """Mark thesis as closed with optional outcome."""
         self.status = ThesisStatus.CLOSED
+        self.outcome = outcome
+        self.closed_at = datetime.now()
         self.updated_at = datetime.now()
 
     def invalidate(self) -> None:

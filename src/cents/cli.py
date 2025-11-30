@@ -19,6 +19,7 @@ from cents.models import (
     ThesisStatus,
     Valuation,
     TimeHorizon,
+    ThesisOutcome,
     Position,
     PositionSide,
     PositionStatus,
@@ -192,6 +193,8 @@ def thesis():
 @click.option("--time-horizon", "-T", type=click.Choice(["short", "medium", "long"]), help="Investment horizon")
 @click.option("--horizon-end", help="Expiry date (YYYY-MM-DD)")
 @click.option("--risks", "-r", default="", help="Comma-separated key risks")
+@click.option("--target-price", type=float, help="Target price to close thesis")
+@click.option("--stop-price", type=float, help="Stop price to close thesis")
 def thesis_create(
     title: str,
     hypothesis: str,
@@ -203,6 +206,8 @@ def thesis_create(
     time_horizon: Optional[str],
     horizon_end: Optional[str],
     risks: str,
+    target_price: Optional[float],
+    stop_price: Optional[float],
 ):
     """Create a new investment thesis."""
     from datetime import datetime as dt
@@ -229,6 +234,8 @@ def thesis_create(
         time_horizon=TimeHorizon(time_horizon) if time_horizon else None,
         horizon_end=horizon_dt,
         key_risks=risk_list,
+        target_price=target_price,
+        stop_price=stop_price,
     )
     repo.create(t)
     click.echo(f"Created thesis {t.id}: {t.title}")
@@ -279,6 +286,8 @@ def thesis_show(thesis_id: str):
     if t.symbol:
         click.echo(f"Symbol:     {t.symbol}")
     click.echo(f"Status:     {t.status.value}")
+    if t.outcome:
+        click.echo(f"Outcome:    {t.outcome.value}")
     click.echo(f"Conviction: {t.conviction:.1f}%")
     if t.hypothesis:
         click.echo(f"Hypothesis: {t.hypothesis}")
@@ -292,11 +301,17 @@ def thesis_show(thesis_id: str):
         click.echo(f"Horizon:    {t.time_horizon.value}")
     if t.horizon_end:
         click.echo(f"Expires:    {t.horizon_end.strftime('%Y-%m-%d')}")
+    if t.target_price is not None:
+        click.echo(f"Target:     ${t.target_price:.2f}")
+    if t.stop_price is not None:
+        click.echo(f"Stop:       ${t.stop_price:.2f}")
     if t.key_risks:
         click.echo(f"Risks:      {', '.join(t.key_risks)}")
     if t.tags:
         click.echo(f"Tags:       {', '.join(t.tags)}")
     click.echo(f"Created:    {t.created_at.strftime('%Y-%m-%d %H:%M')}")
+    if t.closed_at:
+        click.echo(f"Closed:     {t.closed_at.strftime('%Y-%m-%d %H:%M')}")
     click.echo(f"Updated:    {t.updated_at.strftime('%Y-%m-%d %H:%M')}")
 
 
@@ -311,6 +326,8 @@ def thesis_show(thesis_id: str):
 @click.option("--time-horizon", "-T", type=click.Choice(["short", "medium", "long"]))
 @click.option("--horizon-end", help="Expiry date (YYYY-MM-DD)")
 @click.option("--risks", "-r", help="Comma-separated key risks")
+@click.option("--target-price", type=float, help="Target price")
+@click.option("--stop-price", type=float, help="Stop price")
 def thesis_update(
     thesis_id: str,
     conviction: Optional[float],
@@ -322,6 +339,8 @@ def thesis_update(
     time_horizon: Optional[str],
     horizon_end: Optional[str],
     risks: Optional[str],
+    target_price: Optional[float],
+    stop_price: Optional[float],
 ):
     """Update a thesis."""
     from datetime import datetime as dt
@@ -357,9 +376,45 @@ def thesis_update(
             t.horizon_end = None
     if risks is not None:
         t.key_risks = [r.strip() for r in risks.split(",") if r.strip()] if risks else []
+    if target_price is not None:
+        t.target_price = target_price if target_price > 0 else None
+    if stop_price is not None:
+        t.stop_price = stop_price if stop_price > 0 else None
 
     repo.update(t)
     click.echo(f"Updated thesis {t.id}")
+
+
+@thesis.command("close")
+@click.argument("thesis_id")
+@click.option(
+    "--outcome",
+    "-o",
+    type=click.Choice(["correct", "incorrect", "partial", "unclear"]),
+    help="Was the thesis correct?",
+)
+@click.option("--notes", "-n", help="Closing notes (updates hypothesis)")
+def thesis_close(thesis_id: str, outcome: Optional[str], notes: Optional[str]):
+    """Close a thesis with outcome assessment."""
+    repo = ThesisRepository()
+    t = repo.get(thesis_id)
+
+    if t is None:
+        click.echo(f"Thesis {thesis_id} not found.", err=True)
+        raise SystemExit(1)
+
+    if t.status == ThesisStatus.CLOSED:
+        click.echo(f"Thesis {thesis_id} is already closed.", err=True)
+        raise SystemExit(1)
+
+    outcome_enum = ThesisOutcome(outcome) if outcome else None
+    t.close(outcome_enum)
+    if notes:
+        t.hypothesis = f"{t.hypothesis}\n\n[Closing notes]: {notes}" if t.hypothesis else f"[Closing notes]: {notes}"
+
+    repo.update(t)
+    outcome_str = f" ({outcome})" if outcome else ""
+    click.echo(f"Closed thesis {t.id}{outcome_str}")
 
 
 # --- Position commands ---
@@ -573,8 +628,10 @@ def outcome_list():
     help="Output format for scan results",
 )
 @click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
-def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool):
+@click.option("--expiry-days", type=int, default=7, help="Days before expiry to alert")
+def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool, expiry_days: int):
     """Scan watchlist and generate alerts for significant changes."""
+    from datetime import datetime as dt, timedelta
     from cents.agents import OrchestratorAgent
     from cents.notify import notify
 
@@ -618,6 +675,7 @@ def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool):
 
         triggered = False
         alert_message = None
+        expiry_alert = None
 
         # Check for significant conviction change
         if abs(result.conviction_delta) >= effective_threshold:
@@ -639,6 +697,44 @@ def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool):
                 click.echo(f"  [!] Alert: {alert.message}")
             notify(alert, destination, quiet=quiet)
 
+        # Check for thesis expiry
+        if thesis and thesis.horizon_end and thesis.status == ThesisStatus.OPEN:
+            days_until_expiry = (thesis.horizon_end - dt.now()).days
+            if 0 <= days_until_expiry <= expiry_days:
+                expiry_alert_msg = f"Thesis '{thesis.title}' expires in {days_until_expiry} days"
+                expiry_alert = Alert(
+                    symbol=item.symbol,
+                    alert_type=AlertType.THESIS_EXPIRY,
+                    message=expiry_alert_msg,
+                    data={
+                        "thesis_id": thesis.id,
+                        "horizon_end": thesis.horizon_end.isoformat(),
+                        "days_until_expiry": days_until_expiry,
+                    },
+                )
+                alert_repo.create(expiry_alert)
+                alerts_generated += 1
+                if verbose:
+                    click.echo(f"  [!] Expiry: {expiry_alert_msg}")
+                notify(expiry_alert, destination, quiet=quiet)
+            elif days_until_expiry < 0:
+                expiry_alert_msg = f"Thesis '{thesis.title}' has expired ({-days_until_expiry} days ago)"
+                expiry_alert = Alert(
+                    symbol=item.symbol,
+                    alert_type=AlertType.THESIS_EXPIRY,
+                    message=expiry_alert_msg,
+                    data={
+                        "thesis_id": thesis.id,
+                        "horizon_end": thesis.horizon_end.isoformat(),
+                        "days_until_expiry": days_until_expiry,
+                    },
+                )
+                alert_repo.create(expiry_alert)
+                alerts_generated += 1
+                if verbose:
+                    click.echo(f"  [!] Expired: {expiry_alert_msg}")
+                notify(expiry_alert, destination, quiet=quiet)
+
         # Update last_scanned
         watch_repo.update_scanned(item.symbol)
         if verbose:
@@ -653,6 +749,7 @@ def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool):
                 "alerted": triggered,
                 "alert_message": alert_message,
                 "alert_destination": destination if triggered else None,
+                "expiry_alert": expiry_alert.message if expiry_alert else None,
             }
         )
 

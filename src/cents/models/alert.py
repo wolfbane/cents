@@ -12,6 +12,7 @@ class AlertType(str, Enum):
     PRICE_TRIGGER = "price_trigger"
     NEW_EVIDENCE = "new_evidence"
     THESIS_INVALIDATED = "thesis_invalidated"
+    THESIS_EXPIRY = "thesis_expiry"
 
 
 @dataclass

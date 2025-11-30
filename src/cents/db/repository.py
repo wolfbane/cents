@@ -19,6 +19,7 @@ from cents.models import (
     ThesisStatus,
     Valuation,
     TimeHorizon,
+    ThesisOutcome,
     WatchlistItem,
 )
 from cents.db.schema import get_connection
@@ -36,8 +37,9 @@ class ThesisRepository:
             """
             INSERT INTO theses (id, title, hypothesis, status, conviction, tags,
                 symbol, business_quality, valuation, moat, time_horizon, horizon_end, key_risks,
+                target_price, stop_price, outcome, closed_at,
                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 thesis.id,
@@ -53,6 +55,10 @@ class ThesisRepository:
                 thesis.time_horizon.value if thesis.time_horizon else None,
                 thesis.horizon_end.isoformat() if thesis.horizon_end else None,
                 json.dumps(thesis.key_risks),
+                thesis.target_price,
+                thesis.stop_price,
+                thesis.outcome.value if thesis.outcome else None,
+                thesis.closed_at.isoformat() if thesis.closed_at else None,
                 thesis.created_at.isoformat(),
                 thesis.updated_at.isoformat(),
             ),
@@ -90,7 +96,9 @@ class ThesisRepository:
             UPDATE theses
             SET title = ?, hypothesis = ?, status = ?, conviction = ?, tags = ?,
                 symbol = ?, business_quality = ?, valuation = ?, moat = ?,
-                time_horizon = ?, horizon_end = ?, key_risks = ?, updated_at = ?
+                time_horizon = ?, horizon_end = ?, key_risks = ?,
+                target_price = ?, stop_price = ?, outcome = ?, closed_at = ?,
+                updated_at = ?
             WHERE id = ?
             """,
             (
@@ -106,6 +114,10 @@ class ThesisRepository:
                 thesis.time_horizon.value if thesis.time_horizon else None,
                 thesis.horizon_end.isoformat() if thesis.horizon_end else None,
                 json.dumps(thesis.key_risks),
+                thesis.target_price,
+                thesis.stop_price,
+                thesis.outcome.value if thesis.outcome else None,
+                thesis.closed_at.isoformat() if thesis.closed_at else None,
                 thesis.updated_at.isoformat(),
                 thesis.id,
             ),
@@ -134,6 +146,10 @@ class ThesisRepository:
             time_horizon=TimeHorizon(row["time_horizon"]) if row["time_horizon"] else None,
             horizon_end=datetime.fromisoformat(row["horizon_end"]) if row["horizon_end"] else None,
             key_risks=json.loads(row["key_risks"]) if row["key_risks"] else [],
+            target_price=row["target_price"],
+            stop_price=row["stop_price"],
+            outcome=ThesisOutcome(row["outcome"]) if row["outcome"] else None,
+            closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

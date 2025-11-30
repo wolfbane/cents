@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS theses (
     time_horizon TEXT,
     horizon_end TEXT,
     key_risks TEXT DEFAULT '[]',
+    target_price REAL,
+    stop_price REAL,
+    outcome TEXT,
+    closed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -117,6 +121,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "time_horizon", "ALTER TABLE theses ADD COLUMN time_horizon TEXT"),
         ("theses", "horizon_end", "ALTER TABLE theses ADD COLUMN horizon_end TEXT"),
         ("theses", "key_risks", "ALTER TABLE theses ADD COLUMN key_risks TEXT DEFAULT '[]'"),
+        # Add resolution trigger fields (added in v0.4)
+        ("theses", "target_price", "ALTER TABLE theses ADD COLUMN target_price REAL"),
+        ("theses", "stop_price", "ALTER TABLE theses ADD COLUMN stop_price REAL"),
+        ("theses", "outcome", "ALTER TABLE theses ADD COLUMN outcome TEXT"),
+        ("theses", "closed_at", "ALTER TABLE theses ADD COLUMN closed_at TEXT"),
     ]
 
     for table, column, sql in migrations:
