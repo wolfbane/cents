@@ -30,6 +30,13 @@ class FundamentalsAgent(BaseAgent):
                 summary=f"Failed to fetch data for {symbol} after retries: {e}",
             )
 
+        if not info:
+            return AgentResult(
+                evidence=[],
+                conviction_delta=0,
+                summary=f"No data available for {symbol}",
+            )
+
         thesis_id = thesis.id if thesis else "standalone"
 
         # Valuation metrics

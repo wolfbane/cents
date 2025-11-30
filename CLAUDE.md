@@ -23,8 +23,5 @@ cents outcome record <id> --accuracy correct
 - `--output json` and `--quiet` flags for scripting
 - Per-symbol thresholds on watchlist
 
-### Known Gaps
-- Evidence lacks raw payloads; broker sync uses current date vs actual entry timestamps
-
 ### Beads tracked (`bd help`)
 Non-traditional project focused on real outcomes

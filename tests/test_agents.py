@@ -305,9 +305,10 @@ class TestTechnicalAgent:
 class TestMacroAgent:
     """Tests for MacroAgent with mocked FRED API."""
 
-    @patch.dict("os.environ", {"FRED_API_KEY": ""}, clear=True)
-    def test_research_no_api_key(self):
+    @patch("cents.agents.macro.get_settings")
+    def test_research_no_api_key(self, mock_settings):
         """Returns guidance when no API key configured."""
+        mock_settings.return_value.fred_api_key = None
         agent = MacroAgent()
         result = agent.research("TEST")
 
@@ -315,7 +316,6 @@ class TestMacroAgent:
         assert "not configured" in result.summary
         assert result.evidence[0].type == EvidenceType.CONTRADICTING
 
-    @patch.dict("os.environ", {"FRED_API_KEY": "test_key"})
     def test_research_high_rates_bearish(self):
         """High fed funds rate is bearish."""
         agent = MacroAgent()
@@ -328,9 +328,10 @@ class TestMacroAgent:
         assert "High rates" in note
 
     @patch("cents.agents.macro.urlopen")
-    @patch.dict("os.environ", {"FRED_API_KEY": "test_key"})
-    def test_research_low_rates_bullish(self, mock_urlopen):
+    @patch("cents.agents.macro.get_settings")
+    def test_research_low_rates_bullish(self, mock_settings, mock_urlopen):
         """Low fed funds rate is bullish."""
+        mock_settings.return_value.fred_api_key = "test_key"
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps({
             "observations": [{"value": "1.5", "date": "2024-01-01"}]
@@ -390,9 +391,10 @@ class TestMacroAgent:
 class TestSentimentAgent:
     """Tests for SentimentAgent with mocked News API."""
 
-    @patch.dict("os.environ", {"NEWS_API_KEY": ""}, clear=True)
-    def test_research_no_api_key(self):
+    @patch("cents.agents.sentiment.get_settings")
+    def test_research_no_api_key(self, mock_settings):
         """Returns guidance when no API key configured."""
+        mock_settings.return_value.news_api_key = None
         agent = SentimentAgent()
         result = agent.research("AAPL")
 
@@ -400,9 +402,10 @@ class TestSentimentAgent:
         assert "not configured" in result.summary
 
     @patch("cents.agents.sentiment.urlopen")
-    @patch.dict("os.environ", {"NEWS_API_KEY": "test_key"})
-    def test_research_positive_news(self, mock_urlopen):
+    @patch("cents.agents.sentiment.get_settings")
+    def test_research_positive_news(self, mock_settings, mock_urlopen):
         """Positive news generates bullish signal."""
+        mock_settings.return_value.news_api_key = "test_key"
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps({
             "articles": [
@@ -421,9 +424,10 @@ class TestSentimentAgent:
         assert "Positive news sentiment" in result.summary
 
     @patch("cents.agents.sentiment.urlopen")
-    @patch.dict("os.environ", {"NEWS_API_KEY": "test_key"})
-    def test_research_negative_news(self, mock_urlopen):
+    @patch("cents.agents.sentiment.get_settings")
+    def test_research_negative_news(self, mock_settings, mock_urlopen):
         """Negative news generates bearish signal."""
+        mock_settings.return_value.news_api_key = "test_key"
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps({
             "articles": [
@@ -443,9 +447,10 @@ class TestSentimentAgent:
         assert "Negative news sentiment" in result.summary
 
     @patch("cents.agents.sentiment.urlopen")
-    @patch.dict("os.environ", {"NEWS_API_KEY": "test_key"})
-    def test_research_no_articles(self, mock_urlopen):
+    @patch("cents.agents.sentiment.get_settings")
+    def test_research_no_articles(self, mock_settings, mock_urlopen):
         """Handles no articles gracefully."""
+        mock_settings.return_value.news_api_key = "test_key"
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps({"articles": []}).encode()
         mock_response.__enter__ = lambda s: s
@@ -458,9 +463,10 @@ class TestSentimentAgent:
         assert result.conviction_delta == 0
         assert "No recent news" in result.summary
 
-    @patch.dict("os.environ", {}, clear=True)
-    def test_research_missing_news_api_key_warns(self):
+    @patch("cents.agents.sentiment.get_settings")
+    def test_research_missing_news_api_key_warns(self, mock_settings):
         """Explicit warning is returned when NEWS_API_KEY is absent."""
+        mock_settings.return_value.news_api_key = None
         agent = SentimentAgent()
         result = agent.research("TEST")
 

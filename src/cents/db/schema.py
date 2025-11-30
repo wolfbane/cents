@@ -96,12 +96,29 @@ def get_db_path() -> Path:
     return data_dir / "cents.db"
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply schema migrations for existing databases."""
+    migrations = [
+        # Add threshold and alert_destination to watchlist (added in v0.2)
+        ("watchlist", "threshold", "ALTER TABLE watchlist ADD COLUMN threshold REAL"),
+        ("watchlist", "alert_destination", "ALTER TABLE watchlist ADD COLUMN alert_destination TEXT"),
+    ]
+
+    for table, column, sql in migrations:
+        # Check if column exists
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in cursor.fetchall()]
+        if column not in columns:
+            conn.execute(sql)
+
+
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     """Initialize database with schema and return connection."""
     path = db_path or get_db_path()
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate_schema(conn)
     conn.commit()
     return conn
 
