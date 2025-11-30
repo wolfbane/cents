@@ -292,6 +292,157 @@ class TestAlertCLI:
             assert "No unread alerts" in result.output
 
 
+class TestThesisCloseCLI:
+    """Tests for thesis close command."""
+
+    def test_thesis_close(self, runner, mock_db):
+        """Close a thesis."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            create_result = runner.invoke(cli, ["thesis", "create", "Test thesis"])
+            thesis_id = create_result.output.split()[2].rstrip(":")
+
+            result = runner.invoke(cli, ["thesis", "close", thesis_id])
+            assert result.exit_code == 0
+            assert "Closed thesis" in result.output
+
+    def test_thesis_close_with_outcome(self, runner, mock_db):
+        """Close thesis with outcome."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            create_result = runner.invoke(cli, ["thesis", "create", "Test thesis"])
+            thesis_id = create_result.output.split()[2].rstrip(":")
+
+            result = runner.invoke(
+                cli, ["thesis", "close", thesis_id, "--outcome", "correct"]
+            )
+            assert result.exit_code == 0
+            assert "(correct)" in result.output
+
+    def test_thesis_close_not_found(self, runner, mock_db):
+        """Close nonexistent thesis."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["thesis", "close", "nonexistent"])
+            assert result.exit_code == 1
+            assert "not found" in result.output
+
+
+class TestThesisStructuredFields:
+    """Tests for thesis structured fields."""
+
+    def test_thesis_create_with_structured_fields(self, runner, mock_db):
+        """Create thesis with structured fields."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(
+                cli,
+                [
+                    "thesis",
+                    "create",
+                    "AAPL thesis",
+                    "--symbol",
+                    "AAPL",
+                    "--valuation",
+                    "undervalued",
+                    "--time-horizon",
+                    "medium",
+                    "--target-price",
+                    "200",
+                    "--stop-price",
+                    "150",
+                ],
+            )
+            assert result.exit_code == 0
+            assert "Created thesis" in result.output
+
+    def test_thesis_show_structured_fields(self, runner, mock_db):
+        """Show thesis with structured fields."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            create_result = runner.invoke(
+                cli,
+                [
+                    "thesis",
+                    "create",
+                    "AAPL thesis",
+                    "--symbol",
+                    "AAPL",
+                    "--valuation",
+                    "undervalued",
+                ],
+            )
+            thesis_id = create_result.output.split()[2].rstrip(":")
+
+            result = runner.invoke(cli, ["thesis", "show", thesis_id])
+            assert result.exit_code == 0
+            assert "AAPL" in result.output
+            assert "undervalued" in result.output
+
+    def test_thesis_update_structured_fields(self, runner, mock_db):
+        """Update thesis structured fields."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            create_result = runner.invoke(cli, ["thesis", "create", "Test thesis"])
+            thesis_id = create_result.output.split()[2].rstrip(":")
+
+            result = runner.invoke(
+                cli,
+                [
+                    "thesis",
+                    "update",
+                    thesis_id,
+                    "--valuation",
+                    "fair",
+                    "--moat",
+                    "Strong brand",
+                ],
+            )
+            assert result.exit_code == 0
+
+            show_result = runner.invoke(cli, ["thesis", "show", thesis_id])
+            assert "fair" in show_result.output
+
+
+class TestAlertCLIExtended:
+    """Extended tests for alert CLI commands."""
+
+    def test_alert_list_all(self, runner, mock_db):
+        """List all alerts including read ones."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "list", "--all"])
+            assert result.exit_code == 0
+
+    def test_alert_read_all(self, runner, mock_db):
+        """Mark all alerts as read."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "read", "--all"])
+            assert result.exit_code == 0
+            assert "Marked" in result.output
+
+
+class TestResearchCLI:
+    """Tests for research command."""
+
+    def test_research_command_help(self, runner):
+        """Research command help."""
+        result = runner.invoke(cli, ["research", "--help"])
+        assert result.exit_code == 0
+        assert "Run research agents" in result.output
+
+
+class TestScanCLI:
+    """Tests for scan command."""
+
+    def test_scan_empty_watchlist(self, runner, mock_db):
+        """Scan with empty watchlist."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["scan"])
+            assert result.exit_code == 0
+            assert "Watchlist is empty" in result.output
+
+    def test_scan_json_output_empty(self, runner, mock_db):
+        """Scan with JSON output and empty watchlist."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["scan", "--output", "json"])
+            assert result.exit_code == 0
+            assert "[]" in result.output
+
+
 class TestVersionAndHelp:
     """Tests for version and help."""
 
@@ -306,3 +457,18 @@ class TestVersionAndHelp:
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
         assert "Agentic investing guidance" in result.output
+
+    def test_thesis_help(self, runner):
+        """Thesis command help."""
+        result = runner.invoke(cli, ["thesis", "--help"])
+        assert result.exit_code == 0
+
+    def test_position_help(self, runner):
+        """Position command help."""
+        result = runner.invoke(cli, ["position", "--help"])
+        assert result.exit_code == 0
+
+    def test_watch_help(self, runner):
+        """Watch command help."""
+        result = runner.invoke(cli, ["watch", "--help"])
+        assert result.exit_code == 0
