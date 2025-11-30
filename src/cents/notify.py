@@ -1,17 +1,18 @@
 """Notification system for alerts."""
 
 import json
-import os
 from typing import Optional
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
 from cents.models import Alert
+from cents.config import get_settings
 
 
 def send_webhook(alert: Alert, webhook_url: Optional[str] = None) -> bool:
     """Send alert to webhook URL (Slack/Discord compatible)."""
-    url = webhook_url or os.environ.get("CENTS_WEBHOOK_URL")
+    settings = get_settings()
+    url = webhook_url or settings.default_webhook
     if not url:
         return False
 
@@ -42,14 +43,17 @@ def send_webhook(alert: Alert, webhook_url: Optional[str] = None) -> bool:
         return False
 
 
-def notify(alert: Alert, webhook_url: Optional[str] = None) -> None:
+def notify(alert: Alert, webhook_url: Optional[str] = None, quiet: bool = False) -> None:
     """Send notification for an alert."""
-    # Always print to terminal
-    print(f"[ALERT] {alert.symbol}: {alert.message}")
 
     # Try webhook if configured
-    if webhook_url or os.environ.get("CENTS_WEBHOOK_URL"):
-        if send_webhook(alert, webhook_url):
-            print("  (webhook sent)")
-        else:
-            print("  (webhook failed)")
+    settings = get_settings()
+    destination = webhook_url or settings.default_webhook
+
+    if not quiet:
+        print(f"[ALERT] {alert.symbol}: {alert.message}")
+
+    if destination:
+        success = send_webhook(alert, destination)
+        if not quiet:
+            print("  (webhook sent)" if success else "  (webhook failed)")

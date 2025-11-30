@@ -228,12 +228,19 @@ class TestWatchlistRepository:
     def test_add_and_get(self, db_conn):
         """Add and retrieve watchlist item."""
         repo = WatchlistRepository(db_conn)
-        item = WatchlistItem(symbol="AAPL", notes="Watch for earnings")
+        item = WatchlistItem(
+            symbol="AAPL",
+            notes="Watch for earnings",
+            threshold=4.5,
+            alert_destination="https://example.com/webhook",
+        )
         repo.add(item)
 
         retrieved = repo.get("AAPL")
         assert retrieved is not None
         assert retrieved.notes == "Watch for earnings"
+        assert retrieved.threshold == 4.5
+        assert retrieved.alert_destination == "https://example.com/webhook"
 
     def test_symbol_normalized_to_uppercase(self, db_conn):
         """Symbols are stored uppercase."""

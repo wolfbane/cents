@@ -328,14 +328,16 @@ class WatchlistRepository:
         """Add a symbol to watchlist."""
         self.conn.execute(
             """
-            INSERT OR REPLACE INTO watchlist (id, symbol, notes, thesis_id, last_scanned, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO watchlist (id, symbol, notes, thesis_id, threshold, alert_destination, last_scanned, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.id,
                 item.symbol.upper(),
                 item.notes,
                 item.thesis_id,
+                item.threshold,
+                item.alert_destination,
                 item.last_scanned.isoformat() if item.last_scanned else None,
                 item.created_at.isoformat(),
             ),
@@ -381,6 +383,8 @@ class WatchlistRepository:
             symbol=row["symbol"],
             notes=row["notes"],
             thesis_id=row["thesis_id"],
+            threshold=row["threshold"],
+            alert_destination=row["alert_destination"],
             last_scanned=datetime.fromisoformat(row["last_scanned"]) if row["last_scanned"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
         )
