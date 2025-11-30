@@ -37,6 +37,81 @@ from cents.config import get_settings
 SETTINGS = get_settings()
 
 
+def _generate_thesis_suggestion(symbol: str, agent_outputs: list, total_conviction_delta: float) -> dict:
+    """Generate thesis field suggestions from research results."""
+    suggestion = {
+        "symbol": symbol.upper(),
+        "title": f"{symbol.upper()} investment thesis",
+        "hypothesis": "",
+        "business_quality": None,
+        "valuation": None,
+        "key_risks": [],
+        "conviction": 50.0 + total_conviction_delta,
+    }
+
+    hypotheses = []
+    quality_notes = []
+    risks = []
+
+    for output in agent_outputs:
+        agent = output["agent"]
+        summary = output["summary"]
+        evidence_list = output.get("evidence", [])
+
+        # Add summary to hypothesis
+        if summary and "No data" not in summary and "Failed" not in summary:
+            hypotheses.append(f"[{agent}] {summary}")
+
+        # Extract valuation from fundamentals
+        if agent == "fundamentals":
+            for ev in evidence_list:
+                metadata = ev.get("metadata", {})
+                metric = metadata.get("metric")
+                value = metadata.get("value")
+
+                if metric == "pe_ratio" and value:
+                    if value < 15:
+                        suggestion["valuation"] = "undervalued"
+                    elif value > 30:
+                        suggestion["valuation"] = "overvalued"
+                    else:
+                        suggestion["valuation"] = "fair"
+
+                if metric == "profit_margin" and value:
+                    margin_pct = value * 100 if abs(value) < 1 else value
+                    if margin_pct > 20:
+                        quality_notes.append(f"High margins ({margin_pct:.0f}%)")
+                    elif margin_pct < 5:
+                        quality_notes.append(f"Low margins ({margin_pct:.0f}%)")
+
+                if metric == "revenue_growth" and value:
+                    growth_pct = value * 100 if abs(value) < 10 else value
+                    if growth_pct > 20:
+                        quality_notes.append(f"Strong growth ({growth_pct:.0f}%)")
+                    elif growth_pct < 0:
+                        risks.append(f"Declining revenue ({growth_pct:.0f}%)")
+
+                if metric == "debt_to_equity" and value:
+                    d_e = value * 100 if value < 10 else value
+                    if d_e > 200:
+                        risks.append(f"High debt (D/E: {d_e:.0f}%)")
+
+        # Extract risks from contradicting evidence
+        for ev in evidence_list:
+            if ev.get("type") == "contradicting":
+                content = ev.get("content", "")
+                if content and content not in risks:
+                    risks.append(content)
+
+    # Build final suggestion
+    suggestion["hypothesis"] = "\n".join(hypotheses) if hypotheses else ""
+    suggestion["business_quality"] = "; ".join(quality_notes) if quality_notes else None
+    suggestion["key_risks"] = risks[:5]  # Limit to 5 risks
+    suggestion["conviction"] = max(0, min(100, suggestion["conviction"]))
+
+    return suggestion
+
+
 def _evidence_to_dict(evidence):
     """Serialize Evidence objects for JSON output."""
 
@@ -78,6 +153,7 @@ def cli():
     help="Output format for results",
 )
 @click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
+@click.option("--suggest-thesis", is_flag=True, help="Generate thesis suggestion from research")
 def research(
     symbol: str,
     thesis_id: Optional[str],
@@ -85,6 +161,7 @@ def research(
     save: bool,
     output: str,
     quiet: bool,
+    suggest_thesis: bool,
 ):
     """Run research agents on a symbol."""
     verbose = output == "text" and not quiet
@@ -153,6 +230,11 @@ def research(
     elif not thesis and all_evidence and verbose:
         click.echo(f"Generated {len(all_evidence)} evidence items (not saved - no thesis linked)")
 
+    # Generate thesis suggestion if requested
+    thesis_suggestion = None
+    if suggest_thesis:
+        thesis_suggestion = _generate_thesis_suggestion(symbol, agent_outputs, total_conviction_delta)
+
     if output == "json":
         payload = {
             "symbol": symbol.upper(),
@@ -162,6 +244,8 @@ def research(
             "evidence_saved": evidence_saved,
             "evidence_count": len(all_evidence),
         }
+        if thesis_suggestion:
+            payload["thesis_suggestion"] = thesis_suggestion
         click.echo(json.dumps(payload, indent=2))
     else:
         if quiet:
@@ -171,6 +255,20 @@ def research(
         elif not verbose:
             # This happens when output was coerced to text but quiet disabled
             click.echo(f"Total conviction delta: {total_conviction_delta:+.1f}")
+
+        # Display thesis suggestion in text mode
+        if thesis_suggestion and not quiet:
+            click.echo("\n--- THESIS SUGGESTION ---")
+            click.echo(f"Title:      {thesis_suggestion['title']}")
+            click.echo(f"Symbol:     {thesis_suggestion['symbol']}")
+            click.echo(f"Conviction: {thesis_suggestion['conviction']:.0f}%")
+            if thesis_suggestion.get("valuation"):
+                click.echo(f"Valuation:  {thesis_suggestion['valuation']}")
+            if thesis_suggestion.get("business_quality"):
+                click.echo(f"Quality:    {thesis_suggestion['business_quality']}")
+            if thesis_suggestion.get("key_risks"):
+                click.echo(f"Risks:      {', '.join(thesis_suggestion['key_risks'][:3])}")
+            click.echo(f"\nCreate with: cents thesis create \"{thesis_suggestion['title']}\" --from-research {symbol.upper()}")
 
 
 # --- Thesis commands ---
@@ -195,6 +293,7 @@ def thesis():
 @click.option("--risks", "-r", default="", help="Comma-separated key risks")
 @click.option("--target-price", type=float, help="Target price to close thesis")
 @click.option("--stop-price", type=float, help="Stop price to close thesis")
+@click.option("--from-research", "research_symbol", help="Auto-populate from research on symbol")
 def thesis_create(
     title: str,
     hypothesis: str,
@@ -208,10 +307,42 @@ def thesis_create(
     risks: str,
     target_price: Optional[float],
     stop_price: Optional[float],
+    research_symbol: Optional[str],
 ):
     """Create a new investment thesis."""
     from datetime import datetime as dt
     repo = ThesisRepository()
+
+    # If --from-research is specified, run research and get suggestions
+    suggestion = None
+    if research_symbol:
+        click.echo(f"Running research on {research_symbol.upper()}...")
+        agent_outputs = []
+        total_conviction_delta = 0.0
+
+        for name, agent_class in AGENTS.items():
+            agent = agent_class()
+            result = agent.research(research_symbol.upper(), None)
+            agent_outputs.append({
+                "agent": name,
+                "summary": result.summary,
+                "conviction_delta": result.conviction_delta,
+                "evidence": [_evidence_to_dict(e) for e in result.evidence],
+            })
+            total_conviction_delta += result.conviction_delta
+
+        suggestion = _generate_thesis_suggestion(research_symbol, agent_outputs, total_conviction_delta)
+        click.echo(f"Research complete. Conviction delta: {total_conviction_delta:+.1f}\n")
+
+    # Use suggestion values as defaults if not explicitly provided
+    if suggestion:
+        symbol = symbol or suggestion.get("symbol")
+        hypothesis = hypothesis or suggestion.get("hypothesis", "")
+        business_quality = business_quality or suggestion.get("business_quality")
+        valuation = valuation or suggestion.get("valuation")
+        if not risks and suggestion.get("key_risks"):
+            risks = ",".join(suggestion["key_risks"])
+
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     risk_list = [r.strip() for r in risks.split(",") if r.strip()] if risks else []
 
@@ -223,9 +354,15 @@ def thesis_create(
             click.echo("Invalid date format. Use YYYY-MM-DD.", err=True)
             raise SystemExit(1)
 
+    # Set initial conviction from research if available
+    initial_conviction = 50.0
+    if suggestion:
+        initial_conviction = suggestion.get("conviction", 50.0)
+
     t = Thesis(
         title=title,
         hypothesis=hypothesis,
+        conviction=initial_conviction,
         tags=tag_list,
         symbol=symbol.upper() if symbol else None,
         business_quality=business_quality,
@@ -239,6 +376,12 @@ def thesis_create(
     )
     repo.create(t)
     click.echo(f"Created thesis {t.id}: {t.title}")
+    if suggestion:
+        click.echo(f"  Symbol: {t.symbol}, Conviction: {t.conviction:.0f}%")
+        if t.valuation:
+            click.echo(f"  Valuation: {t.valuation.value}")
+        if t.key_risks:
+            click.echo(f"  Risks: {', '.join(t.key_risks[:3])}")
 
 
 @thesis.command("list")
