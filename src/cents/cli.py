@@ -772,7 +772,8 @@ def outcome_list():
 )
 @click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
 @click.option("--expiry-days", type=int, default=7, help="Days before expiry to alert")
-def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool, expiry_days: int):
+@click.option("--batch-suggest", is_flag=True, help="Generate thesis suggestions for all symbols")
+def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool, expiry_days: int, batch_suggest: bool):
     """Scan watchlist and generate alerts for significant changes."""
     from datetime import datetime as dt, timedelta
     from cents.agents import OrchestratorAgent
@@ -883,18 +884,52 @@ def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool, exp
         if verbose:
             click.echo()
 
-        scan_results.append(
-            {
-                "symbol": item.symbol,
+        scan_result = {
+            "symbol": item.symbol,
+            "summary": result.summary,
+            "conviction_delta": result.conviction_delta,
+            "dimension_scores": result.dimension_scores,
+            "threshold": effective_threshold,
+            "alerted": triggered,
+            "alert_message": alert_message,
+            "alert_destination": destination if triggered else None,
+            "expiry_alert": expiry_alert.message if expiry_alert else None,
+        }
+
+        # Generate thesis suggestion if requested
+        if batch_suggest:
+            # Collect evidence as dicts for suggestion generation
+            evidence_dicts = []
+            for ev in result.evidence:
+                evidence_dicts.append({
+                    "agent": ev.agent,
+                    "type": ev.type.value,
+                    "content": ev.content,
+                    "dimension": ev.dimension.value if ev.dimension else None,
+                    "metadata": ev.metadata,
+                })
+            agent_outputs = [{
+                "agent": "orchestrator",
                 "summary": result.summary,
                 "conviction_delta": result.conviction_delta,
-                "threshold": effective_threshold,
-                "alerted": triggered,
-                "alert_message": alert_message,
-                "alert_destination": destination if triggered else None,
-                "expiry_alert": expiry_alert.message if expiry_alert else None,
-            }
-        )
+                "evidence": evidence_dicts,
+            }]
+            suggestion = _generate_thesis_suggestion(
+                item.symbol, agent_outputs, result.conviction_delta
+            )
+            suggestion["dimension_scores"] = result.dimension_scores
+            scan_result["thesis_suggestion"] = suggestion
+
+            if verbose:
+                click.echo("  Thesis suggestion:")
+                click.echo(f"    Valuation: {suggestion.get('valuation', 'unknown')}")
+                click.echo(f"    Conviction: {suggestion.get('conviction', 50):.1f}")
+                if result.dimension_scores:
+                    dims = ", ".join(f"{k}: {v:+.0f}" for k, v in result.dimension_scores.items() if v != 0)
+                    if dims:
+                        click.echo(f"    Dimensions: {dims}")
+
+        scan_results.append(scan_result)
 
     if output == "json":
         click.echo(json.dumps(scan_results, indent=2))
@@ -903,6 +938,9 @@ def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool, exp
     click.echo(f"Scan complete. Generated {alerts_generated} alerts.")
     if alerts_generated > 0 and not quiet:
         click.echo("View alerts with: cents alert list")
+
+    if batch_suggest and not quiet:
+        click.echo("\nUse --output=json to get full thesis suggestions for each symbol.")
 
 
 # --- Watch commands ---

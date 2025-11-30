@@ -10,6 +10,7 @@ from cents.models import (
     AlertType,
     Evidence,
     EvidenceType,
+    ThesisDimension,
     Outcome,
     Position,
     PositionSide,
@@ -265,8 +266,8 @@ class EvidenceRepository:
         """Insert new evidence."""
         self.conn.execute(
             """
-            INSERT INTO evidence (id, thesis_id, agent, type, content, source, confidence, metadata, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO evidence (id, thesis_id, agent, type, content, source, confidence, dimension, metadata, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 evidence.id,
@@ -276,6 +277,7 @@ class EvidenceRepository:
                 evidence.content,
                 evidence.source,
                 evidence.confidence,
+                evidence.dimension.value if evidence.dimension else None,
                 json.dumps(evidence.metadata),
                 evidence.timestamp.isoformat(),
             ),
@@ -300,6 +302,7 @@ class EvidenceRepository:
             content=row["content"],
             source=row["source"],
             confidence=row["confidence"],
+            dimension=ThesisDimension(row["dimension"]) if row["dimension"] else None,
             metadata=json.loads(row["metadata"]),
             timestamp=datetime.fromisoformat(row["timestamp"]),
         )

@@ -9,7 +9,7 @@ import json
 
 from cents.agents.base import BaseAgent, AgentResult
 from cents.config import get_settings
-from cents.models import Evidence, EvidenceType, Thesis
+from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 
 class SentimentAgent(BaseAgent):
@@ -108,6 +108,7 @@ class SentimentAgent(BaseAgent):
                     source=f"{source}: {url}" if url else source,
                     evidence_type=ev_type,
                     confidence=0.5,  # Keyword analysis is low confidence
+                    dimension=ThesisDimension.SENTIMENT,
                     metadata={
                         "positive_words": pos_count,
                         "negative_words": neg_count,
@@ -117,6 +118,8 @@ class SentimentAgent(BaseAgent):
 
         # Overall sentiment
         conviction_delta = total_score * 0.5  # Scale down
+        dimension_scores = {"sentiment": conviction_delta}
+
         if total_score > 3:
             summaries.append("Positive news sentiment")
         elif total_score < -3:
@@ -130,6 +133,7 @@ class SentimentAgent(BaseAgent):
             evidence=evidence,
             conviction_delta=conviction_delta,
             summary=summary,
+            dimension_scores=dimension_scores,
         )
 
     def _research_without_api(self, symbol: str, thesis_id: str) -> AgentResult:

@@ -6,7 +6,7 @@ import json
 
 from cents.agents.base import BaseAgent, AgentResult
 from cents.config import get_settings
-from cents.models import Evidence, EvidenceType, Thesis
+from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 
 class MacroAgent(BaseAgent):
@@ -32,6 +32,7 @@ class MacroAgent(BaseAgent):
         """Research macro environment (symbol-agnostic)."""
         evidence = []
         conviction_delta = 0.0
+        dimension_scores: dict[str, float] = {}
         summaries = []
 
         thesis_id = thesis.id if thesis else "standalone"
@@ -49,6 +50,7 @@ class MacroAgent(BaseAgent):
 
                 ev_type, delta, note = self._interpret_indicator(series_id, value)
                 conviction_delta += delta
+                dimension_scores["macro"] = dimension_scores.get("macro", 0) + delta
                 if note:
                     summaries.append(note)
 
@@ -59,6 +61,7 @@ class MacroAgent(BaseAgent):
                         source=f"FRED:{series_id}",
                         evidence_type=ev_type,
                         confidence=0.7,
+                        dimension=ThesisDimension.MACRO,
                         metadata={"series": series_id, "value": value, "date": date},
                     )
                 )
@@ -71,6 +74,7 @@ class MacroAgent(BaseAgent):
                         source=f"FRED:{series_id}",
                         evidence_type=EvidenceType.CONTRADICTING,
                         confidence=0.0,
+                        dimension=ThesisDimension.MACRO,
                         metadata={"error": "fred_fetch_failed", "series": series_id},
                     )
                 )
@@ -84,6 +88,7 @@ class MacroAgent(BaseAgent):
             evidence=evidence,
             conviction_delta=conviction_delta,
             summary=summary,
+            dimension_scores=dimension_scores,
         )
 
     def _fetch_fred_series(self, series_id: str) -> tuple[Optional[float], Optional[str]]:

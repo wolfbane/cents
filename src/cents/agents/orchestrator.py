@@ -7,7 +7,7 @@ from cents.agents.fundamentals import FundamentalsAgent
 from cents.agents.technical import TechnicalAgent
 from cents.agents.macro import MacroAgent
 from cents.agents.sentiment import SentimentAgent
-from cents.models import Evidence, EvidenceType, Thesis
+from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 
 class OrchestratorAgent(BaseAgent):
@@ -31,6 +31,7 @@ class OrchestratorAgent(BaseAgent):
         all_evidence = []
         agent_results = {}
         total_conviction_delta = 0.0
+        aggregated_dimensions: dict[str, float] = {}
 
         # Run each agent
         for agent in self.agents:
@@ -39,8 +40,12 @@ class OrchestratorAgent(BaseAgent):
             all_evidence.extend(result.evidence)
             total_conviction_delta += result.conviction_delta
 
+            # Aggregate dimension scores
+            for dim, score in result.dimension_scores.items():
+                aggregated_dimensions[dim] = aggregated_dimensions.get(dim, 0) + score
+
         # Synthesize results
-        synthesis = self._synthesize(symbol, agent_results, thesis_id)
+        synthesis = self._synthesize(symbol, agent_results, thesis_id, aggregated_dimensions)
         all_evidence.append(synthesis)
 
         # Build summary
@@ -59,10 +64,15 @@ class OrchestratorAgent(BaseAgent):
             evidence=all_evidence,
             conviction_delta=total_conviction_delta,
             summary=summary,
+            dimension_scores=aggregated_dimensions,
         )
 
     def _synthesize(
-        self, symbol: str, results: dict[str, AgentResult], thesis_id: str
+        self,
+        symbol: str,
+        results: dict[str, AgentResult],
+        thesis_id: str,
+        dimension_scores: dict[str, float],
     ) -> Evidence:
         """Create synthesis evidence from all agent results."""
         # Count supporting vs contradicting signals
@@ -108,6 +118,15 @@ class OrchestratorAgent(BaseAgent):
         elif bearish_agents >= 2 and bullish_agents == 0:
             synthesis_text += " | Moderate bearish consensus"
 
+        # Add dimension summary
+        if dimension_scores:
+            dim_parts = []
+            for dim, score in sorted(dimension_scores.items()):
+                if score != 0:
+                    dim_parts.append(f"{dim}: {score:+.0f}")
+            if dim_parts:
+                synthesis_text += " | Dimensions: " + ", ".join(dim_parts)
+
         return self.create_evidence(
             thesis_id=thesis_id,
             content=synthesis_text,
@@ -120,5 +139,6 @@ class OrchestratorAgent(BaseAgent):
                 "neutral": neutral,
                 "bullish_agents": bullish_agents,
                 "bearish_agents": bearish_agents,
+                "dimension_scores": dimension_scores,
             },
         )

@@ -1,14 +1,14 @@
 """Base agent class for research agents."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 from typing import Callable, Optional, TypeVar
 
 
 _T = TypeVar("_T")
 
-from cents.models import Evidence, EvidenceType, Thesis
+from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 from cents.db import EvidenceRepository, ThesisRepository
 
 
@@ -19,6 +19,7 @@ class AgentResult:
     evidence: list[Evidence]
     conviction_delta: float  # How much to adjust thesis conviction
     summary: str  # Human-readable summary
+    dimension_scores: dict[str, float] = field(default_factory=dict)  # Per-dimension conviction deltas
 
 
 class BaseAgent(ABC):
@@ -84,6 +85,7 @@ class BaseAgent(ABC):
         source: str,
         evidence_type: EvidenceType = EvidenceType.NEUTRAL,
         confidence: float = 0.5,
+        dimension: Optional[ThesisDimension] = None,
         metadata: Optional[dict] = None,
     ) -> Evidence:
         """Helper to create evidence with this agent's name."""
@@ -94,5 +96,6 @@ class BaseAgent(ABC):
             source=source,
             type=evidence_type,
             confidence=confidence,
+            dimension=dimension,
             metadata=metadata or {},
         )

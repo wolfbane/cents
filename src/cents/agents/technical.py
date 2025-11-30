@@ -4,7 +4,7 @@ from typing import Optional
 
 from cents.agents.base import BaseAgent, AgentResult
 from cents.data import PriceDataProvider, get_price_provider
-from cents.models import EvidenceType, Thesis
+from cents.models import EvidenceType, Thesis, ThesisDimension
 
 
 def _rolling_mean(values: list[float], window: int) -> Optional[float]:
@@ -46,6 +46,7 @@ class TechnicalAgent(BaseAgent):
         """Research technical indicators for a symbol."""
         evidence = []
         conviction_delta = 0.0
+        dimension_scores: dict[str, float] = {}
         summaries = []
         thesis_id = thesis.id if thesis else "standalone"
 
@@ -79,16 +80,20 @@ class TechnicalAgent(BaseAgent):
         change_1m = (current_price - price_1m) / price_1m * 100
         change_3m = (current_price - price_3m) / price_3m * 100
 
-        # Momentum signal
+        # Momentum signal (TECHNICAL dimension)
         ev_type = EvidenceType.NEUTRAL
+        tech_delta = 0.0
         if change_1m > 10:
             ev_type = EvidenceType.SUPPORTING
-            conviction_delta += 3
+            tech_delta = 3
             summaries.append(f"Strong momentum (+{change_1m:.1f}% 1M)")
         elif change_1m < -10:
             ev_type = EvidenceType.CONTRADICTING
-            conviction_delta -= 3
+            tech_delta = -3
             summaries.append(f"Weak momentum ({change_1m:.1f}% 1M)")
+
+        conviction_delta += tech_delta
+        dimension_scores["technical"] = dimension_scores.get("technical", 0) + tech_delta
 
         evidence.append(
             self.create_evidence(
@@ -97,6 +102,7 @@ class TechnicalAgent(BaseAgent):
                 source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.7,
+                dimension=ThesisDimension.TECHNICAL,
                 metadata={
                     "metric": "price_momentum",
                     "current": current_price,
@@ -107,20 +113,24 @@ class TechnicalAgent(BaseAgent):
             )
         )
 
-        # Moving averages
+        # Moving averages (TECHNICAL dimension)
         ma_20 = _rolling_mean(closes, 20)
         ma_50 = _rolling_mean(closes, 50)
 
         if ma_20 and ma_50:
             ev_type = EvidenceType.NEUTRAL
+            ma_delta = 0.0
             if current_price > ma_20 > ma_50:
                 ev_type = EvidenceType.SUPPORTING
-                conviction_delta += 2
+                ma_delta = 2
                 summaries.append("Above MAs (bullish)")
             elif current_price < ma_20 < ma_50:
                 ev_type = EvidenceType.CONTRADICTING
-                conviction_delta -= 2
+                ma_delta = -2
                 summaries.append("Below MAs (bearish)")
+
+            conviction_delta += ma_delta
+            dimension_scores["technical"] = dimension_scores.get("technical", 0) + ma_delta
 
             evidence.append(
                 self.create_evidence(
@@ -129,20 +139,25 @@ class TechnicalAgent(BaseAgent):
                     source="alpaca",
                     evidence_type=ev_type,
                     confidence=0.65,
+                    dimension=ThesisDimension.TECHNICAL,
                     metadata={"metric": "moving_averages", "ma20": ma_20, "ma50": ma_50},
                 )
             )
 
-        # Volume analysis
+        # Volume analysis (TECHNICAL dimension)
         avg_volume = _rolling_mean([float(v) for v in volumes], 20) or sum(volumes) / len(volumes)
         recent_volume = sum(volumes[-5:]) / min(5, len(volumes))
         volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
 
         ev_type = EvidenceType.NEUTRAL
+        vol_delta = 0.0
         if volume_ratio > 1.5:
             ev_type = EvidenceType.SUPPORTING if change_1w > 0 else EvidenceType.CONTRADICTING
-            conviction_delta += 2 if change_1w > 0 else -2
+            vol_delta = 2 if change_1w > 0 else -2
             summaries.append(f"High volume ({volume_ratio:.1f}x avg)")
+
+        conviction_delta += vol_delta
+        dimension_scores["technical"] = dimension_scores.get("technical", 0) + vol_delta
 
         evidence.append(
             self.create_evidence(
@@ -151,20 +166,25 @@ class TechnicalAgent(BaseAgent):
                 source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.6,
+                dimension=ThesisDimension.TECHNICAL,
                 metadata={"metric": "volume", "ratio": volume_ratio},
             )
         )
 
-        # Volatility (simple ATR-like measure)
+        # Volatility - RISK dimension (affects risk assessment)
         high_low_ranges = [h - l for h, l in zip(highs, lows)]
         avg_range = _rolling_mean(high_low_ranges, 14) or sum(high_low_ranges) / len(high_low_ranges)
         volatility_pct = (avg_range / current_price) * 100
 
         ev_type = EvidenceType.NEUTRAL
+        risk_delta = 0.0
         if volatility_pct > 5:
             ev_type = EvidenceType.CONTRADICTING
-            conviction_delta -= 1
+            risk_delta = -1
             summaries.append(f"High volatility ({volatility_pct:.1f}%)")
+
+        conviction_delta += risk_delta
+        dimension_scores["risk"] = dimension_scores.get("risk", 0) + risk_delta
 
         evidence.append(
             self.create_evidence(
@@ -173,24 +193,29 @@ class TechnicalAgent(BaseAgent):
                 source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.55,
+                dimension=ThesisDimension.RISK,
                 metadata={"metric": "volatility", "value": volatility_pct},
             )
         )
 
-        # 52-week position (using available data, may be less than 52w)
+        # 52-week position (TECHNICAL dimension)
         high_52w = max(closes)
         low_52w = min(closes)
         position_52w = (current_price - low_52w) / (high_52w - low_52w) * 100 if high_52w != low_52w else 50
 
         ev_type = EvidenceType.NEUTRAL
+        range_delta = 0.0
         if position_52w > 80:
             ev_type = EvidenceType.SUPPORTING
-            conviction_delta += 1
+            range_delta = 1
             summaries.append("Near 52w high")
         elif position_52w < 20:
             ev_type = EvidenceType.CONTRADICTING
-            conviction_delta -= 1
+            range_delta = -1
             summaries.append("Near 52w low")
+
+        conviction_delta += range_delta
+        dimension_scores["technical"] = dimension_scores.get("technical", 0) + range_delta
 
         evidence.append(
             self.create_evidence(
@@ -199,6 +224,7 @@ class TechnicalAgent(BaseAgent):
                 source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.5,
+                dimension=ThesisDimension.TECHNICAL,
                 metadata={
                     "metric": "52w_range",
                     "high": high_52w,
@@ -218,4 +244,5 @@ class TechnicalAgent(BaseAgent):
             evidence=evidence,
             conviction_delta=conviction_delta,
             summary=summary,
+            dimension_scores=dimension_scores,
         )

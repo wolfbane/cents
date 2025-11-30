@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS evidence (
     content TEXT NOT NULL,
     source TEXT NOT NULL,
     confidence REAL DEFAULT 0.5,
+    dimension TEXT,
     metadata TEXT DEFAULT '{}',
     timestamp TEXT NOT NULL,
     FOREIGN KEY (thesis_id) REFERENCES theses(id)
@@ -126,6 +127,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "stop_price", "ALTER TABLE theses ADD COLUMN stop_price REAL"),
         ("theses", "outcome", "ALTER TABLE theses ADD COLUMN outcome TEXT"),
         ("theses", "closed_at", "ALTER TABLE theses ADD COLUMN closed_at TEXT"),
+        # Add dimension to evidence (added in v0.5)
+        ("evidence", "dimension", "ALTER TABLE evidence ADD COLUMN dimension TEXT"),
     ]
 
     for table, column, sql in migrations:

@@ -1,7 +1,7 @@
 """Domain models for cents."""
 
 from cents.models.thesis import Thesis, ThesisStatus, Valuation, TimeHorizon, ThesisOutcome
-from cents.models.evidence import Evidence, EvidenceType
+from cents.models.evidence import Evidence, EvidenceType, ThesisDimension
 from cents.models.position import Position, PositionSide, PositionStatus
 from cents.models.outcome import Outcome, ThesisAccuracy
 from cents.models.watchlist import WatchlistItem
@@ -15,6 +15,7 @@ __all__ = [
     "ThesisOutcome",
     "Evidence",
     "EvidenceType",
+    "ThesisDimension",
     "Position",
     "PositionSide",
     "PositionStatus",
