@@ -1,5 +1,6 @@
 """Tests for research agents with mocked external dependencies."""
 
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch, PropertyMock
 import json
 
@@ -14,6 +15,7 @@ from cents.agents import (
     OrchestratorAgent,
     AgentResult,
 )
+from cents.data import PriceBar, PriceHistory
 from cents.models import Thesis, EvidenceType
 
 
@@ -29,273 +31,251 @@ class TestAgentResult:
 
 
 class TestFundamentalsAgent:
-    """Tests for FundamentalsAgent with mocked yfinance."""
+    """Tests for FundamentalsAgent with mocked fundamentals provider."""
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_low_pe_bullish(self, mock_ticker_class):
+    def _create_mock_provider(self, **kwargs):
+        """Create a mock fundamentals provider returning given data."""
+        from cents.data import FundamentalsData
+        mock_provider = MagicMock()
+        data = FundamentalsData(symbol="TEST", **kwargs)
+        mock_provider.get_fundamentals.return_value = data
+        return mock_provider
+
+    def test_research_low_pe_bullish(self):
         """Low P/E ratio generates bullish signal."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {
-            "trailingPE": 12.0,
-            "shortName": "Test Corp",
-        }
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(
+            pe_ratio=12.0,
+            name="Test Corp",
+        )
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta > 0
         assert "Low P/E" in result.summary
         assert len(result.evidence) >= 1
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_high_pe_bearish(self, mock_ticker_class):
+    def test_research_high_pe_bearish(self):
         """High P/E ratio generates bearish signal."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {
-            "trailingPE": 50.0,
-            "shortName": "Expensive Corp",
-        }
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(
+            pe_ratio=50.0,
+            name="Expensive Corp",
+        )
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta < 0
         assert "High P/E" in result.summary
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_strong_growth(self, mock_ticker_class):
+    def test_research_strong_growth(self):
         """Strong revenue growth is bullish."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {
-            "revenueGrowth": 0.30,  # 30%
-            "shortName": "Growth Corp",
-        }
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(
+            revenue_growth=0.30,  # 30%
+            name="Growth Corp",
+        )
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta > 0
         assert "Strong revenue growth" in result.summary
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_negative_growth(self, mock_ticker_class):
+    def test_research_negative_growth(self):
         """Negative revenue growth is bearish."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {
-            "revenueGrowth": -0.10,  # -10%
-            "shortName": "Declining Corp",
-        }
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(
+            revenue_growth=-0.10,  # -10%
+            name="Declining Corp",
+        )
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta < 0
         assert "Negative revenue growth" in result.summary
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_high_debt(self, mock_ticker_class):
+    def test_research_high_debt(self):
         """High debt-to-equity is bearish."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {
-            "debtToEquity": 250.0,
-            "shortName": "Leveraged Corp",
-        }
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(
+            debt_to_equity=250.0,
+            name="Leveraged Corp",
+        )
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta < 0
         assert "High debt" in result.summary
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_analyst_buy(self, mock_ticker_class):
+    def test_research_analyst_buy(self):
         """Buy recommendation is bullish."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {
-            "recommendationKey": "strong_buy",
-            "shortName": "Hot Stock",
-        }
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(
+            recommendation="strong_buy",
+            name="Hot Stock",
+        )
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta > 0
         evidence_content = [e.content for e in result.evidence]
         assert any("Strong Buy" in c for c in evidence_content)
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_with_thesis(self, mock_ticker_class):
+    def test_research_with_thesis(self):
         """Research uses thesis ID when provided."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {"trailingPE": 15.0, "shortName": "Test"}
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(
+            pe_ratio=15.0,
+            name="Test",
+        )
 
         thesis = Thesis(title="Test thesis")
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST", thesis)
 
         for e in result.evidence:
             assert e.thesis_id == thesis.id
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_api_error(self, mock_ticker_class):
+    def test_research_api_error(self):
         """Handles API errors gracefully."""
-        mock_ticker = MagicMock()
-        type(mock_ticker).info = PropertyMock(side_effect=Exception("API Error"))
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = MagicMock()
+        mock_provider.get_fundamentals.side_effect = Exception("API Error")
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta == 0
         assert "Failed to fetch" in result.summary
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_retries_on_transient_failure(self, mock_ticker_class):
-        """Retries yfinance info fetch before failing."""
-        mock_ticker = MagicMock()
-        type(mock_ticker).info = PropertyMock(
-            side_effect=[Exception("temporary"), {"shortName": "Retry Corp"}]
-        )
-        mock_ticker_class.return_value = mock_ticker
+    def test_research_retries_on_transient_failure(self):
+        """Retries fetch before failing."""
+        from cents.data import FundamentalsData
+        mock_provider = MagicMock()
+        mock_provider.get_fundamentals.side_effect = [
+            Exception("temporary"),
+            FundamentalsData(symbol="TEST", name="Retry Corp", pe_ratio=20.0),
+        ]
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert "Retry Corp" in result.summary
 
-    @patch("cents.agents.fundamentals.yf.Ticker")
-    def test_research_no_signals(self, mock_ticker_class):
+    def test_research_no_signals(self):
         """No significant signals when data is neutral."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {
-            "trailingPE": 20.0,  # Neutral
-            "shortName": "Average Corp",
-        }
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(
+            pe_ratio=20.0,  # Neutral
+            name="Average Corp",
+        )
 
-        agent = FundamentalsAgent()
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
 
         assert "No significant signals" in result.summary
 
 
 class TestTechnicalAgent:
-    """Tests for TechnicalAgent with mocked yfinance."""
+    """Tests for TechnicalAgent with mocked price provider."""
 
-    def _create_mock_history(self, prices, volumes=None):
-        """Helper to create mock price history DataFrame."""
+    def _create_price_history(self, prices, volumes=None):
+        """Helper to create PriceHistory from price list."""
         n = len(prices)
         if volumes is None:
             volumes = [1000000] * n
-        return pd.DataFrame({
-            "Close": prices,
-            "High": [p * 1.01 for p in prices],
-            "Low": [p * 0.99 for p in prices],
-            "Volume": volumes,
-        })
+        base_time = datetime.now() - timedelta(days=n)
+        bars = [
+            PriceBar(
+                timestamp=base_time + timedelta(days=i),
+                open=prices[i],
+                high=prices[i] * 1.01,
+                low=prices[i] * 0.99,
+                close=prices[i],
+                volume=volumes[i],
+            )
+            for i in range(n)
+        ]
+        return PriceHistory(symbol="TEST", bars=bars)
 
-    @patch("cents.agents.technical.yf.Ticker")
-    def test_research_strong_momentum(self, mock_ticker_class):
+    def _create_mock_provider(self, prices, volumes=None):
+        """Create a mock price provider returning given price history."""
+        mock_provider = MagicMock()
+        mock_provider.get_history.return_value = self._create_price_history(prices, volumes)
+        return mock_provider
+
+    def test_research_strong_momentum(self):
         """Strong upward momentum is bullish."""
-        mock_ticker = MagicMock()
         # Price went from 100 to 120 over 30 days (+20%)
         prices = [100 + (i * 0.67) for i in range(30)]
-        mock_ticker.history.return_value = self._create_mock_history(prices)
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(prices)
 
-        agent = TechnicalAgent()
+        agent = TechnicalAgent(price_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta > 0
         assert "Strong momentum" in result.summary
 
-    @patch("cents.agents.technical.yf.Ticker")
-    def test_research_weak_momentum(self, mock_ticker_class):
+    def test_research_weak_momentum(self):
         """Strong downward momentum is bearish."""
-        mock_ticker = MagicMock()
         # Price went from 100 to 80 over 30 days (-20%)
         prices = [100 - (i * 0.67) for i in range(30)]
-        mock_ticker.history.return_value = self._create_mock_history(prices)
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(prices)
 
-        agent = TechnicalAgent()
+        agent = TechnicalAgent(price_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta < 0
         assert "Weak momentum" in result.summary
 
-    @patch("cents.agents.technical.yf.Ticker")
-    def test_research_above_moving_averages(self, mock_ticker_class):
+    def test_research_above_moving_averages(self):
         """Price above MAs is bullish."""
-        mock_ticker = MagicMock()
         # Steadily rising prices - current price above both MAs
         prices = [100 + i for i in range(100)]  # 100 days of uptrend
-        mock_ticker.history.return_value = self._create_mock_history(prices)
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(prices)
 
-        agent = TechnicalAgent()
+        agent = TechnicalAgent(price_provider=mock_provider)
         result = agent.research("TEST")
 
         assert "Above MAs" in result.summary
 
-    @patch("cents.agents.technical.yf.Ticker")
-    def test_research_below_moving_averages(self, mock_ticker_class):
+    def test_research_below_moving_averages(self):
         """Price below MAs is bearish."""
-        mock_ticker = MagicMock()
         # Steadily falling prices - current price below both MAs
         prices = [200 - i for i in range(100)]  # 100 days of downtrend
-        mock_ticker.history.return_value = self._create_mock_history(prices)
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(prices)
 
-        agent = TechnicalAgent()
+        agent = TechnicalAgent(price_provider=mock_provider)
         result = agent.research("TEST")
 
         assert "Below MAs" in result.summary
 
-    @patch("cents.agents.technical.yf.Ticker")
-    def test_research_high_volume(self, mock_ticker_class):
+    def test_research_high_volume(self):
         """High volume with price increase is bullish."""
-        mock_ticker = MagicMock()
         prices = [100 + i for i in range(30)]  # Rising
         # Recent volume 2x average
         volumes = [1000000] * 25 + [2000000] * 5
-        mock_ticker.history.return_value = self._create_mock_history(prices, volumes)
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(prices, volumes)
 
-        agent = TechnicalAgent()
+        agent = TechnicalAgent(price_provider=mock_provider)
         result = agent.research("TEST")
 
         assert "High volume" in result.summary
 
-    @patch("cents.agents.technical.yf.Ticker")
-    def test_research_near_52w_high(self, mock_ticker_class):
+    def test_research_near_52w_high(self):
         """Price near 52-week high is bullish."""
-        mock_ticker = MagicMock()
         # Price at all-time high
         prices = [100] * 50 + [150]  # Jump to new high
-        mock_ticker.history.return_value = self._create_mock_history(prices)
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = self._create_mock_provider(prices)
 
-        agent = TechnicalAgent()
+        agent = TechnicalAgent(price_provider=mock_provider)
         result = agent.research("TEST")
 
         assert "Near 52w high" in result.summary
 
-    @patch("cents.agents.technical.yf.Ticker")
-    def test_research_empty_history(self, mock_ticker_class):
+    def test_research_empty_history(self):
         """Handles empty history gracefully."""
-        mock_ticker = MagicMock()
-        mock_ticker.history.return_value = pd.DataFrame()
-        mock_ticker_class.return_value = mock_ticker
+        mock_provider = MagicMock()
+        mock_provider.get_history.return_value = PriceHistory(symbol="TEST", bars=[])
 
-        agent = TechnicalAgent()
+        agent = TechnicalAgent(price_provider=mock_provider)
         result = agent.research("TEST")
 
         assert result.conviction_delta == 0

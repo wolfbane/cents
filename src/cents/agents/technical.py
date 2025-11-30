@@ -2,11 +2,22 @@
 
 from typing import Optional
 
-import yfinance as yf
-import pandas as pd
-
 from cents.agents.base import BaseAgent, AgentResult
-from cents.models import Evidence, EvidenceType, Thesis
+from cents.data import PriceDataProvider, get_price_provider
+from cents.models import EvidenceType, Thesis
+
+
+def _rolling_mean(values: list[float], window: int) -> Optional[float]:
+    """Calculate rolling mean of last N values."""
+    if len(values) < window:
+        return None
+    return sum(values[-window:]) / window
+
+
+def _safe_get(values: list, idx: int, default=None):
+    """Safely get value at index from end (0 = last, 5 = 5 from end)."""
+    actual_idx = len(values) - 1 - idx
+    return values[actual_idx] if 0 <= actual_idx < len(values) else default
 
 
 class TechnicalAgent(BaseAgent):
@@ -14,19 +25,33 @@ class TechnicalAgent(BaseAgent):
 
     name = "technical"
 
+    def __init__(self, price_provider: Optional[PriceDataProvider] = None):
+        """
+        Initialize technical agent.
+
+        Args:
+            price_provider: Price data provider (defaults to Alpaca)
+        """
+        super().__init__()
+        self._provider = price_provider
+
+    @property
+    def provider(self) -> PriceDataProvider:
+        """Get price data provider, creating default if needed."""
+        if self._provider is None:
+            self._provider = get_price_provider()
+        return self._provider
+
     def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
         """Research technical indicators for a symbol."""
-        ticker = yf.Ticker(symbol)
         evidence = []
         conviction_delta = 0.0
         summaries = []
-
         thesis_id = thesis.id if thesis else "standalone"
 
         try:
-            # Get historical data
-            hist = self._with_retries(lambda: ticker.history(period="6mo"))
-            if hist.empty:
+            history = self._with_retries(lambda: self.provider.get_history(symbol, days=180))
+            if not history.bars:
                 return AgentResult(
                     evidence=[],
                     conviction_delta=0,
@@ -39,14 +64,16 @@ class TechnicalAgent(BaseAgent):
                 summary=f"Failed to fetch data for {symbol} after retries: {e}",
             )
 
-        close = hist["Close"]
-        volume = hist["Volume"]
+        closes = history.closes
+        volumes = history.volumes
+        highs = history.highs
+        lows = history.lows
 
         # Current price and recent performance
-        current_price = close.iloc[-1]
-        price_1w = close.iloc[-5] if len(close) >= 5 else close.iloc[0]
-        price_1m = close.iloc[-21] if len(close) >= 21 else close.iloc[0]
-        price_3m = close.iloc[-63] if len(close) >= 63 else close.iloc[0]
+        current_price = closes[-1]
+        price_1w = _safe_get(closes, 5, closes[0])
+        price_1m = _safe_get(closes, 21, closes[0])
+        price_3m = _safe_get(closes, 63, closes[0])
 
         change_1w = (current_price - price_1w) / price_1w * 100
         change_1m = (current_price - price_1m) / price_1m * 100
@@ -67,7 +94,7 @@ class TechnicalAgent(BaseAgent):
             self.create_evidence(
                 thesis_id=thesis_id,
                 content=f"Price: ${current_price:.2f} | 1W: {change_1w:+.1f}% | 1M: {change_1m:+.1f}% | 3M: {change_3m:+.1f}%",
-                source="yfinance",
+                source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.7,
                 metadata={
@@ -81,8 +108,8 @@ class TechnicalAgent(BaseAgent):
         )
 
         # Moving averages
-        ma_20 = close.rolling(20).mean().iloc[-1] if len(close) >= 20 else None
-        ma_50 = close.rolling(50).mean().iloc[-1] if len(close) >= 50 else None
+        ma_20 = _rolling_mean(closes, 20)
+        ma_50 = _rolling_mean(closes, 50)
 
         if ma_20 and ma_50:
             ev_type = EvidenceType.NEUTRAL
@@ -99,7 +126,7 @@ class TechnicalAgent(BaseAgent):
                 self.create_evidence(
                     thesis_id=thesis_id,
                     content=f"MA20: ${ma_20:.2f} | MA50: ${ma_50:.2f} | Price vs MA20: {((current_price/ma_20)-1)*100:+.1f}%",
-                    source="yfinance",
+                    source="alpaca",
                     evidence_type=ev_type,
                     confidence=0.65,
                     metadata={"metric": "moving_averages", "ma20": ma_20, "ma50": ma_50},
@@ -107,8 +134,8 @@ class TechnicalAgent(BaseAgent):
             )
 
         # Volume analysis
-        avg_volume = volume.rolling(20).mean().iloc[-1] if len(volume) >= 20 else volume.mean()
-        recent_volume = volume.iloc[-5:].mean()
+        avg_volume = _rolling_mean([float(v) for v in volumes], 20) or sum(volumes) / len(volumes)
+        recent_volume = sum(volumes[-5:]) / min(5, len(volumes))
         volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
 
         ev_type = EvidenceType.NEUTRAL
@@ -121,7 +148,7 @@ class TechnicalAgent(BaseAgent):
             self.create_evidence(
                 thesis_id=thesis_id,
                 content=f"Volume: {recent_volume/1e6:.1f}M avg (last 5d) | {volume_ratio:.1f}x 20d average",
-                source="yfinance",
+                source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.6,
                 metadata={"metric": "volume", "ratio": volume_ratio},
@@ -129,8 +156,9 @@ class TechnicalAgent(BaseAgent):
         )
 
         # Volatility (simple ATR-like measure)
-        high_low_range = (hist["High"] - hist["Low"]).rolling(14).mean().iloc[-1]
-        volatility_pct = (high_low_range / current_price) * 100
+        high_low_ranges = [h - l for h, l in zip(highs, lows)]
+        avg_range = _rolling_mean(high_low_ranges, 14) or sum(high_low_ranges) / len(high_low_ranges)
+        volatility_pct = (avg_range / current_price) * 100
 
         ev_type = EvidenceType.NEUTRAL
         if volatility_pct > 5:
@@ -142,16 +170,16 @@ class TechnicalAgent(BaseAgent):
             self.create_evidence(
                 thesis_id=thesis_id,
                 content=f"Avg Daily Range: {volatility_pct:.2f}% of price",
-                source="yfinance",
+                source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.55,
                 metadata={"metric": "volatility", "value": volatility_pct},
             )
         )
 
-        # 52-week position
-        high_52w = close.max()
-        low_52w = close.min()
+        # 52-week position (using available data, may be less than 52w)
+        high_52w = max(closes)
+        low_52w = min(closes)
         position_52w = (current_price - low_52w) / (high_52w - low_52w) * 100 if high_52w != low_52w else 50
 
         ev_type = EvidenceType.NEUTRAL
@@ -168,7 +196,7 @@ class TechnicalAgent(BaseAgent):
             self.create_evidence(
                 thesis_id=thesis_id,
                 content=f"52W Range: ${low_52w:.2f} - ${high_52w:.2f} | Position: {position_52w:.0f}%",
-                source="yfinance",
+                source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.5,
                 metadata={

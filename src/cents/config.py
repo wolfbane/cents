@@ -18,6 +18,7 @@ class Settings:
 
     news_api_key: str | None = None
     fred_api_key: str | None = None
+    fmp_api_key: str | None = None
     alpaca_api_key: str | None = None
     alpaca_secret_key: str | None = None
     default_scan_threshold: float = 5.0
@@ -66,6 +67,7 @@ def get_settings(config_path: str | None = None) -> Settings:
     return Settings(
         news_api_key=_get("news_api_key", "NEWS_API_KEY", None),
         fred_api_key=_get("fred_api_key", "FRED_API_KEY", None),
+        fmp_api_key=_get("fmp_api_key", "FMP_API_KEY", None),
         alpaca_api_key=_get("alpaca_api_key", "ALPACA_API_KEY", None),
         alpaca_secret_key=_get("alpaca_secret_key", "ALPACA_SECRET_KEY", None),
         default_scan_threshold=threshold_value,
