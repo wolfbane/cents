@@ -1,12 +1,12 @@
 """Macro agent - analyzes economic environment."""
 
-import os
 from typing import Optional
 from urllib.request import urlopen
 from urllib.error import URLError
 import json
 
 from cents.agents.base import BaseAgent, AgentResult
+from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis
 
 
@@ -26,7 +26,8 @@ class MacroAgent(BaseAgent):
 
     def __init__(self):
         super().__init__()
-        self.api_key = os.environ.get("FRED_API_KEY")
+        settings = get_settings()
+        self.api_key = settings.fred_api_key
 
     def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
         """Research macro environment (symbol-agnostic)."""

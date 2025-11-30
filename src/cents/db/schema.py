@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS watchlist (
     symbol TEXT NOT NULL UNIQUE,
     notes TEXT DEFAULT '',
     thesis_id TEXT,
+    threshold REAL,
+    alert_destination TEXT,
     last_scanned TEXT,
     created_at TEXT NOT NULL,
     FOREIGN KEY (thesis_id) REFERENCES theses(id)

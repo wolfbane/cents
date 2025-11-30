@@ -1,6 +1,5 @@
 """Alpaca broker integration."""
 
-import os
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
@@ -14,6 +13,7 @@ except ImportError:
     ALPACA_AVAILABLE = False
 
 from cents.models import Position, PositionSide, PositionStatus
+from cents.config import get_settings
 
 
 @dataclass
@@ -53,8 +53,9 @@ class AlpacaClient:
                 "alpaca-py not installed. Install with: pip install cents[broker]"
             )
 
-        api_key = os.environ.get("ALPACA_API_KEY")
-        secret_key = os.environ.get("ALPACA_SECRET_KEY")
+        settings = get_settings()
+        api_key = settings.alpaca_api_key
+        secret_key = settings.alpaca_secret_key
 
         if not api_key or not secret_key:
             raise ValueError(

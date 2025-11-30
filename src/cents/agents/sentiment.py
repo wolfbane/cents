@@ -1,6 +1,5 @@
 """Sentiment agent - analyzes news and market sentiment."""
 
-import os
 import re
 from typing import Optional
 from urllib.request import urlopen, Request
@@ -9,6 +8,7 @@ from urllib.parse import quote
 import json
 
 from cents.agents.base import BaseAgent, AgentResult
+from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis
 
 
@@ -32,7 +32,8 @@ class SentimentAgent(BaseAgent):
 
     def __init__(self):
         super().__init__()
-        self.news_api_key = os.environ.get("NEWS_API_KEY")
+        settings = get_settings()
+        self.news_api_key = settings.news_api_key
 
     def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
         """Analyze news sentiment for a symbol."""

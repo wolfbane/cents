@@ -1,5 +1,6 @@
 """CLI entry point for cents."""
 
+import json
 from datetime import date
 from typing import Optional
 
@@ -27,10 +28,26 @@ from cents.models import (
     AlertType,
 )
 from cents.agents import AGENTS
+from cents.config import get_settings
+
+
+SETTINGS = get_settings()
+
+
+def _evidence_to_dict(evidence):
+    """Serialize Evidence objects for JSON output."""
+
+    return {
+        "type": evidence.type.value,
+        "content": evidence.content,
+        "source": evidence.source,
+        "confidence": evidence.confidence,
+        "metadata": evidence.metadata,
+    }
 
 
 @click.group()
-@click.version_option()
+@click.version_option(version="0.1.0")
 def cli():
     """Cents: Agentic investing guidance."""
     pass
@@ -50,8 +67,25 @@ def cli():
     help="Run specific agent only",
 )
 @click.option("--save/--no-save", default=True, help="Save evidence to database")
-def research(symbol: str, thesis_id: Optional[str], agent_name: Optional[str], save: bool):
+@click.option(
+    "--output",
+    type=click.Choice(["text", "json"]),
+    default=SETTINGS.default_output,
+    show_default=True,
+    help="Output format for results",
+)
+@click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
+def research(
+    symbol: str,
+    thesis_id: Optional[str],
+    agent_name: Optional[str],
+    save: bool,
+    output: str,
+    quiet: bool,
+):
     """Run research agents on a symbol."""
+    verbose = output == "text" and not quiet
+
     # Get thesis if specified
     thesis = None
     if thesis_id:
@@ -60,36 +94,45 @@ def research(symbol: str, thesis_id: Optional[str], agent_name: Optional[str], s
         if thesis is None:
             click.echo(f"Thesis {thesis_id} not found.", err=True)
             raise SystemExit(1)
-        click.echo(f"Evaluating against thesis: {thesis.title}\n")
+        if verbose:
+            click.echo(f"Evaluating against thesis: {thesis.title}\n")
 
     # Determine which agents to run
-    if agent_name:
-        agents_to_run = {agent_name: AGENTS[agent_name]}
-    else:
-        agents_to_run = AGENTS
+    agents_to_run = {agent_name: AGENTS[agent_name]} if agent_name else AGENTS
 
     total_conviction_delta = 0.0
     all_evidence = []
+    agent_outputs = []
 
     for name, agent_class in agents_to_run.items():
-        click.echo(f"--- {name.upper()} ---")
         agent = agent_class()
         result = agent.research(symbol.upper(), thesis)
 
-        click.echo(f"Summary: {result.summary}")
-        click.echo(f"Conviction delta: {result.conviction_delta:+.1f}")
+        if verbose:
+            click.echo(f"--- {name.upper()} ---")
+            click.echo(f"Summary: {result.summary}")
+            click.echo(f"Conviction delta: {result.conviction_delta:+.1f}")
 
-        if result.evidence:
-            click.echo("Evidence:")
-            for e in result.evidence:
-                icon = {"supporting": "+", "contradicting": "-", "neutral": "~"}[e.type.value]
-                click.echo(f"  [{icon}] {e.content}")
+            if result.evidence:
+                click.echo("Evidence:")
+                for e in result.evidence:
+                    icon = {"supporting": "+", "contradicting": "-", "neutral": "~"}[e.type.value]
+                    click.echo(f"  [{icon}] {e.content}")
+            click.echo()
+
+        agent_outputs.append(
+            {
+                "agent": name,
+                "summary": result.summary,
+                "conviction_delta": result.conviction_delta,
+                "evidence": [_evidence_to_dict(e) for e in result.evidence],
+            }
+        )
 
         total_conviction_delta += result.conviction_delta
         all_evidence.extend(result.evidence)
-        click.echo()
 
-    # Save evidence and update thesis if requested
+    evidence_saved = False
     if save and all_evidence and thesis:
         evidence_repo = EvidenceRepository()
         for e in all_evidence:
@@ -99,11 +142,32 @@ def research(symbol: str, thesis_id: Optional[str], agent_name: Optional[str], s
         thesis_repo = ThesisRepository()
         thesis.update_conviction(total_conviction_delta)
         thesis_repo.update(thesis)
+        evidence_saved = True
 
-        click.echo(f"Saved {len(all_evidence)} evidence items")
-        click.echo(f"Thesis conviction: {thesis.conviction:.1f}% ({total_conviction_delta:+.1f})")
-    elif not thesis and all_evidence:
+        if verbose:
+            click.echo(f"Saved {len(all_evidence)} evidence items")
+            click.echo(f"Thesis conviction: {thesis.conviction:.1f}% ({total_conviction_delta:+.1f})")
+    elif not thesis and all_evidence and verbose:
         click.echo(f"Generated {len(all_evidence)} evidence items (not saved - no thesis linked)")
+
+    if output == "json":
+        payload = {
+            "symbol": symbol.upper(),
+            "thesis_id": thesis.id if thesis else None,
+            "total_conviction_delta": total_conviction_delta,
+            "agents": agent_outputs,
+            "evidence_saved": evidence_saved,
+            "evidence_count": len(all_evidence),
+        }
+        click.echo(json.dumps(payload, indent=2))
+    else:
+        if quiet:
+            click.echo(
+                f"{symbol.upper()} conviction delta: {total_conviction_delta:+.1f}"
+            )
+        elif not verbose:
+            # This happens when output was coerced to text but quiet disabled
+            click.echo(f"Total conviction delta: {total_conviction_delta:+.1f}")
 
 
 # --- Thesis commands ---
@@ -389,12 +453,29 @@ def outcome_list():
 
 
 @cli.command("scan")
-@click.option("--threshold", "-t", type=float, default=5.0, help="Conviction change threshold for alerts")
+@click.option(
+    "--threshold",
+    "-t",
+    type=float,
+    default=SETTINGS.default_scan_threshold,
+    show_default=True,
+    help="Default conviction change threshold for alerts",
+)
 @click.option("--webhook", "-w", help="Webhook URL for notifications")
-def scan(threshold: float, webhook: Optional[str]):
+@click.option(
+    "--output",
+    type=click.Choice(["text", "json"]),
+    default=SETTINGS.default_output,
+    show_default=True,
+    help="Output format for scan results",
+)
+@click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
+def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool):
     """Scan watchlist and generate alerts for significant changes."""
     from cents.agents import OrchestratorAgent
     from cents.notify import notify
+
+    verbose = output == "text" and not quiet
 
     watch_repo = WatchlistRepository()
     alert_repo = AlertRepository()
@@ -402,28 +483,41 @@ def scan(threshold: float, webhook: Optional[str]):
 
     items = watch_repo.list()
     if not items:
-        click.echo("Watchlist is empty. Add symbols with: cents watch add <SYMBOL>")
+        if output == "json":
+            click.echo(json.dumps([], indent=2))
+        else:
+            click.echo("Watchlist is empty. Add symbols with: cents watch add <SYMBOL>")
         return
 
-    click.echo(f"Scanning {len(items)} symbols...\n")
+    if verbose:
+        click.echo(f"Scanning {len(items)} symbols...\n")
+
     alerts_generated = 0
+    scan_results: list[dict] = []
 
     for item in items:
-        click.echo(f"--- {item.symbol} ---")
+        if verbose:
+            click.echo(f"--- {item.symbol} ---")
 
         # Get linked thesis if any
-        thesis = None
-        if item.thesis_id:
-            thesis = thesis_repo.get(item.thesis_id)
+        thesis = thesis_repo.get(item.thesis_id) if item.thesis_id else None
 
         # Run orchestrator
         agent = OrchestratorAgent()
         result = agent.research(item.symbol, thesis)
 
-        click.echo(f"  {result.summary}")
+        effective_threshold = item.threshold if item.threshold is not None else threshold
+        destination = webhook or item.alert_destination or SETTINGS.default_webhook
+
+        if verbose:
+            click.echo(f"  {result.summary}")
+            click.echo(f"  Threshold: {effective_threshold:+.1f}")
+
+        triggered = False
+        alert_message = None
 
         # Check for significant conviction change
-        if abs(result.conviction_delta) >= threshold:
+        if abs(result.conviction_delta) >= effective_threshold:
             direction = "bullish" if result.conviction_delta > 0 else "bearish"
             alert = Alert(
                 symbol=item.symbol,
@@ -436,15 +530,35 @@ def scan(threshold: float, webhook: Optional[str]):
             )
             alert_repo.create(alert)
             alerts_generated += 1
-            click.echo(f"  [!] Alert: {alert.message}")
-            notify(alert, webhook)
+            triggered = True
+            alert_message = alert.message
+            if verbose:
+                click.echo(f"  [!] Alert: {alert.message}")
+            notify(alert, destination, quiet=quiet)
 
         # Update last_scanned
         watch_repo.update_scanned(item.symbol)
-        click.echo()
+        if verbose:
+            click.echo()
+
+        scan_results.append(
+            {
+                "symbol": item.symbol,
+                "summary": result.summary,
+                "conviction_delta": result.conviction_delta,
+                "threshold": effective_threshold,
+                "alerted": triggered,
+                "alert_message": alert_message,
+                "alert_destination": destination if triggered else None,
+            }
+        )
+
+    if output == "json":
+        click.echo(json.dumps(scan_results, indent=2))
+        return
 
     click.echo(f"Scan complete. Generated {alerts_generated} alerts.")
-    if alerts_generated > 0:
+    if alerts_generated > 0 and not quiet:
         click.echo("View alerts with: cents alert list")
 
 
@@ -461,7 +575,19 @@ def watch():
 @click.argument("symbol")
 @click.option("--thesis", "-t", "thesis_id", help="Link to thesis ID")
 @click.option("--notes", "-n", default="", help="Notes for this watch")
-def watch_add(symbol: str, thesis_id: Optional[str], notes: str):
+@click.option(
+    "--threshold",
+    type=float,
+    help="Custom conviction delta threshold for this symbol",
+)
+@click.option("--webhook", help="Custom webhook/alert destination for this symbol")
+def watch_add(
+    symbol: str,
+    thesis_id: Optional[str],
+    notes: str,
+    threshold: Optional[float],
+    webhook: Optional[str],
+):
     """Add a symbol to watchlist."""
     repo = WatchlistRepository()
     existing = repo.get(symbol)
@@ -469,7 +595,13 @@ def watch_add(symbol: str, thesis_id: Optional[str], notes: str):
         click.echo(f"{symbol.upper()} is already on watchlist.")
         return
 
-    item = WatchlistItem(symbol=symbol.upper(), thesis_id=thesis_id, notes=notes)
+    item = WatchlistItem(
+        symbol=symbol.upper(),
+        thesis_id=thesis_id,
+        notes=notes,
+        threshold=threshold,
+        alert_destination=webhook,
+    )
     repo.add(item)
     click.echo(f"Added {symbol.upper()} to watchlist")
 
@@ -498,7 +630,13 @@ def watch_list():
     for item in items:
         scanned = item.last_scanned.strftime("%Y-%m-%d %H:%M") if item.last_scanned else "never"
         thesis_str = f" (thesis: {item.thesis_id})" if item.thesis_id else ""
-        click.echo(f"  {item.symbol}{thesis_str} - last scanned: {scanned}")
+        extras = []
+        if item.threshold is not None:
+            extras.append(f"threshold: {item.threshold:.1f}")
+        if item.alert_destination:
+            extras.append("alert: custom")
+        extras_str = f" | {'; '.join(extras)}" if extras else ""
+        click.echo(f"  {item.symbol}{thesis_str} - last scanned: {scanned}{extras_str}")
 
 
 # --- Alert commands ---
