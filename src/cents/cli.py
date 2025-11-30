@@ -17,6 +17,8 @@ from cents.db import (
 from cents.models import (
     Thesis,
     ThesisStatus,
+    Valuation,
+    TimeHorizon,
     Position,
     PositionSide,
     PositionStatus,
@@ -183,11 +185,51 @@ def thesis():
 @click.argument("title")
 @click.option("--hypothesis", "-h", default="", help="Detailed thesis statement")
 @click.option("--tags", "-t", default="", help="Comma-separated tags")
-def thesis_create(title: str, hypothesis: str, tags: str):
+@click.option("--symbol", "-S", help="Stock ticker (e.g., AAPL)")
+@click.option("--business-quality", "-b", help="Quality assessment")
+@click.option("--valuation", "-v", type=click.Choice(["undervalued", "fair", "overvalued"]), help="Valuation assessment")
+@click.option("--moat", "-m", help="Competitive advantage")
+@click.option("--time-horizon", "-T", type=click.Choice(["short", "medium", "long"]), help="Investment horizon")
+@click.option("--horizon-end", help="Expiry date (YYYY-MM-DD)")
+@click.option("--risks", "-r", default="", help="Comma-separated key risks")
+def thesis_create(
+    title: str,
+    hypothesis: str,
+    tags: str,
+    symbol: Optional[str],
+    business_quality: Optional[str],
+    valuation: Optional[str],
+    moat: Optional[str],
+    time_horizon: Optional[str],
+    horizon_end: Optional[str],
+    risks: str,
+):
     """Create a new investment thesis."""
+    from datetime import datetime as dt
     repo = ThesisRepository()
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-    t = Thesis(title=title, hypothesis=hypothesis, tags=tag_list)
+    risk_list = [r.strip() for r in risks.split(",") if r.strip()] if risks else []
+
+    horizon_dt = None
+    if horizon_end:
+        try:
+            horizon_dt = dt.strptime(horizon_end, "%Y-%m-%d")
+        except ValueError:
+            click.echo("Invalid date format. Use YYYY-MM-DD.", err=True)
+            raise SystemExit(1)
+
+    t = Thesis(
+        title=title,
+        hypothesis=hypothesis,
+        tags=tag_list,
+        symbol=symbol.upper() if symbol else None,
+        business_quality=business_quality,
+        valuation=Valuation(valuation) if valuation else None,
+        moat=moat,
+        time_horizon=TimeHorizon(time_horizon) if time_horizon else None,
+        horizon_end=horizon_dt,
+        key_risks=risk_list,
+    )
     repo.create(t)
     click.echo(f"Created thesis {t.id}: {t.title}")
 
@@ -199,11 +241,17 @@ def thesis_create(title: str, hypothesis: str, tags: str):
     type=click.Choice(["open", "closed", "invalidated"]),
     help="Filter by status",
 )
-def thesis_list(status: Optional[str]):
+@click.option("--symbol", "-S", help="Filter by symbol")
+def thesis_list(status: Optional[str], symbol: Optional[str]):
     """List theses."""
     repo = ThesisRepository()
     status_filter = ThesisStatus(status) if status else None
     theses = repo.list(status=status_filter)
+
+    # Filter by symbol if specified
+    if symbol:
+        symbol_upper = symbol.upper()
+        theses = [t for t in theses if t.symbol and t.symbol.upper() == symbol_upper]
 
     if not theses:
         click.echo("No theses found.")
@@ -211,7 +259,8 @@ def thesis_list(status: Optional[str]):
 
     for t in theses:
         status_icon = {"open": "+", "closed": "-", "invalidated": "x"}[t.status.value]
-        click.echo(f"[{status_icon}] {t.id}: {t.title} (conviction: {t.conviction:.0f}%)")
+        symbol_str = f" [{t.symbol}]" if t.symbol else ""
+        click.echo(f"[{status_icon}] {t.id}:{symbol_str} {t.title} (conviction: {t.conviction:.0f}%)")
 
 
 @thesis.command("show")
@@ -227,10 +276,24 @@ def thesis_show(thesis_id: str):
 
     click.echo(f"ID:         {t.id}")
     click.echo(f"Title:      {t.title}")
+    if t.symbol:
+        click.echo(f"Symbol:     {t.symbol}")
     click.echo(f"Status:     {t.status.value}")
     click.echo(f"Conviction: {t.conviction:.1f}%")
     if t.hypothesis:
         click.echo(f"Hypothesis: {t.hypothesis}")
+    if t.business_quality:
+        click.echo(f"Quality:    {t.business_quality}")
+    if t.valuation:
+        click.echo(f"Valuation:  {t.valuation.value}")
+    if t.moat:
+        click.echo(f"Moat:       {t.moat}")
+    if t.time_horizon:
+        click.echo(f"Horizon:    {t.time_horizon.value}")
+    if t.horizon_end:
+        click.echo(f"Expires:    {t.horizon_end.strftime('%Y-%m-%d')}")
+    if t.key_risks:
+        click.echo(f"Risks:      {', '.join(t.key_risks)}")
     if t.tags:
         click.echo(f"Tags:       {', '.join(t.tags)}")
     click.echo(f"Created:    {t.created_at.strftime('%Y-%m-%d %H:%M')}")
@@ -241,8 +304,27 @@ def thesis_show(thesis_id: str):
 @click.argument("thesis_id")
 @click.option("--conviction", "-c", type=float, help="Set conviction (0-100)")
 @click.option("--status", "-s", type=click.Choice(["open", "closed", "invalidated"]))
-def thesis_update(thesis_id: str, conviction: Optional[float], status: Optional[str]):
+@click.option("--symbol", "-S", help="Stock ticker")
+@click.option("--business-quality", "-b", help="Quality assessment")
+@click.option("--valuation", "-v", type=click.Choice(["undervalued", "fair", "overvalued"]))
+@click.option("--moat", "-m", help="Competitive advantage")
+@click.option("--time-horizon", "-T", type=click.Choice(["short", "medium", "long"]))
+@click.option("--horizon-end", help="Expiry date (YYYY-MM-DD)")
+@click.option("--risks", "-r", help="Comma-separated key risks")
+def thesis_update(
+    thesis_id: str,
+    conviction: Optional[float],
+    status: Optional[str],
+    symbol: Optional[str],
+    business_quality: Optional[str],
+    valuation: Optional[str],
+    moat: Optional[str],
+    time_horizon: Optional[str],
+    horizon_end: Optional[str],
+    risks: Optional[str],
+):
     """Update a thesis."""
+    from datetime import datetime as dt
     repo = ThesisRepository()
     t = repo.get(thesis_id)
 
@@ -254,6 +336,27 @@ def thesis_update(thesis_id: str, conviction: Optional[float], status: Optional[
         t.conviction = max(0.0, min(100.0, conviction))
     if status:
         t.status = ThesisStatus(status)
+    if symbol is not None:
+        t.symbol = symbol.upper() if symbol else None
+    if business_quality is not None:
+        t.business_quality = business_quality if business_quality else None
+    if valuation is not None:
+        t.valuation = Valuation(valuation) if valuation else None
+    if moat is not None:
+        t.moat = moat if moat else None
+    if time_horizon is not None:
+        t.time_horizon = TimeHorizon(time_horizon) if time_horizon else None
+    if horizon_end is not None:
+        if horizon_end:
+            try:
+                t.horizon_end = dt.strptime(horizon_end, "%Y-%m-%d")
+            except ValueError:
+                click.echo("Invalid date format. Use YYYY-MM-DD.", err=True)
+                raise SystemExit(1)
+        else:
+            t.horizon_end = None
+    if risks is not None:
+        t.key_risks = [r.strip() for r in risks.split(",") if r.strip()] if risks else []
 
     repo.update(t)
     click.echo(f"Updated thesis {t.id}")

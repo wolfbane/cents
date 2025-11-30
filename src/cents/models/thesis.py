@@ -13,6 +13,18 @@ class ThesisStatus(str, Enum):
     INVALIDATED = "invalidated"
 
 
+class Valuation(str, Enum):
+    UNDERVALUED = "undervalued"
+    FAIR = "fair"
+    OVERVALUED = "overvalued"
+
+
+class TimeHorizon(str, Enum):
+    SHORT = "short"      # < 3 months
+    MEDIUM = "medium"    # 3-12 months
+    LONG = "long"        # > 12 months
+
+
 @dataclass
 class Thesis:
     """An investment thesis - a testable hypothesis about an investment."""
@@ -22,6 +34,15 @@ class Thesis:
     status: ThesisStatus = ThesisStatus.OPEN
     conviction: float = 50.0  # 0-100
     tags: list[str] = field(default_factory=list)
+    # Structured thesis fields
+    symbol: Optional[str] = None
+    business_quality: Optional[str] = None
+    valuation: Optional[Valuation] = None
+    moat: Optional[str] = None
+    time_horizon: Optional[TimeHorizon] = None
+    horizon_end: Optional[datetime] = None
+    key_risks: list[str] = field(default_factory=list)
+    # Metadata
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)

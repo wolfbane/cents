@@ -17,6 +17,8 @@ from cents.models import (
     Thesis,
     ThesisAccuracy,
     ThesisStatus,
+    Valuation,
+    TimeHorizon,
     WatchlistItem,
 )
 from cents.db.schema import get_connection
@@ -32,8 +34,10 @@ class ThesisRepository:
         """Insert a new thesis."""
         self.conn.execute(
             """
-            INSERT INTO theses (id, title, hypothesis, status, conviction, tags, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO theses (id, title, hypothesis, status, conviction, tags,
+                symbol, business_quality, valuation, moat, time_horizon, horizon_end, key_risks,
+                created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 thesis.id,
@@ -42,6 +46,13 @@ class ThesisRepository:
                 thesis.status.value,
                 thesis.conviction,
                 json.dumps(thesis.tags),
+                thesis.symbol,
+                thesis.business_quality,
+                thesis.valuation.value if thesis.valuation else None,
+                thesis.moat,
+                thesis.time_horizon.value if thesis.time_horizon else None,
+                thesis.horizon_end.isoformat() if thesis.horizon_end else None,
+                json.dumps(thesis.key_risks),
                 thesis.created_at.isoformat(),
                 thesis.updated_at.isoformat(),
             ),
@@ -77,7 +88,9 @@ class ThesisRepository:
         self.conn.execute(
             """
             UPDATE theses
-            SET title = ?, hypothesis = ?, status = ?, conviction = ?, tags = ?, updated_at = ?
+            SET title = ?, hypothesis = ?, status = ?, conviction = ?, tags = ?,
+                symbol = ?, business_quality = ?, valuation = ?, moat = ?,
+                time_horizon = ?, horizon_end = ?, key_risks = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -86,6 +99,13 @@ class ThesisRepository:
                 thesis.status.value,
                 thesis.conviction,
                 json.dumps(thesis.tags),
+                thesis.symbol,
+                thesis.business_quality,
+                thesis.valuation.value if thesis.valuation else None,
+                thesis.moat,
+                thesis.time_horizon.value if thesis.time_horizon else None,
+                thesis.horizon_end.isoformat() if thesis.horizon_end else None,
+                json.dumps(thesis.key_risks),
                 thesis.updated_at.isoformat(),
                 thesis.id,
             ),
@@ -107,6 +127,13 @@ class ThesisRepository:
             status=ThesisStatus(row["status"]),
             conviction=row["conviction"],
             tags=json.loads(row["tags"]),
+            symbol=row["symbol"],
+            business_quality=row["business_quality"],
+            valuation=Valuation(row["valuation"]) if row["valuation"] else None,
+            moat=row["moat"],
+            time_horizon=TimeHorizon(row["time_horizon"]) if row["time_horizon"] else None,
+            horizon_end=datetime.fromisoformat(row["horizon_end"]) if row["horizon_end"] else None,
+            key_risks=json.loads(row["key_risks"]) if row["key_risks"] else [],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

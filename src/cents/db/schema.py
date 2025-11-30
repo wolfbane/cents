@@ -12,6 +12,13 @@ CREATE TABLE IF NOT EXISTS theses (
     status TEXT DEFAULT 'open',
     conviction REAL DEFAULT 50.0,
     tags TEXT DEFAULT '[]',
+    symbol TEXT,
+    business_quality TEXT,
+    valuation TEXT,
+    moat TEXT,
+    time_horizon TEXT,
+    horizon_end TEXT,
+    key_risks TEXT DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -102,6 +109,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         # Add threshold and alert_destination to watchlist (added in v0.2)
         ("watchlist", "threshold", "ALTER TABLE watchlist ADD COLUMN threshold REAL"),
         ("watchlist", "alert_destination", "ALTER TABLE watchlist ADD COLUMN alert_destination TEXT"),
+        # Add structured thesis fields (added in v0.3)
+        ("theses", "symbol", "ALTER TABLE theses ADD COLUMN symbol TEXT"),
+        ("theses", "business_quality", "ALTER TABLE theses ADD COLUMN business_quality TEXT"),
+        ("theses", "valuation", "ALTER TABLE theses ADD COLUMN valuation TEXT"),
+        ("theses", "moat", "ALTER TABLE theses ADD COLUMN moat TEXT"),
+        ("theses", "time_horizon", "ALTER TABLE theses ADD COLUMN time_horizon TEXT"),
+        ("theses", "horizon_end", "ALTER TABLE theses ADD COLUMN horizon_end TEXT"),
+        ("theses", "key_risks", "ALTER TABLE theses ADD COLUMN key_risks TEXT DEFAULT '[]'"),
     ]
 
     for table, column, sql in migrations:
