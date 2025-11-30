@@ -30,7 +30,7 @@ from cents.agents import AGENTS
 
 
 @click.group()
-@click.version_option()
+@click.version_option(version="0.1.0", package_name="cents")
 def cli():
     """Cents: Agentic investing guidance."""
     pass

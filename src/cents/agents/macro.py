@@ -3,7 +3,6 @@
 import os
 from typing import Optional
 from urllib.request import urlopen
-from urllib.error import URLError
 import json
 
 from cents.agents.base import BaseAgent, AgentResult
@@ -43,7 +42,7 @@ class MacroAgent(BaseAgent):
         # Fetch FRED data
         for series_id, name in self.INDICATORS.items():
             try:
-                value, date = self._fetch_fred_series(series_id)
+                value, date = self._with_retries(lambda: self._fetch_fred_series(series_id))
                 if value is None:
                     continue
 
@@ -63,7 +62,17 @@ class MacroAgent(BaseAgent):
                     )
                 )
             except Exception as e:
-                continue
+                evidence.append(
+                    self.create_evidence(
+                        thesis_id=thesis_id,
+                        content=(
+                            f"FRED fetch failed for {series_id} after retries: {e}"),
+                        source=f"FRED:{series_id}",
+                        evidence_type=EvidenceType.CONTRADICTING,
+                        confidence=0.0,
+                        metadata={"error": "fred_fetch_failed", "series": series_id},
+                    )
+                )
 
         if summaries:
             summary = "Macro: " + "; ".join(summaries)
@@ -83,14 +92,11 @@ class MacroAgent(BaseAgent):
             f"?series_id={series_id}&api_key={self.api_key}"
             f"&file_type=json&sort_order=desc&limit=1"
         )
-        try:
-            with urlopen(url, timeout=10) as response:
-                data = json.loads(response.read())
-                obs = data.get("observations", [])
-                if obs and obs[0].get("value") != ".":
-                    return float(obs[0]["value"]), obs[0]["date"]
-        except (URLError, json.JSONDecodeError, KeyError, ValueError):
-            pass
+        with urlopen(url, timeout=10) as response:
+            data = json.loads(response.read())
+            obs = data.get("observations", [])
+            if obs and obs[0].get("value") != ".":
+                return float(obs[0]["value"]), obs[0]["date"]
         return None, None
 
     def _interpret_indicator(
@@ -134,15 +140,21 @@ class MacroAgent(BaseAgent):
         evidence = [
             self.create_evidence(
                 thesis_id=thesis_id,
-                content="FRED API key not configured. Set FRED_API_KEY env var for macro data.",
+                content=(
+                    "FRED API key missing - macro data retrieval skipped. "
+                    "Set FRED_API_KEY env var for richer macro context."
+                ),
                 source="system",
-                evidence_type=EvidenceType.NEUTRAL,
+                evidence_type=EvidenceType.CONTRADICTING,
                 confidence=0.0,
-                metadata={"error": "no_api_key"},
+                metadata={"error": "missing_fred_api_key"},
             )
         ]
         return AgentResult(
             evidence=evidence,
             conviction_delta=0,
-            summary="Macro: FRED API key not configured (get free key at fred.stlouisfed.org)",
+            summary=(
+                "WARNING: Macro signals limited - FRED_API_KEY not configured "
+                "(get a free key at fred.stlouisfed.org)"
+            ),
         )
