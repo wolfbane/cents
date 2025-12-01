@@ -695,6 +695,98 @@ def position_show(position_id: str):
     click.echo(f"Paper:       {'Yes' if p.paper else 'No'}")
 
 
+@position.command("value")
+@click.argument("symbol", required=False)
+def position_value(symbol: Optional[str]):
+    """Show current market value of open positions.
+
+    Example: cents position value        # All open positions
+             cents position value AAPL   # Specific symbol only
+    """
+    from cents.data import get_price_provider
+    from cents.exceptions import ConfigurationError
+
+    repo = PositionRepository()
+    positions = repo.list(status=PositionStatus.OPEN)
+
+    if symbol:
+        symbol = symbol.upper()
+        positions = [p for p in positions if p.symbol == symbol]
+
+    if not positions:
+        if symbol:
+            click.echo(f"No open positions for {symbol}.")
+        else:
+            click.echo("No open positions.")
+        return
+
+    # Get price provider
+    try:
+        provider = get_price_provider()
+    except ConfigurationError as e:
+        click.echo(f"Error: {e}", err=True)
+        click.echo("Set ALPACA_API_KEY and ALPACA_SECRET_KEY for live prices.", err=True)
+        raise SystemExit(1)
+
+    # Fetch prices for all unique symbols
+    symbols = list(set(p.symbol for p in positions))
+    prices: dict[str, Optional[float]] = {}
+    for sym in symbols:
+        try:
+            prices[sym] = provider.get_latest_price(sym)
+        except Exception as e:
+            click.echo(f"Warning: Could not fetch price for {sym}: {e}", err=True)
+            prices[sym] = None
+
+    # Display positions with current values
+    total_cost = 0.0
+    total_value = 0.0
+    total_pnl = 0.0
+
+    click.echo("")
+    click.echo(f"{'Symbol':<8} {'Side':<6} {'Shares':>8} {'Entry':>10} {'Current':>10} {'Value':>12} {'P&L':>12} {'%':>8}")
+    click.echo("-" * 82)
+
+    for p in positions:
+        current = prices.get(p.symbol)
+        side_str = "LONG" if p.side == PositionSide.LONG else "SHORT"
+
+        if current is None:
+            click.echo(f"{p.symbol:<8} {side_str:<6} {p.size:>8.0f} ${p.entry_price:>9.2f} {'N/A':>10} {'N/A':>12} {'N/A':>12} {'N/A':>8}")
+            continue
+
+        value = p.market_value(current)
+        pnl = p.unrealized_pnl(current)
+        pnl_pct = p.unrealized_pnl_pct(current)
+        cost = p.cost_basis
+
+        total_cost += cost
+        total_value += value
+        total_pnl += pnl
+
+        pnl_sign = "+" if pnl >= 0 else ""
+        pct_sign = "+" if pnl_pct >= 0 else ""
+
+        click.echo(
+            f"{p.symbol:<8} {side_str:<6} {p.size:>8.0f} "
+            f"${p.entry_price:>9.2f} ${current:>9.2f} "
+            f"${value:>11.2f} {pnl_sign}${pnl:>10.2f} {pct_sign}{pnl_pct:>6.1f}%"
+        )
+
+    # Summary
+    if len(positions) > 1 and total_cost > 0:
+        click.echo("-" * 82)
+        total_pnl_pct = (total_pnl / total_cost) * 100 if total_cost > 0 else 0
+        pnl_sign = "+" if total_pnl >= 0 else ""
+        pct_sign = "+" if total_pnl_pct >= 0 else ""
+        click.echo(
+            f"{'TOTAL':<8} {'':<6} {'':<8} "
+            f"{'':>11} {'':>11} "
+            f"${total_value:>11.2f} {pnl_sign}${total_pnl:>10.2f} {pct_sign}{total_pnl_pct:>6.1f}%"
+        )
+    click.echo("")
+
+
 # --- Outcome commands ---
 
 

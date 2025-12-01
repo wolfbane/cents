@@ -344,6 +344,98 @@ class TestPositionEdgeCases:
         assert p.pnl_pct == 99.0  # 99% gain
 
 
+class TestPositionMarkToMarket:
+    """Tests for mark-to-market position valuation."""
+
+    def test_unrealized_pnl_long_profit(self):
+        """Unrealized P&L for profitable long position."""
+        p = Position(
+            symbol="AAPL",
+            side=PositionSide.LONG,
+            entry_price=100.0,
+            size=10,
+        )
+        assert p.unrealized_pnl(110.0) == 100.0  # 10 * (110 - 100)
+        assert p.unrealized_pnl_pct(110.0) == 10.0  # +10%
+
+    def test_unrealized_pnl_long_loss(self):
+        """Unrealized P&L for losing long position."""
+        p = Position(
+            symbol="AAPL",
+            side=PositionSide.LONG,
+            entry_price=100.0,
+            size=10,
+        )
+        assert p.unrealized_pnl(90.0) == -100.0  # 10 * (90 - 100)
+        assert p.unrealized_pnl_pct(90.0) == -10.0  # -10%
+
+    def test_unrealized_pnl_short_profit(self):
+        """Unrealized P&L for profitable short position."""
+        p = Position(
+            symbol="AAPL",
+            side=PositionSide.SHORT,
+            entry_price=100.0,
+            size=10,
+        )
+        # Short profits when price goes down
+        assert p.unrealized_pnl(90.0) == 100.0  # 10 * (100 - 90)
+        assert p.unrealized_pnl_pct(90.0) == 10.0  # +10%
+
+    def test_unrealized_pnl_short_loss(self):
+        """Unrealized P&L for losing short position."""
+        p = Position(
+            symbol="AAPL",
+            side=PositionSide.SHORT,
+            entry_price=100.0,
+            size=10,
+        )
+        # Short loses when price goes up
+        assert p.unrealized_pnl(110.0) == -100.0  # 10 * (100 - 110)
+        assert p.unrealized_pnl_pct(110.0) == -10.0  # -10%
+
+    def test_market_value(self):
+        """Market value calculation."""
+        p = Position(
+            symbol="AAPL",
+            side=PositionSide.LONG,
+            entry_price=100.0,
+            size=50,
+        )
+        assert p.market_value(120.0) == 6000.0  # 50 * 120
+
+    def test_cost_basis(self):
+        """Cost basis calculation."""
+        p = Position(
+            symbol="AAPL",
+            side=PositionSide.LONG,
+            entry_price=100.0,
+            size=50,
+        )
+        assert p.cost_basis == 5000.0  # 50 * 100
+
+    def test_unrealized_at_same_price(self):
+        """Unrealized P&L at entry price is zero."""
+        p = Position(
+            symbol="AAPL",
+            side=PositionSide.LONG,
+            entry_price=100.0,
+            size=100,
+        )
+        assert p.unrealized_pnl(100.0) == 0.0
+        assert p.unrealized_pnl_pct(100.0) == 0.0
+
+    def test_unrealized_fractional_shares(self):
+        """Unrealized P&L with fractional shares."""
+        p = Position(
+            symbol="AAPL",
+            side=PositionSide.LONG,
+            entry_price=100.0,
+            size=0.5,
+        )
+        assert p.unrealized_pnl(120.0) == 10.0  # 0.5 * 20
+        assert p.unrealized_pnl_pct(120.0) == 20.0  # +20%
+
+
 class TestOutcomeEdgeCases:
     """Edge case tests for Outcome model."""
 

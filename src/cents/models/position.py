@@ -71,3 +71,26 @@ class Position:
             return (self.exit_price - self.entry_price) / self.entry_price * 100
         else:
             return (self.entry_price - self.exit_price) / self.entry_price * 100
+
+    def unrealized_pnl(self, current_price: float) -> float:
+        """Calculate unrealized P&L given current market price."""
+        diff = current_price - self.entry_price
+        if self.side == PositionSide.SHORT:
+            diff = -diff
+        return diff * self.size
+
+    def unrealized_pnl_pct(self, current_price: float) -> float:
+        """Calculate unrealized P&L percentage given current market price."""
+        if self.side == PositionSide.LONG:
+            return (current_price - self.entry_price) / self.entry_price * 100
+        else:
+            return (self.entry_price - current_price) / self.entry_price * 100
+
+    def market_value(self, current_price: float) -> float:
+        """Calculate current market value of the position."""
+        return current_price * self.size
+
+    @property
+    def cost_basis(self) -> float:
+        """Calculate total cost basis of the position."""
+        return self.entry_price * self.size
