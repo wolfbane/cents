@@ -695,6 +695,32 @@ def position_show(position_id: str):
     click.echo(f"Paper:       {'Yes' if p.paper else 'No'}")
 
 
+@position.command("link")
+@click.argument("position_id")
+@click.option("--thesis", "-t", required=True, help="Thesis ID to link to")
+def position_link(position_id: str, thesis: str):
+    """Link a position to a thesis.
+
+    Example: cents position link abc123 --thesis def456
+    """
+    pos_repo = PositionRepository()
+    thesis_repo = ThesisRepository()
+
+    p = pos_repo.get(position_id)
+    if p is None:
+        click.echo(f"Position {position_id} not found.", err=True)
+        raise SystemExit(1)
+
+    t = thesis_repo.get(thesis)
+    if t is None:
+        click.echo(f"Thesis {thesis} not found.", err=True)
+        raise SystemExit(1)
+
+    p.thesis_id = thesis
+    pos_repo.update(p)
+    click.echo(f"Linked position {position_id} ({p.symbol}) to thesis {thesis}")
+
+
 @position.command("value")
 @click.argument("symbol", required=False)
 def position_value(symbol: Optional[str]):
