@@ -68,6 +68,7 @@ cents --help                  # CLI usage
 - `evidence: list[Evidence]` - Supporting/contradicting/neutral findings
 - `conviction_delta: float` - How much to adjust thesis (e.g., +3.0 or -2.0)
 - `summary: str` - Human-readable one-liner
+- `dimension_scores: dict[str, float]` - Per-dimension deltas (valuation, quality, moat, etc.)
 
 **Repository Pattern** (`db/repository.py`): Each model has a repository:
 - Accepts optional `conn` for testing with in-memory DBs
@@ -77,6 +78,7 @@ cents --help                  # CLI usage
 **Data Providers** (`data/`): Abstraction layer for market data:
 - `PriceDataProvider` protocol → `AlpacaPriceProvider` (price/volume data)
 - `FundamentalsDataProvider` protocol → `FMPFundamentalsProvider` (P/E, margins, etc.)
+- FMP uses stable API (`/stable/` endpoints with query params, not legacy `/api/v3/`)
 - Agents accept optional providers for dependency injection in tests
 
 ### Data Flow for Research
