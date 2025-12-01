@@ -148,12 +148,11 @@ class TestFMPFundamentalsProvider:
         """Successfully fetch fundamentals."""
         mock_settings.return_value.fmp_api_key = "test_key"
 
-        # Mock responses for each endpoint
+        # Mock responses for each endpoint (stable API field names)
         responses = [
-            [{"companyName": "Apple Inc.", "peRatioTTM": 28.5}],  # profile
-            [{"netProfitMarginTTM": 0.25, "debtEquityRatioTTM": 1.5}],  # ratios
-            [{"revenuePerShareTTM": 10.5}],  # metrics
-            [{"ratingRecommendation": "Strong Buy"}],  # rating
+            [{"companyName": "Apple Inc."}],  # profile
+            [{"priceToEarningsRatioTTM": 28.5, "netProfitMarginTTM": 0.25, "debtToEquityRatioTTM": 1.5}],  # ratios
+            [{"revenuePerShareTTM": 10.5, "returnOnEquityTTM": 0.35}],  # metrics
         ]
         call_count = [0]
 
@@ -174,7 +173,7 @@ class TestFMPFundamentalsProvider:
         assert data.name == "Apple Inc."
         assert data.pe_ratio == 28.5
         assert data.profit_margin == 0.25
-        assert data.recommendation == "strong_buy"
+        assert data.return_on_equity == 0.35
 
     @patch("cents.data.fmp.urllib.request.urlopen")
     @patch("cents.data.fmp.get_settings")

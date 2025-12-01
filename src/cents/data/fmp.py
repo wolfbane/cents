@@ -13,7 +13,7 @@ from cents.exceptions import ConfigurationError, DataFetchError
 
 logger = logging.getLogger(__name__)
 
-FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
+FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 
 
 class FMPFundamentalsProvider:
@@ -35,9 +35,11 @@ class FMPFundamentalsProvider:
                 "or fmp_api_key in ~/.cents/config.toml"
             )
 
-    def _fetch_json(self, endpoint: str) -> Optional[dict | list]:
+    def _fetch_json(self, endpoint: str, **params) -> Optional[dict | list]:
         """Fetch JSON from FMP API."""
-        url = f"{FMP_BASE_URL}/{endpoint}?apikey={self._api_key}"
+        params["apikey"] = self._api_key
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{FMP_BASE_URL}/{endpoint}?{query}"
         try:
             with urllib.request.urlopen(url, timeout=10) as response:
                 data = json.loads(response.read().decode())
@@ -70,46 +72,43 @@ class FMPFundamentalsProvider:
     def _get_current_fundamentals(self, symbol: str) -> FundamentalsData:
         """Get current/TTM fundamentals."""
         # Fetch company profile for basic info and some metrics
-        profile_data = self._fetch_json(f"profile/{symbol}")
+        profile_data = self._fetch_json("profile", symbol=symbol)
         profile = profile_data[0] if profile_data and len(profile_data) > 0 else {}
 
         # Fetch TTM ratios for detailed financial ratios
-        ratios_data = self._fetch_json(f"ratios-ttm/{symbol}")
+        ratios_data = self._fetch_json("ratios-ttm", symbol=symbol)
         ratios = ratios_data[0] if ratios_data and len(ratios_data) > 0 else {}
 
         # Fetch key metrics for growth data
-        metrics_data = self._fetch_json(f"key-metrics-ttm/{symbol}")
+        metrics_data = self._fetch_json("key-metrics-ttm", symbol=symbol)
         metrics = metrics_data[0] if metrics_data and len(metrics_data) > 0 else {}
 
-        # Fetch analyst rating/recommendation
-        rating_data = self._fetch_json(f"rating/{symbol}")
-        rating = rating_data[0] if rating_data and len(rating_data) > 0 else {}
+        # Note: rating endpoint deprecated in stable API
 
-        # Map FMP fields to our FundamentalsData
+        # Map FMP fields to our FundamentalsData (stable API field names)
         return FundamentalsData(
             symbol=symbol,
             name=profile.get("companyName"),
             # Valuation
-            pe_ratio=profile.get("peRatioTTM") or ratios.get("peRatioTTM"),
+            pe_ratio=ratios.get("priceToEarningsRatioTTM"),
             forward_pe=None,  # FMP doesn't have forward P/E in standard endpoints
-            peg_ratio=ratios.get("pegRatioTTM"),
+            peg_ratio=ratios.get("priceToEarningsGrowthRatioTTM"),
             # Growth - FMP provides these as decimals
             revenue_growth=metrics.get("revenuePerShareTTM"),  # Use as proxy
             earnings_growth=None,  # Would need historical comparison
             # Profitability
             profit_margin=ratios.get("netProfitMarginTTM"),
-            return_on_equity=ratios.get("returnOnEquityTTM"),
+            return_on_equity=metrics.get("returnOnEquityTTM"),
             # Balance sheet
-            debt_to_equity=ratios.get("debtEquityRatioTTM"),
+            debt_to_equity=ratios.get("debtToEquityRatioTTM"),
             current_ratio=ratios.get("currentRatioTTM"),
-            # Analyst - map FMP rating to simple recommendation
-            recommendation=self._map_rating(rating.get("ratingRecommendation")),
+            # Analyst - rating endpoint deprecated in stable API
+            recommendation=None,
             # Store raw data for extensibility
             raw={
                 "profile": profile,
                 "ratios": ratios,
                 "metrics": metrics,
-                "rating": rating,
             },
         )
 
@@ -118,15 +117,15 @@ class FMPFundamentalsProvider:
     ) -> FundamentalsData:
         """Get fundamentals as of a historical date using quarterly data."""
         # Fetch company profile (static info)
-        profile_data = self._fetch_json(f"profile/{symbol}")
+        profile_data = self._fetch_json("profile", symbol=symbol)
         profile = profile_data[0] if profile_data and len(profile_data) > 0 else {}
 
         # Fetch historical quarterly ratios
-        ratios_data = self._fetch_json(f"ratios/{symbol}?period=quarter&limit=40")
+        ratios_data = self._fetch_json("ratios", symbol=symbol, period="quarter", limit=40)
         ratios = self._find_quarter_data(ratios_data, as_of)
 
         # Fetch historical quarterly key metrics
-        metrics_data = self._fetch_json(f"key-metrics/{symbol}?period=quarter&limit=40")
+        metrics_data = self._fetch_json("key-metrics", symbol=symbol, period="quarter", limit=40)
         metrics = self._find_quarter_data(metrics_data, as_of)
 
         return FundamentalsData(
