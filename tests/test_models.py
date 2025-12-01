@@ -209,12 +209,17 @@ class TestThesisEdgeCases:
         t.update_conviction(0.0)
         assert t.conviction == 50.0
 
-    def test_negative_conviction_input_clamps(self):
-        """Negative initial conviction gets handled."""
-        # Note: dataclass doesn't validate, but update_conviction clamps
-        t = Thesis(title="Test", conviction=-10.0)
-        t.update_conviction(0.0)
-        assert t.conviction == 0.0  # Clamped by update
+    def test_negative_conviction_input_raises(self):
+        """Negative initial conviction raises ValueError."""
+        import pytest
+        with pytest.raises(ValueError, match="conviction must be between 0 and 100"):
+            Thesis(title="Test", conviction=-10.0)
+
+    def test_conviction_over_100_raises(self):
+        """Conviction over 100 raises ValueError."""
+        import pytest
+        with pytest.raises(ValueError, match="conviction must be between 0 and 100"):
+            Thesis(title="Test", conviction=150.0)
 
     def test_empty_tags_list(self):
         """Empty tags list is valid."""
@@ -234,16 +239,27 @@ class TestThesisEdgeCases:
 class TestPositionEdgeCases:
     """Edge case tests for Position model."""
 
-    def test_zero_size_position(self):
-        """Zero size position has zero P&L."""
-        p = Position(
-            symbol="AAPL",
-            side=PositionSide.LONG,
-            entry_price=100.0,
-            size=0,
-        )
-        p.close(200.0)
-        assert p.pnl == 0.0  # 0 * (200 - 100)
+    def test_zero_size_position_raises(self):
+        """Zero size position raises ValueError."""
+        import pytest
+        with pytest.raises(ValueError, match="size must be positive"):
+            Position(
+                symbol="AAPL",
+                side=PositionSide.LONG,
+                entry_price=100.0,
+                size=0,
+            )
+
+    def test_negative_entry_price_raises(self):
+        """Negative entry price raises ValueError."""
+        import pytest
+        with pytest.raises(ValueError, match="entry_price must be positive"):
+            Position(
+                symbol="AAPL",
+                side=PositionSide.LONG,
+                entry_price=-100.0,
+                size=10,
+            )
 
     def test_fractional_shares(self):
         """Fractional share positions work."""

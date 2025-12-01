@@ -59,6 +59,15 @@ class Thesis:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
 
+    def __post_init__(self) -> None:
+        """Validate fields after initialization."""
+        if not 0.0 <= self.conviction <= 100.0:
+            raise ValueError(f"conviction must be between 0 and 100, got {self.conviction}")
+        if self.target_price is not None and self.target_price <= 0:
+            raise ValueError(f"target_price must be positive, got {self.target_price}")
+        if self.stop_price is not None and self.stop_price <= 0:
+            raise ValueError(f"stop_price must be positive, got {self.stop_price}")
+
     def update_conviction(self, delta: float) -> None:
         """Adjust conviction score, clamping to [0, 100]."""
         self.conviction = max(0.0, min(100.0, self.conviction + delta))

@@ -294,7 +294,8 @@ class TestMacroAgent:
 
         assert result.conviction_delta == 0
         assert "not configured" in result.summary
-        assert result.evidence[0].type == EvidenceType.CONTRADICTING
+        # Missing API key should be neutral, not contradicting (it's not counter-evidence)
+        assert result.evidence[0].type == EvidenceType.NEUTRAL
 
     def test_research_high_rates_bearish(self):
         """High fed funds rate is bearish."""
@@ -451,7 +452,8 @@ class TestSentimentAgent:
         result = agent.research("TEST")
 
         assert result.conviction_delta == 0
-        assert result.evidence[0].type == EvidenceType.CONTRADICTING
+        # Missing API key should be neutral, not contradicting (it's not counter-evidence)
+        assert result.evidence[0].type == EvidenceType.NEUTRAL
         assert "WARNING" in result.summary
 
 

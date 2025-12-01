@@ -35,8 +35,19 @@ class Position:
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)
 
+    def __post_init__(self) -> None:
+        """Validate fields after initialization."""
+        if self.size <= 0:
+            raise ValueError(f"size must be positive, got {self.size}")
+        if self.entry_price <= 0:
+            raise ValueError(f"entry_price must be positive, got {self.entry_price}")
+        if self.exit_price is not None and self.exit_price <= 0:
+            raise ValueError(f"exit_price must be positive, got {self.exit_price}")
+
     def close(self, exit_price: float, exit_date: Optional[date] = None) -> None:
         """Close the position with an exit price."""
+        if exit_price <= 0:
+            raise ValueError(f"exit_price must be positive, got {exit_price}")
         self.status = PositionStatus.CLOSED
         self.exit_price = exit_price
         self.exit_date = exit_date or date.today()

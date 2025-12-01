@@ -39,3 +39,8 @@ class Evidence:
     metadata: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     timestamp: datetime = field(default_factory=datetime.now)
+
+    def __post_init__(self) -> None:
+        """Validate fields after initialization."""
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"confidence must be between 0 and 1, got {self.confidence}")

@@ -44,7 +44,7 @@ class MacroAgent(BaseAgent):
         # Fetch FRED data
         for series_id, name in self.INDICATORS.items():
             try:
-                value, date = self._with_retries(lambda: self._fetch_fred_series(series_id))
+                value, date = self._with_retries(lambda s=series_id: self._fetch_fred_series(s))
                 if value is None:
                     continue
 
@@ -72,7 +72,7 @@ class MacroAgent(BaseAgent):
                         content=(
                             f"FRED fetch failed for {series_id} after retries: {e}"),
                         source=f"FRED:{series_id}",
-                        evidence_type=EvidenceType.CONTRADICTING,
+                        evidence_type=EvidenceType.NEUTRAL,
                         confidence=0.0,
                         dimension=ThesisDimension.MACRO,
                         metadata={"error": "fred_fetch_failed", "series": series_id},
@@ -151,7 +151,7 @@ class MacroAgent(BaseAgent):
                     "Set FRED_API_KEY env var for richer macro context."
                 ),
                 source="system",
-                evidence_type=EvidenceType.CONTRADICTING,
+                evidence_type=EvidenceType.NEUTRAL,
                 confidence=0.0,
                 metadata={"error": "missing_fred_api_key"},
             )

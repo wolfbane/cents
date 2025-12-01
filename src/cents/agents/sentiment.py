@@ -1,6 +1,5 @@
 """Sentiment agent - analyzes news and market sentiment."""
 
-import re
 from typing import Optional
 from urllib.request import urlopen, Request
 from urllib.error import URLError
@@ -146,7 +145,7 @@ class SentimentAgent(BaseAgent):
                     "Set NEWS_API_KEY env var for NewsAPI access."
                 ),
                 source="system",
-                evidence_type=EvidenceType.CONTRADICTING,
+                evidence_type=EvidenceType.NEUTRAL,
                 confidence=0.0,
                 metadata={"error": "missing_news_api_key"},
             )
