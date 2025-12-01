@@ -24,6 +24,18 @@ class OrchestratorAgent(BaseAgent):
             SentimentAgent(),
         ]
 
+    def _weighted_conviction(self, result: AgentResult) -> float:
+        """Weight conviction delta by average evidence confidence.
+
+        High-confidence evidence should influence conviction more than
+        low-confidence evidence. If no evidence, use raw delta.
+        """
+        if not result.evidence or result.conviction_delta == 0:
+            return result.conviction_delta
+
+        avg_confidence = sum(e.confidence for e in result.evidence) / len(result.evidence)
+        return result.conviction_delta * avg_confidence
+
     def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
         """Run all agents and synthesize results."""
         thesis_id = thesis.id if thesis else "standalone"
@@ -38,7 +50,10 @@ class OrchestratorAgent(BaseAgent):
             result = agent.research(symbol, thesis)
             agent_results[agent.name] = result
             all_evidence.extend(result.evidence)
-            total_conviction_delta += result.conviction_delta
+
+            # Weight conviction delta by evidence confidence
+            weighted_delta = self._weighted_conviction(result)
+            total_conviction_delta += weighted_delta
 
             # Aggregate dimension scores
             for dim, score in result.dimension_scores.items():
@@ -48,15 +63,16 @@ class OrchestratorAgent(BaseAgent):
         synthesis = self._synthesize(symbol, agent_results, thesis_id, aggregated_dimensions)
         all_evidence.append(synthesis)
 
-        # Build summary
+        # Build summary with weighted deltas
         summaries = []
         for name, result in agent_results.items():
-            if result.conviction_delta != 0:
-                sign = "+" if result.conviction_delta > 0 else ""
-                summaries.append(f"{name}: {sign}{result.conviction_delta:.0f}")
+            weighted = self._weighted_conviction(result)
+            if weighted != 0:
+                sign = "+" if weighted > 0 else ""
+                summaries.append(f"{name}: {sign}{weighted:.1f}")
 
         if summaries:
-            summary = f"{symbol} synthesis: " + " | ".join(summaries) + f" = {total_conviction_delta:+.0f} total"
+            summary = f"{symbol} synthesis: " + " | ".join(summaries) + f" = {total_conviction_delta:+.1f} total (weighted)"
         else:
             summary = f"{symbol}: No significant signals from any agent"
 

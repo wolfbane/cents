@@ -51,6 +51,20 @@ class FMPFundamentalsProvider:
             logger.warning("FMP API returned invalid JSON for %s: %s", endpoint, e)
             return None
 
+    def _fetch_analyst_estimates(self, symbol: str) -> Optional[dict]:
+        """Fetch analyst earnings estimates for forward P/E calculation.
+
+        Only called when fetch_forward_estimates is enabled in config.
+        Returns the most recent annual estimate.
+        """
+        if not get_settings().fetch_forward_estimates:
+            return None
+
+        data = self._fetch_json("analyst-estimates", symbol=symbol, period="annual")
+        if data and len(data) > 0:
+            return data[0]
+        return None
+
     def get_fundamentals(
         self, symbol: str, as_of: Optional[date] = None
     ) -> FundamentalsData:
@@ -83,19 +97,38 @@ class FMPFundamentalsProvider:
         metrics_data = self._fetch_json("key-metrics-ttm", symbol=symbol)
         metrics = metrics_data[0] if metrics_data and len(metrics_data) > 0 else {}
 
-        # Note: rating endpoint deprecated in stable API
+        # Fetch analyst estimates for forward metrics (if enabled)
+        estimates = self._fetch_analyst_estimates(symbol)
+
+        # Calculate forward P/E and earnings growth if estimates available
+        forward_pe = None
+        earnings_growth = None
+
+        if estimates:
+            estimated_eps = estimates.get("epsAvg")  # FMP stable API field name
+            current_price = profile.get("price")
+            trailing_eps = metrics.get("netIncomePerShareTTM")
+
+            # Forward P/E = Current Price / Estimated EPS
+            if estimated_eps and current_price and estimated_eps > 0:
+                forward_pe = current_price / estimated_eps
+
+            # Earnings Growth = (Estimated - Trailing) / Trailing
+            if estimated_eps and trailing_eps and trailing_eps > 0:
+                earnings_growth = (estimated_eps - trailing_eps) / trailing_eps
 
         # Map FMP fields to our FundamentalsData (stable API field names)
         return FundamentalsData(
             symbol=symbol,
             name=profile.get("companyName"),
+            sector=profile.get("sector"),  # e.g., "Technology", "Healthcare"
             # Valuation
             pe_ratio=ratios.get("priceToEarningsRatioTTM"),
-            forward_pe=None,  # FMP doesn't have forward P/E in standard endpoints
+            forward_pe=forward_pe,
             peg_ratio=ratios.get("priceToEarningsGrowthRatioTTM"),
             # Growth - FMP provides these as decimals
             revenue_growth=metrics.get("revenuePerShareTTM"),  # Use as proxy
-            earnings_growth=None,  # Would need historical comparison
+            earnings_growth=earnings_growth,
             # Profitability
             profit_margin=ratios.get("netProfitMarginTTM"),
             return_on_equity=metrics.get("returnOnEquityTTM"),
@@ -109,6 +142,7 @@ class FMPFundamentalsProvider:
                 "profile": profile,
                 "ratios": ratios,
                 "metrics": metrics,
+                "estimates": estimates,
             },
         )
 
@@ -131,6 +165,7 @@ class FMPFundamentalsProvider:
         return FundamentalsData(
             symbol=symbol,
             name=profile.get("companyName"),
+            sector=profile.get("sector"),
             # Valuation
             pe_ratio=ratios.get("priceEarningsRatio"),
             forward_pe=None,

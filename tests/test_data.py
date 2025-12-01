@@ -147,6 +147,7 @@ class TestFMPFundamentalsProvider:
     def test_get_fundamentals_success(self, mock_settings, mock_urlopen):
         """Successfully fetch fundamentals."""
         mock_settings.return_value.fmp_api_key = "test_key"
+        mock_settings.return_value.fetch_forward_estimates = False
 
         # Mock responses for each endpoint (stable API field names)
         responses = [

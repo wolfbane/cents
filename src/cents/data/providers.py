@@ -61,6 +61,7 @@ class FundamentalsData:
 
     symbol: str
     name: Optional[str] = None
+    sector: Optional[str] = None  # e.g., "Technology", "Healthcare", "Utilities"
 
     # Valuation
     pe_ratio: Optional[float] = None

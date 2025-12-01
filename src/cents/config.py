@@ -27,6 +27,7 @@ class Settings:
     default_scan_threshold: float = 5.0
     default_webhook: str | None = None
     default_output: str = "text"
+    fetch_forward_estimates: bool = False  # Enable forward P/E via FMP analyst-estimates
 
 
 def _load_config_file(config_path: Path) -> dict:
@@ -71,6 +72,10 @@ def get_settings(config_path: str | None = None) -> Settings:
     except (TypeError, ValueError):
         threshold_value = 5.0
 
+    # Parse fetch_forward_estimates as boolean
+    forward_raw = _get("fetch_forward_estimates", "CENTS_FETCH_FORWARD_ESTIMATES", False)
+    fetch_forward = forward_raw in (True, "true", "True", "1", 1)
+
     return Settings(
         news_api_key=_get("news_api_key", "NEWS_API_KEY", None),
         fred_api_key=_get("fred_api_key", "FRED_API_KEY", None),
@@ -80,5 +85,6 @@ def get_settings(config_path: str | None = None) -> Settings:
         default_scan_threshold=threshold_value,
         default_webhook=_get("default_webhook", "CENTS_WEBHOOK_URL", None),
         default_output=default_output,
+        fetch_forward_estimates=fetch_forward,
     )
 

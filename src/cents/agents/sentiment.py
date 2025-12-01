@@ -16,7 +16,7 @@ class SentimentAgent(BaseAgent):
 
     name = "sentiment"
 
-    # Simple keyword-based sentiment (fallback when no NLP available)
+    # Simple keyword-based sentiment with negation detection
     POSITIVE_WORDS = {
         "beat", "beats", "exceeds", "exceeded", "surge", "surges", "rally",
         "upgrade", "upgraded", "buy", "bullish", "growth", "profit", "gains",
@@ -28,6 +28,15 @@ class SentimentAgent(BaseAgent):
         "underperform", "warning", "concern", "risk", "negative", "pessimistic",
         "lawsuit", "investigation", "recall", "layoffs", "bankruptcy",
     }
+    # Words that negate sentiment within a 3-word window
+    NEGATION_WORDS = {
+        "not", "no", "never", "neither", "nobody", "nothing", "nowhere",
+        "fail", "fails", "failed", "failing",
+        "unlikely", "unable", "without", "lack", "lacks", "lacking",
+        "doubt", "doubts", "doubted", "doubtful",
+        "hardly", "barely", "scarcely",
+    }
+    NEGATION_WINDOW = 3  # Check this many words before the sentiment word
 
     def __init__(self):
         super().__init__()
@@ -65,6 +74,48 @@ class SentimentAgent(BaseAgent):
             data = json.loads(response.read())
             return data.get("articles", [])
 
+    def _is_negated(self, words: list[str], keyword_index: int) -> bool:
+        """Check if a keyword is negated (before or immediately after)."""
+        # Check before the keyword (within window)
+        start = max(0, keyword_index - self.NEGATION_WINDOW)
+        for i in range(start, keyword_index):
+            if words[i] in self.NEGATION_WORDS:
+                return True
+
+        # Check immediately after (1 word) for patterns like "upgrade unlikely"
+        if keyword_index + 1 < len(words):
+            if words[keyword_index + 1] in self.NEGATION_WORDS:
+                return True
+
+        return False
+
+    def _count_sentiment_words(self, text: str) -> tuple[int, int]:
+        """Count positive and negative sentiment words, accounting for negation.
+
+        Returns (positive_count, negative_count) after flipping negated sentiments.
+        """
+        # Tokenize: split on non-alphanumeric, keep only words
+        words = [w for w in text.lower().replace("'", " ").split() if w.isalpha()]
+
+        pos_count = 0
+        neg_count = 0
+
+        for i, word in enumerate(words):
+            is_negated = self._is_negated(words, i)
+
+            if word in self.POSITIVE_WORDS:
+                if is_negated:
+                    neg_count += 1  # "not bullish" → negative
+                else:
+                    pos_count += 1
+            elif word in self.NEGATIVE_WORDS:
+                if is_negated:
+                    pos_count += 1  # "not bearish" → positive
+                else:
+                    neg_count += 1
+
+        return pos_count, neg_count
+
     def _analyze_articles(
         self, articles: list[dict], symbol: str, thesis_id: str
     ) -> AgentResult:
@@ -79,10 +130,9 @@ class SentimentAgent(BaseAgent):
             source = article.get("source", {}).get("name", "Unknown")
             url = article.get("url", "")
 
-            # Simple keyword sentiment
-            text = f"{title} {description}".lower()
-            pos_count = sum(1 for w in self.POSITIVE_WORDS if w in text)
-            neg_count = sum(1 for w in self.NEGATIVE_WORDS if w in text)
+            # Keyword sentiment with negation detection
+            text = f"{title} {description}"
+            pos_count, neg_count = self._count_sentiment_words(text)
 
             if pos_count > neg_count:
                 ev_type = EvidenceType.SUPPORTING
