@@ -45,11 +45,7 @@ class FundamentalsAgent(BaseAgent):
         try:
             data = self._with_retries(lambda: self.provider.get_fundamentals(symbol))
         except Exception as e:
-            return AgentResult(
-                evidence=[],
-                conviction_delta=0,
-                summary=f"Failed to fetch data for {symbol} after retries: {e}",
-            )
+            return self._error_result(symbol, e)
 
         # Check if we got any meaningful data
         has_data = any([

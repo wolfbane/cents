@@ -1,10 +1,14 @@
 """Alpaca market data provider."""
 
+import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 from cents.config import get_settings
 from cents.data.providers import PriceBar, PriceHistory, PriceDataProvider
+from cents.exceptions import ConfigurationError
+
+logger = logging.getLogger(__name__)
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
@@ -37,7 +41,7 @@ class AlpacaPriceProvider:
         self._secret_key = secret_key or settings.alpaca_secret_key
 
         if not self._api_key or not self._secret_key:
-            raise ValueError(
+            raise ConfigurationError(
                 "Alpaca API credentials required. Set ALPACA_API_KEY and "
                 "ALPACA_SECRET_KEY environment variables or in ~/.cents/config.toml"
             )
@@ -119,7 +123,8 @@ class AlpacaPriceProvider:
                     return (float(quote.bid_price) + float(quote.ask_price)) / 2
                 return float(quote.ask_price or quote.bid_price or 0) or None
             return None
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to get latest price for %s: %s", symbol, e)
             return None
 
 

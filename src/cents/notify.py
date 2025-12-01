@@ -1,12 +1,15 @@
 """Notification system for alerts."""
 
 import json
+import logging
 from typing import Optional
-from urllib.request import urlopen, Request
 from urllib.error import URLError
+from urllib.request import Request, urlopen
 
-from cents.models import Alert
 from cents.config import get_settings
+from cents.models import Alert
+
+logger = logging.getLogger(__name__)
 
 
 def send_webhook(alert: Alert, webhook_url: Optional[str] = None) -> bool:
@@ -39,7 +42,11 @@ def send_webhook(alert: Alert, webhook_url: Optional[str] = None) -> bool:
         )
         with urlopen(req, timeout=10) as response:
             return response.status == 200
-    except (URLError, Exception):
+    except URLError as e:
+        logger.warning("Webhook request failed to %s: %s", url, e)
+        return False
+    except Exception as e:
+        logger.warning("Unexpected error sending webhook: %s", e)
         return False
 
 

@@ -144,7 +144,8 @@ class TestFundamentalsAgent:
         result = agent.research("TEST")
 
         assert result.conviction_delta == 0
-        assert "Failed to fetch" in result.summary
+        assert "failed" in result.summary.lower()
+        assert "API Error" in result.summary
 
     def test_research_retries_on_transient_failure(self):
         """Retries fetch before failing."""

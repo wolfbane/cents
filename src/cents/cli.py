@@ -34,7 +34,9 @@ from cents.agents import AGENTS
 from cents.config import get_settings
 
 
-SETTINGS = get_settings()
+def _get_settings():
+    """Lazy-load settings to avoid import-time configuration errors."""
+    return get_settings()
 
 
 def _generate_thesis_suggestion(symbol: str, agent_outputs: list, total_conviction_delta: float) -> dict:
@@ -148,9 +150,8 @@ def cli():
 @click.option(
     "--output",
     type=click.Choice(["text", "json"]),
-    default=SETTINGS.default_output,
-    show_default=True,
-    help="Output format for results",
+    default=None,
+    help="Output format for results (default: from config)",
 )
 @click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
 @click.option("--suggest-thesis", is_flag=True, help="Generate thesis suggestion from research")
@@ -159,11 +160,13 @@ def research(
     thesis_id: Optional[str],
     agent_name: Optional[str],
     save: bool,
-    output: str,
+    output: Optional[str],
     quiet: bool,
     suggest_thesis: bool,
 ):
     """Run research agents on a symbol."""
+    if output is None:
+        output = _get_settings().default_output
     verbose = output == "text" and not quiet
 
     # Get thesis if specified
@@ -268,7 +271,7 @@ def research(
                 click.echo(f"Quality:    {thesis_suggestion['business_quality']}")
             if thesis_suggestion.get("key_risks"):
                 click.echo(f"Risks:      {', '.join(thesis_suggestion['key_risks'][:3])}")
-            click.echo(f"\nCreate with: cents thesis create \"{thesis_suggestion['title']}\" --from-research {symbol.upper()}")
+            click.echo(f"\nCreate with: cents thesis create --title \"{thesis_suggestion['title']}\" --from-research {symbol.upper()}")
 
 
 # --- Thesis commands ---
@@ -281,7 +284,7 @@ def thesis():
 
 
 @thesis.command("create")
-@click.argument("title")
+@click.option("--title", "-T", required=True, help="Thesis title")
 @click.option("--hypothesis", "-h", default="", help="Detailed thesis statement")
 @click.option("--tags", "-t", default="", help="Comma-separated tags")
 @click.option("--symbol", "-S", help="Stock ticker (e.g., AAPL)")
@@ -309,7 +312,10 @@ def thesis_create(
     stop_price: Optional[float],
     research_symbol: Optional[str],
 ):
-    """Create a new investment thesis."""
+    """Create a new investment thesis.
+
+    Example: cents thesis create --title "NVDA bull case" --symbol NVDA
+    """
     from datetime import datetime as dt
     repo = ThesisRepository()
 
@@ -571,7 +577,7 @@ def position():
 
 @position.command("open")
 @click.argument("symbol")
-@click.argument("size", type=float)
+@click.option("--size", "-s", type=float, required=True, help="Number of shares")
 @click.option("--price", "-p", type=float, required=True, help="Entry price")
 @click.option("--thesis", "-t", "thesis_id", help="Link to thesis ID")
 @click.option("--short", is_flag=True, help="Short position (default is long)")
@@ -584,7 +590,10 @@ def position_open(
     short: bool,
     notes: str,
 ):
-    """Open a new paper position."""
+    """Open a new paper position.
+
+    Example: cents position open NVDA --size 10 --price 137
+    """
     repo = PositionRepository()
     side = PositionSide.SHORT if short else PositionSide.LONG
     p = Position(
@@ -602,9 +611,12 @@ def position_open(
 
 @position.command("close")
 @click.argument("position_id")
-@click.argument("exit_price", type=float)
-def position_close(position_id: str, exit_price: float):
-    """Close a position."""
+@click.option("--price", "-p", type=float, required=True, help="Exit price")
+def position_close(position_id: str, price: float):
+    """Close a position.
+
+    Example: cents position close abc123 --price 177
+    """
     repo = PositionRepository()
     p = repo.get(position_id)
 
@@ -616,7 +628,7 @@ def position_close(position_id: str, exit_price: float):
         click.echo(f"Position {position_id} is already closed.", err=True)
         raise SystemExit(1)
 
-    p.close(exit_price)
+    p.close(price)
     repo.update(p)
 
     pnl = p.pnl
@@ -758,27 +770,30 @@ def outcome_list():
     "--threshold",
     "-t",
     type=float,
-    default=SETTINGS.default_scan_threshold,
-    show_default=True,
-    help="Default conviction change threshold for alerts",
+    default=None,
+    help="Default conviction change threshold for alerts (default: from config)",
 )
 @click.option("--webhook", "-w", help="Webhook URL for notifications")
 @click.option(
     "--output",
     type=click.Choice(["text", "json"]),
-    default=SETTINGS.default_output,
-    show_default=True,
-    help="Output format for scan results",
+    default=None,
+    help="Output format for scan results (default: from config)",
 )
 @click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
 @click.option("--expiry-days", type=int, default=7, help="Days before expiry to alert")
 @click.option("--batch-suggest", is_flag=True, help="Generate thesis suggestions for all symbols")
-def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool, expiry_days: int, batch_suggest: bool):
+def scan(threshold: Optional[float], webhook: Optional[str], output: Optional[str], quiet: bool, expiry_days: int, batch_suggest: bool):
     """Scan watchlist and generate alerts for significant changes."""
     from datetime import datetime as dt, timedelta
     from cents.agents import OrchestratorAgent
     from cents.notify import notify
 
+    settings = _get_settings()
+    if threshold is None:
+        threshold = settings.default_scan_threshold
+    if output is None:
+        output = settings.default_output
     verbose = output == "text" and not quiet
 
     watch_repo = WatchlistRepository()
@@ -811,7 +826,7 @@ def scan(threshold: float, webhook: Optional[str], output: str, quiet: bool, exp
         result = agent.research(item.symbol, thesis)
 
         effective_threshold = item.threshold if item.threshold is not None else threshold
-        destination = webhook or item.alert_destination or SETTINGS.default_webhook
+        destination = webhook or item.alert_destination or settings.default_webhook
 
         if verbose:
             click.echo(f"  {result.summary}")
@@ -1163,11 +1178,14 @@ def broker_sync(thesis_id: Optional[str]):
 
 @broker.command("buy")
 @click.argument("symbol")
-@click.argument("qty", type=float)
+@click.option("--qty", "-q", type=float, required=True, help="Number of shares")
 @click.option("--thesis", "-t", "thesis_id", help="Link to thesis ID")
 @click.confirmation_option(prompt="Are you sure you want to execute this trade?")
 def broker_buy(symbol: str, qty: float, thesis_id: Optional[str]):
-    """Buy shares (paper trading)."""
+    """Buy shares (paper trading).
+
+    Example: cents broker buy NVDA --qty 10
+    """
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
     if not ALPACA_AVAILABLE:
@@ -1187,10 +1205,13 @@ def broker_buy(symbol: str, qty: float, thesis_id: Optional[str]):
 
 @broker.command("sell")
 @click.argument("symbol")
-@click.argument("qty", type=float)
+@click.option("--qty", "-q", type=float, required=True, help="Number of shares")
 @click.confirmation_option(prompt="Are you sure you want to execute this trade?")
 def broker_sell(symbol: str, qty: float):
-    """Sell shares (paper trading)."""
+    """Sell shares (paper trading).
+
+    Example: cents broker sell NVDA --qty 10
+    """
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
     if not ALPACA_AVAILABLE:

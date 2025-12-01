@@ -35,7 +35,7 @@ class TestThesisCLI:
     def test_thesis_create(self, runner, mock_db):
         """Create a thesis."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            result = runner.invoke(cli, ["thesis", "create", "Test thesis"])
+            result = runner.invoke(cli, ["thesis", "create", "--title", "Test thesis"])
             assert result.exit_code == 0
             assert "Created thesis" in result.output
 
@@ -47,6 +47,7 @@ class TestThesisCLI:
                 [
                     "thesis",
                     "create",
+                    "--title",
                     "AI thesis",
                     "--hypothesis",
                     "AI will grow",
@@ -67,8 +68,8 @@ class TestThesisCLI:
     def test_thesis_list(self, runner, mock_db):
         """List created theses."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            runner.invoke(cli, ["thesis", "create", "Thesis 1"])
-            runner.invoke(cli, ["thesis", "create", "Thesis 2"])
+            runner.invoke(cli, ["thesis", "create", "--title", "Thesis 1"])
+            runner.invoke(cli, ["thesis", "create", "--title", "Thesis 2"])
             result = runner.invoke(cli, ["thesis", "list"])
             assert result.exit_code == 0
             assert "Thesis 1" in result.output
@@ -77,7 +78,7 @@ class TestThesisCLI:
     def test_thesis_show(self, runner, mock_db):
         """Show thesis details."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            create_result = runner.invoke(cli, ["thesis", "create", "Test thesis"])
+            create_result = runner.invoke(cli, ["thesis", "create", "--title", "Test thesis"])
             # Extract ID from "Created thesis XXXX: ..."
             thesis_id = create_result.output.split()[2].rstrip(":")
 
@@ -96,7 +97,7 @@ class TestThesisCLI:
     def test_thesis_update(self, runner, mock_db):
         """Update thesis conviction."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            create_result = runner.invoke(cli, ["thesis", "create", "Test"])
+            create_result = runner.invoke(cli, ["thesis", "create", "--title", "Test"])
             thesis_id = create_result.output.split()[2].rstrip(":")
 
             result = runner.invoke(
@@ -113,7 +114,7 @@ class TestPositionCLI:
         """Open a position."""
         with runner.isolated_filesystem(temp_dir=mock_db):
             result = runner.invoke(
-                cli, ["position", "open", "AAPL", "100", "--price", "150"]
+                cli, ["position", "open", "AAPL", "--size", "100", "--price", "150"]
             )
             assert result.exit_code == 0
             assert "Opened long position" in result.output
@@ -124,7 +125,7 @@ class TestPositionCLI:
         """Open a short position."""
         with runner.isolated_filesystem(temp_dir=mock_db):
             result = runner.invoke(
-                cli, ["position", "open", "AAPL", "100", "--price", "150", "--short"]
+                cli, ["position", "open", "AAPL", "--size", "100", "--price", "150", "--short"]
             )
             assert result.exit_code == 0
             assert "Opened short position" in result.output
@@ -133,11 +134,11 @@ class TestPositionCLI:
         """Close a position."""
         with runner.isolated_filesystem(temp_dir=mock_db):
             open_result = runner.invoke(
-                cli, ["position", "open", "AAPL", "100", "--price", "100"]
+                cli, ["position", "open", "AAPL", "--size", "100", "--price", "100"]
             )
             pos_id = open_result.output.split()[3].rstrip(":")
 
-            result = runner.invoke(cli, ["position", "close", pos_id, "110"])
+            result = runner.invoke(cli, ["position", "close", pos_id, "--price", "110"])
             assert result.exit_code == 0
             assert "Closed position" in result.output
             assert "+$1000.00" in result.output
@@ -147,11 +148,11 @@ class TestPositionCLI:
         """Close a position at a loss."""
         with runner.isolated_filesystem(temp_dir=mock_db):
             open_result = runner.invoke(
-                cli, ["position", "open", "AAPL", "100", "--price", "100"]
+                cli, ["position", "open", "AAPL", "--size", "100", "--price", "100"]
             )
             pos_id = open_result.output.split()[3].rstrip(":")
 
-            result = runner.invoke(cli, ["position", "close", pos_id, "90"])
+            result = runner.invoke(cli, ["position", "close", pos_id, "--price", "90"])
             assert result.exit_code == 0
             assert "-1000.00" in result.output
             assert "-10.0%" in result.output
@@ -159,15 +160,15 @@ class TestPositionCLI:
     def test_position_close_not_found(self, runner, mock_db):
         """Close nonexistent position."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            result = runner.invoke(cli, ["position", "close", "nonexistent", "100"])
+            result = runner.invoke(cli, ["position", "close", "nonexistent", "--price", "100"])
             assert result.exit_code == 1
             assert "not found" in result.output
 
     def test_position_list(self, runner, mock_db):
         """List positions."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            runner.invoke(cli, ["position", "open", "AAPL", "100", "--price", "150"])
-            runner.invoke(cli, ["position", "open", "GOOG", "50", "--price", "100"])
+            runner.invoke(cli, ["position", "open", "AAPL", "--size", "100", "--price", "150"])
+            runner.invoke(cli, ["position", "open", "GOOG", "--size", "50", "--price", "100"])
 
             result = runner.invoke(cli, ["position", "list"])
             assert result.exit_code == 0
@@ -183,10 +184,10 @@ class TestOutcomeCLI:
         with runner.isolated_filesystem(temp_dir=mock_db):
             # Open and close a position
             open_result = runner.invoke(
-                cli, ["position", "open", "AAPL", "100", "--price", "100"]
+                cli, ["position", "open", "AAPL", "--size", "100", "--price", "100"]
             )
             pos_id = open_result.output.split()[3].rstrip(":")
-            runner.invoke(cli, ["position", "close", pos_id, "110"])
+            runner.invoke(cli, ["position", "close", pos_id, "--price", "110"])
 
             # Record outcome
             result = runner.invoke(
@@ -200,7 +201,7 @@ class TestOutcomeCLI:
         """Cannot record outcome for open position."""
         with runner.isolated_filesystem(temp_dir=mock_db):
             open_result = runner.invoke(
-                cli, ["position", "open", "AAPL", "100", "--price", "100"]
+                cli, ["position", "open", "AAPL", "--size", "100", "--price", "100"]
             )
             pos_id = open_result.output.split()[3].rstrip(":")
 
@@ -213,10 +214,10 @@ class TestOutcomeCLI:
         with runner.isolated_filesystem(temp_dir=mock_db):
             # Create and close a position
             open_result = runner.invoke(
-                cli, ["position", "open", "AAPL", "100", "--price", "100"]
+                cli, ["position", "open", "AAPL", "--size", "100", "--price", "100"]
             )
             pos_id = open_result.output.split()[3].rstrip(":")
-            runner.invoke(cli, ["position", "close", pos_id, "110"])
+            runner.invoke(cli, ["position", "close", pos_id, "--price", "110"])
             runner.invoke(cli, ["outcome", "record", pos_id, "--accuracy", "correct"])
 
             result = runner.invoke(cli, ["outcome", "list"])
@@ -298,7 +299,7 @@ class TestThesisCloseCLI:
     def test_thesis_close(self, runner, mock_db):
         """Close a thesis."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            create_result = runner.invoke(cli, ["thesis", "create", "Test thesis"])
+            create_result = runner.invoke(cli, ["thesis", "create", "--title", "Test thesis"])
             thesis_id = create_result.output.split()[2].rstrip(":")
 
             result = runner.invoke(cli, ["thesis", "close", thesis_id])
@@ -308,7 +309,7 @@ class TestThesisCloseCLI:
     def test_thesis_close_with_outcome(self, runner, mock_db):
         """Close thesis with outcome."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            create_result = runner.invoke(cli, ["thesis", "create", "Test thesis"])
+            create_result = runner.invoke(cli, ["thesis", "create", "--title", "Test thesis"])
             thesis_id = create_result.output.split()[2].rstrip(":")
 
             result = runner.invoke(
@@ -336,6 +337,7 @@ class TestThesisStructuredFields:
                 [
                     "thesis",
                     "create",
+                    "--title",
                     "AAPL thesis",
                     "--symbol",
                     "AAPL",
@@ -360,6 +362,7 @@ class TestThesisStructuredFields:
                 [
                     "thesis",
                     "create",
+                    "--title",
                     "AAPL thesis",
                     "--symbol",
                     "AAPL",
@@ -377,7 +380,7 @@ class TestThesisStructuredFields:
     def test_thesis_update_structured_fields(self, runner, mock_db):
         """Update thesis structured fields."""
         with runner.isolated_filesystem(temp_dir=mock_db):
-            create_result = runner.invoke(cli, ["thesis", "create", "Test thesis"])
+            create_result = runner.invoke(cli, ["thesis", "create", "--title", "Test thesis"])
             thesis_id = create_result.output.split()[2].rstrip(":")
 
             result = runner.invoke(
@@ -423,6 +426,218 @@ class TestResearchCLI:
         result = runner.invoke(cli, ["research", "--help"])
         assert result.exit_code == 0
         assert "Run research agents" in result.output
+
+    @patch("cents.cli.AGENTS")
+    def test_research_runs_agents(self, mock_agents, runner, mock_db):
+        """Research runs agents and displays results."""
+        from unittest.mock import MagicMock
+        from cents.agents.base import AgentResult
+
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.research.return_value = AgentResult(
+            evidence=[],
+            conviction_delta=5.0,
+            summary="Test agent: bullish signal",
+        )
+        mock_agent_class = MagicMock(return_value=mock_agent_instance)
+        mock_agents.items.return_value = [("test", mock_agent_class)]
+
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["research", "AAPL", "--no-save"])
+            assert result.exit_code == 0
+            assert "conviction delta" in result.output.lower()
+
+    @patch("cents.cli.AGENTS")
+    def test_research_json_output(self, mock_agents, runner, mock_db):
+        """Research with JSON output format."""
+        from unittest.mock import MagicMock
+        from cents.agents.base import AgentResult
+
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.research.return_value = AgentResult(
+            evidence=[],
+            conviction_delta=3.5,
+            summary="Test summary",
+        )
+        mock_agent_class = MagicMock(return_value=mock_agent_instance)
+        mock_agents.items.return_value = [("test", mock_agent_class)]
+
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["research", "AAPL", "--output", "json", "--no-save"])
+            assert result.exit_code == 0
+            import json
+            data = json.loads(result.output)
+            assert data["symbol"] == "AAPL"
+            assert data["total_conviction_delta"] == 3.5
+            assert "agents" in data
+
+    @patch("cents.cli.AGENTS")
+    def test_research_suggest_thesis(self, mock_agents, runner, mock_db):
+        """Research with --suggest-thesis generates thesis suggestion."""
+        from unittest.mock import MagicMock
+        from cents.agents.base import AgentResult
+
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.research.return_value = AgentResult(
+            evidence=[],
+            conviction_delta=10.0,
+            summary="Strong fundamentals detected",
+        )
+        mock_agent_class = MagicMock(return_value=mock_agent_instance)
+        mock_agents.items.return_value = [("fundamentals", mock_agent_class)]
+
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["research", "NVDA", "--suggest-thesis", "--no-save"])
+            assert result.exit_code == 0
+            assert "THESIS SUGGESTION" in result.output
+            assert "NVDA" in result.output
+
+    @patch("cents.cli.AGENTS")
+    def test_research_suggest_thesis_json(self, mock_agents, runner, mock_db):
+        """Research with --suggest-thesis includes suggestion in JSON output."""
+        from unittest.mock import MagicMock
+        from cents.agents.base import AgentResult
+
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.research.return_value = AgentResult(
+            evidence=[],
+            conviction_delta=5.0,
+            summary="Bullish signal",
+        )
+        mock_agent_class = MagicMock(return_value=mock_agent_instance)
+        mock_agents.items.return_value = [("test", mock_agent_class)]
+
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, [
+                "research", "TSLA", "--suggest-thesis", "--output", "json", "--no-save"
+            ])
+            assert result.exit_code == 0
+            import json
+            data = json.loads(result.output)
+            assert "thesis_suggestion" in data
+            assert data["thesis_suggestion"]["symbol"] == "TSLA"
+            assert data["thesis_suggestion"]["conviction"] == 55.0  # 50 + 5
+
+    def test_research_with_nonexistent_thesis(self, runner, mock_db):
+        """Research with non-existent thesis ID fails."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["research", "AAPL", "--thesis", "nonexistent"])
+            assert result.exit_code == 1
+            assert "not found" in result.output
+
+
+class TestGenerateThesisSuggestion:
+    """Tests for _generate_thesis_suggestion helper."""
+
+    def test_basic_suggestion(self):
+        """Generate basic thesis suggestion from empty research."""
+        from cents.cli import _generate_thesis_suggestion
+
+        result = _generate_thesis_suggestion("AAPL", [], 0.0)
+
+        assert result["symbol"] == "AAPL"
+        assert result["title"] == "AAPL investment thesis"
+        assert result["conviction"] == 50.0
+
+    def test_suggestion_with_positive_conviction(self):
+        """Positive conviction delta increases suggestion conviction."""
+        from cents.cli import _generate_thesis_suggestion
+
+        result = _generate_thesis_suggestion("NVDA", [], 20.0)
+
+        assert result["conviction"] == 70.0
+
+    def test_suggestion_conviction_clamped(self):
+        """Conviction is clamped to 0-100 range."""
+        from cents.cli import _generate_thesis_suggestion
+
+        # Test upper bound
+        result = _generate_thesis_suggestion("TEST", [], 100.0)
+        assert result["conviction"] == 100.0
+
+        # Test lower bound
+        result = _generate_thesis_suggestion("TEST", [], -100.0)
+        assert result["conviction"] == 0.0
+
+    def test_suggestion_extracts_pe_valuation(self):
+        """PE ratio determines valuation assessment."""
+        from cents.cli import _generate_thesis_suggestion
+
+        # Low PE = undervalued
+        agent_outputs = [{
+            "agent": "fundamentals",
+            "summary": "Low P/E",
+            "evidence": [{
+                "type": "supporting",
+                "content": "P/E of 10",
+                "metadata": {"metric": "pe_ratio", "value": 10}
+            }]
+        }]
+        result = _generate_thesis_suggestion("AAPL", agent_outputs, 0.0)
+        assert result["valuation"] == "undervalued"
+
+        # High PE = overvalued
+        agent_outputs[0]["evidence"][0]["metadata"]["value"] = 40
+        result = _generate_thesis_suggestion("AAPL", agent_outputs, 0.0)
+        assert result["valuation"] == "overvalued"
+
+        # Mid PE = fair
+        agent_outputs[0]["evidence"][0]["metadata"]["value"] = 20
+        result = _generate_thesis_suggestion("AAPL", agent_outputs, 0.0)
+        assert result["valuation"] == "fair"
+
+    def test_suggestion_extracts_quality_notes(self):
+        """Profit margin affects quality assessment."""
+        from cents.cli import _generate_thesis_suggestion
+
+        agent_outputs = [{
+            "agent": "fundamentals",
+            "summary": "Strong margins",
+            "evidence": [{
+                "type": "supporting",
+                "content": "High profit margin",
+                "metadata": {"metric": "profit_margin", "value": 0.25}
+            }]
+        }]
+        result = _generate_thesis_suggestion("AAPL", agent_outputs, 0.0)
+        assert result["business_quality"] is not None
+        assert "margins" in result["business_quality"].lower()
+
+    def test_suggestion_extracts_risks_from_contradicting_evidence(self):
+        """Contradicting evidence becomes key risks."""
+        from cents.cli import _generate_thesis_suggestion
+
+        agent_outputs = [{
+            "agent": "macro",
+            "summary": "Bearish macro",
+            "evidence": [{
+                "type": "contradicting",
+                "content": "High interest rates",
+                "metadata": {}
+            }, {
+                "type": "contradicting",
+                "content": "Inverted yield curve",
+                "metadata": {}
+            }]
+        }]
+        result = _generate_thesis_suggestion("AAPL", agent_outputs, 0.0)
+        assert len(result["key_risks"]) == 2
+        assert "High interest rates" in result["key_risks"]
+
+    def test_suggestion_limits_risks_to_five(self):
+        """Key risks are limited to 5 items."""
+        from cents.cli import _generate_thesis_suggestion
+
+        agent_outputs = [{
+            "agent": "test",
+            "summary": "Many risks",
+            "evidence": [
+                {"type": "contradicting", "content": f"Risk {i}", "metadata": {}}
+                for i in range(10)
+            ]
+        }]
+        result = _generate_thesis_suggestion("TEST", agent_outputs, 0.0)
+        assert len(result["key_risks"]) == 5
 
 
 class TestScanCLI:

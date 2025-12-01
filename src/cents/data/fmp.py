@@ -1,13 +1,17 @@
 """Financial Modeling Prep (FMP) fundamentals data provider."""
 
-import urllib.request
-import urllib.error
 import json
+import logging
+import urllib.error
+import urllib.request
 from datetime import date
 from typing import Optional
 
 from cents.config import get_settings
 from cents.data.providers import FundamentalsData, FundamentalsDataProvider
+from cents.exceptions import ConfigurationError, DataFetchError
+
+logger = logging.getLogger(__name__)
 
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
 
@@ -26,7 +30,7 @@ class FMPFundamentalsProvider:
         self._api_key = api_key or settings.fmp_api_key
 
         if not self._api_key:
-            raise ValueError(
+            raise ConfigurationError(
                 "FMP API key required. Set FMP_API_KEY environment variable "
                 "or fmp_api_key in ~/.cents/config.toml"
             )
@@ -38,7 +42,11 @@ class FMPFundamentalsProvider:
             with urllib.request.urlopen(url, timeout=10) as response:
                 data = json.loads(response.read().decode())
                 return data
-        except (urllib.error.URLError, json.JSONDecodeError):
+        except urllib.error.URLError as e:
+            logger.warning("FMP API request failed for %s: %s", endpoint, e)
+            return None
+        except json.JSONDecodeError as e:
+            logger.warning("FMP API returned invalid JSON for %s: %s", endpoint, e)
             return None
 
     def get_fundamentals(

@@ -7,9 +7,12 @@ Environment variables take precedence over config file values.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 import tomllib
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -34,7 +37,11 @@ def _load_config_file(config_path: Path) -> dict:
 
     try:
         data = tomllib.loads(config_path.read_text())
-    except Exception:
+    except tomllib.TOMLDecodeError as e:
+        logger.warning("Failed to parse config file %s: %s", config_path, e)
+        return {}
+    except OSError as e:
+        logger.warning("Failed to read config file %s: %s", config_path, e)
         return {}
 
     # Allow values either under [cents] or at top-level

@@ -119,10 +119,11 @@ class TestFMPFundamentalsProvider:
 
     @patch("cents.data.fmp.get_settings")
     def test_init_missing_api_key(self, mock_settings):
-        """Raises ValueError when API key missing."""
+        """Raises ConfigurationError when API key missing."""
+        from cents.exceptions import ConfigurationError
         mock_settings.return_value.fmp_api_key = None
 
-        with pytest.raises(ValueError, match="FMP API key required"):
+        with pytest.raises(ConfigurationError, match="FMP API key required"):
             FMPFundamentalsProvider()
 
     @patch("cents.data.fmp.get_settings")
@@ -353,20 +354,22 @@ class TestAlpacaPriceProvider:
 
     @patch("cents.data.alpaca.get_settings")
     def test_init_missing_api_key(self, mock_settings):
-        """Raises ValueError when API key missing."""
+        """Raises ConfigurationError when API key missing."""
+        from cents.exceptions import ConfigurationError
         mock_settings.return_value.alpaca_api_key = None
         mock_settings.return_value.alpaca_secret_key = "test_secret"
 
-        with pytest.raises(ValueError, match="Alpaca API credentials required"):
+        with pytest.raises(ConfigurationError, match="Alpaca API credentials required"):
             AlpacaPriceProvider()
 
     @patch("cents.data.alpaca.get_settings")
     def test_init_missing_secret_key(self, mock_settings):
-        """Raises ValueError when secret key missing."""
+        """Raises ConfigurationError when secret key missing."""
+        from cents.exceptions import ConfigurationError
         mock_settings.return_value.alpaca_api_key = "test_key"
         mock_settings.return_value.alpaca_secret_key = None
 
-        with pytest.raises(ValueError, match="Alpaca API credentials required"):
+        with pytest.raises(ConfigurationError, match="Alpaca API credentials required"):
             AlpacaPriceProvider()
 
     @patch("cents.data.alpaca.StockHistoricalDataClient")

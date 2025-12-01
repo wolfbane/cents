@@ -102,20 +102,22 @@ class TestAlpacaClient:
 
     @patch("cents.broker.alpaca.get_settings")
     def test_init_missing_api_key(self, mock_settings):
-        """Raises ValueError when API key is missing."""
+        """Raises ConfigurationError when API key is missing."""
+        from cents.exceptions import ConfigurationError
         mock_settings.return_value.alpaca_api_key = None
         mock_settings.return_value.alpaca_secret_key = "test_secret"
 
-        with pytest.raises(ValueError, match="ALPACA_API_KEY"):
+        with pytest.raises(ConfigurationError, match="ALPACA_API_KEY"):
             AlpacaClient()
 
     @patch("cents.broker.alpaca.get_settings")
     def test_init_missing_secret_key(self, mock_settings):
-        """Raises ValueError when secret key is missing."""
+        """Raises ConfigurationError when secret key is missing."""
+        from cents.exceptions import ConfigurationError
         mock_settings.return_value.alpaca_api_key = "test_key"
         mock_settings.return_value.alpaca_secret_key = None
 
-        with pytest.raises(ValueError, match="ALPACA_API_KEY"):
+        with pytest.raises(ConfigurationError, match="ALPACA_API_KEY"):
             AlpacaClient()
 
     @patch("cents.broker.alpaca.TradingClient")

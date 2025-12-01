@@ -51,11 +51,7 @@ class SentimentAgent(BaseAgent):
                 )
             return self._analyze_articles(articles, symbol, thesis_id)
         except Exception as e:
-            return AgentResult(
-                evidence=[],
-                conviction_delta=0,
-                summary=f"{symbol}: Failed to fetch news after retries - {e}",
-            )
+            return self._error_result(symbol, e)
 
     def _fetch_news(self, symbol: str) -> list[dict]:
         """Fetch news from NewsAPI."""

@@ -99,3 +99,19 @@ class BaseAgent(ABC):
             dimension=dimension,
             metadata=metadata or {},
         )
+
+    def _error_result(self, symbol: str, error: Exception) -> AgentResult:
+        """Create a standardized error result when research fails.
+
+        Args:
+            symbol: The symbol that was being researched
+            error: The exception that occurred
+
+        Returns:
+            AgentResult with empty evidence, zero conviction delta, and error summary
+        """
+        return AgentResult(
+            evidence=[],
+            conviction_delta=0,
+            summary=f"{symbol}: {self.name} failed - {error}",
+        )

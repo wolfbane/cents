@@ -1,5 +1,6 @@
 """Alpaca broker integration."""
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
@@ -12,8 +13,11 @@ try:
 except ImportError:
     ALPACA_AVAILABLE = False
 
-from cents.models import Position, PositionSide, PositionStatus
 from cents.config import get_settings
+from cents.exceptions import BrokerError, ConfigurationError
+from cents.models import Position, PositionSide, PositionStatus
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,7 +62,7 @@ class AlpacaClient:
         secret_key = settings.alpaca_secret_key
 
         if not api_key or not secret_key:
-            raise ValueError(
+            raise ConfigurationError(
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables required"
             )
 
@@ -92,7 +96,10 @@ class AlpacaClient:
         ]
 
     def get_position(self, symbol: str) -> Optional[BrokerPosition]:
-        """Get position for a specific symbol."""
+        """Get position for a specific symbol.
+
+        Returns None if position not found, raises BrokerError on API failure.
+        """
         try:
             p = self.client.get_open_position(symbol)
             return BrokerPosition(
@@ -104,7 +111,12 @@ class AlpacaClient:
                 unrealized_pl=float(p.unrealized_pl),
                 unrealized_plpc=float(p.unrealized_plpc) * 100,
             )
-        except Exception:
+        except Exception as e:
+            # Alpaca raises APIError with 404 when position not found
+            error_str = str(e).lower()
+            if "not found" in error_str or "404" in error_str:
+                return None
+            logger.warning("Failed to get position for %s: %s", symbol, e)
             return None
 
     def submit_order(

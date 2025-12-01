@@ -59,11 +59,7 @@ class TechnicalAgent(BaseAgent):
                     summary=f"No historical data for {symbol}",
                 )
         except Exception as e:
-            return AgentResult(
-                evidence=[],
-                conviction_delta=0,
-                summary=f"Failed to fetch data for {symbol} after retries: {e}",
-            )
+            return self._error_result(symbol, e)
 
         closes = history.closes
         volumes = history.volumes
