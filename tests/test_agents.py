@@ -992,3 +992,101 @@ class TestFundamentalsSectorRelativeScoring:
         assert result.conviction_delta > 0
         assert "Low P/E" in result.summary
         assert "Energy" in result.summary
+
+
+class TestFundamentalsNegativePE:
+    """Tests for negative P/E (unprofitable company) handling."""
+
+    def _create_mock_provider(self, **kwargs):
+        """Create a mock fundamentals provider returning given data."""
+        from cents.data import FundamentalsData
+        mock_provider = MagicMock()
+        data = FundamentalsData(symbol="TEST", **kwargs)
+        mock_provider.get_fundamentals.return_value = data
+        return mock_provider
+
+    def test_negative_pe_with_high_growth_neutral(self):
+        """Negative P/E with strong revenue growth is neutral (growth stock)."""
+        mock_provider = self._create_mock_provider(
+            pe_ratio=-50.0,
+            revenue_growth=0.30,  # 30% growth
+            sector="Technology",
+            name="Growth Corp",
+        )
+
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
+        result = agent.research("TEST")
+
+        # High growth forgives unprofitability
+        assert "Unprofitable but high growth" in result.summary
+        # P/E contribution should be neutral (0), but might have other signals
+        pe_evidence = [e for e in result.evidence if "P/E" in e.content]
+        assert len(pe_evidence) == 1
+        assert pe_evidence[0].type == EvidenceType.NEUTRAL
+
+    def test_negative_pe_without_growth_bearish(self):
+        """Negative P/E without strong growth is bearish."""
+        mock_provider = self._create_mock_provider(
+            pe_ratio=-50.0,
+            revenue_growth=0.05,  # Only 5% growth
+            sector="Technology",
+            name="Struggling Corp",
+        )
+
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
+        result = agent.research("TEST")
+
+        # No growth = punish unprofitability
+        assert "Unprofitable" in result.summary
+        assert "high growth" not in result.summary
+        pe_evidence = [e for e in result.evidence if "P/E" in e.content]
+        assert pe_evidence[0].type == EvidenceType.CONTRADICTING
+
+    def test_negative_pe_no_growth_data_bearish(self):
+        """Negative P/E with no growth data defaults to bearish."""
+        mock_provider = self._create_mock_provider(
+            pe_ratio=-100.0,
+            revenue_growth=None,  # No growth data
+            sector="Technology",
+            name="Unknown Growth Corp",
+        )
+
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
+        result = agent.research("TEST")
+
+        # No growth data = can't forgive, treat as bearish
+        assert "Unprofitable" in result.summary
+        pe_evidence = [e for e in result.evidence if "P/E" in e.content]
+        assert pe_evidence[0].type == EvidenceType.CONTRADICTING
+
+    def test_negative_pe_with_negative_growth_very_bearish(self):
+        """Negative P/E with negative growth is bearish."""
+        mock_provider = self._create_mock_provider(
+            pe_ratio=-25.0,
+            revenue_growth=-0.10,  # Shrinking revenue
+            sector="Technology",
+            name="Declining Corp",
+        )
+
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
+        result = agent.research("TEST")
+
+        # Unprofitable AND shrinking = definitely bearish
+        assert "Unprofitable" in result.summary
+        # Should have negative conviction from both P/E and revenue
+        assert result.conviction_delta < 0
+
+    def test_positive_pe_still_works(self):
+        """Positive P/E still uses normal sector-relative scoring."""
+        mock_provider = self._create_mock_provider(
+            pe_ratio=15.0,
+            sector="Technology",
+            name="Profitable Corp",
+        )
+
+        agent = FundamentalsAgent(fundamentals_provider=mock_provider)
+        result = agent.research("TEST")
+
+        # 15 is below Tech threshold (19.6) - should be bullish
+        assert "Low P/E" in result.summary
+        assert result.conviction_delta > 0

@@ -150,8 +150,24 @@ class FundamentalsAgent(BaseAgent):
             pe_low, pe_high = self._get_pe_thresholds(data.sector)
             sector_note = f" [vs {data.sector} median]" if data.sector else ""
 
+            # Handle negative P/E (unprofitable company) separately
+            if data.pe_ratio < 0:
+                # Check if high-growth company (revenue growth > 20%)
+                has_strong_growth = (
+                    data.revenue_growth is not None and data.revenue_growth > 0.20
+                )
+                if has_strong_growth:
+                    # High-growth unprofitable = neutral (acceptable for growth stocks)
+                    ev_type = EvidenceType.NEUTRAL
+                    val_delta = 0
+                    summaries.append(f"Unprofitable but high growth{sector_note}")
+                else:
+                    # Unprofitable without strong growth = bearish
+                    ev_type = EvidenceType.CONTRADICTING
+                    val_delta = -3
+                    summaries.append(f"Unprofitable (negative P/E){sector_note}")
             # If thesis has valuation expectation, evaluate against it
-            if thesis and thesis.valuation:
+            elif thesis and thesis.valuation:
                 if thesis.valuation == Valuation.UNDERVALUED:
                     # Expecting undervalued - low P/E supports, high contradicts
                     if data.pe_ratio < pe_low:
