@@ -183,9 +183,9 @@ def research(
     # Determine which agents to run
     agents_to_run = {agent_name: AGENTS[agent_name]} if agent_name else AGENTS
 
-    total_conviction_delta = 0.0
     all_evidence = []
     agent_outputs = []
+    agent_deltas: dict[str, float] = {}
 
     for name, agent_class in agents_to_run.items():
         agent = agent_class()
@@ -212,8 +212,15 @@ def research(
             }
         )
 
-        total_conviction_delta += result.conviction_delta
+        agent_deltas[name] = result.conviction_delta
         all_evidence.extend(result.evidence)
+
+    # Use orchestrator's delta if present (it's the weighted aggregate),
+    # otherwise sum individual agent deltas
+    if "orchestrator" in agent_deltas:
+        total_conviction_delta = agent_deltas["orchestrator"]
+    else:
+        total_conviction_delta = sum(agent_deltas.values())
 
     evidence_saved = False
     if save and all_evidence and thesis:
@@ -324,7 +331,7 @@ def thesis_create(
     if research_symbol:
         click.echo(f"Running research on {research_symbol.upper()}...")
         agent_outputs = []
-        total_conviction_delta = 0.0
+        agent_deltas: dict[str, float] = {}
 
         for name, agent_class in AGENTS.items():
             agent = agent_class()
@@ -335,7 +342,13 @@ def thesis_create(
                 "conviction_delta": result.conviction_delta,
                 "evidence": [_evidence_to_dict(e) for e in result.evidence],
             })
-            total_conviction_delta += result.conviction_delta
+            agent_deltas[name] = result.conviction_delta
+
+        # Use orchestrator's delta (weighted aggregate) if present
+        if "orchestrator" in agent_deltas:
+            total_conviction_delta = agent_deltas["orchestrator"]
+        else:
+            total_conviction_delta = sum(agent_deltas.values())
 
         suggestion = _generate_thesis_suggestion(research_symbol, agent_outputs, total_conviction_delta)
         click.echo(f"Research complete. Conviction delta: {total_conviction_delta:+.1f}\n")
