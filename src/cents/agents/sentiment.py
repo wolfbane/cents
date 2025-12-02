@@ -41,6 +41,7 @@ class SentimentAgent(BaseAgent):
         super().__init__()
         settings = get_settings()
         self.news_api_key = settings.news_api_key
+        self._timeout = settings.default_api_timeout
 
     def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
         """Analyze news sentiment for a symbol."""
@@ -69,7 +70,7 @@ class SentimentAgent(BaseAgent):
             f"&apiKey={self.news_api_key}"
         )
         req = Request(url, headers={"User-Agent": "cents/0.1"})
-        with urlopen(req, timeout=10) as response:
+        with urlopen(req, timeout=self._timeout) as response:
             data = json.loads(response.read())
             return data.get("articles", [])
 

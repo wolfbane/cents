@@ -40,7 +40,8 @@ def send_webhook(alert: Alert, webhook_url: Optional[str] = None) -> bool:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urlopen(req, timeout=10) as response:
+        timeout = settings.default_api_timeout
+        with urlopen(req, timeout=timeout) as response:
             return response.status == 200
     except URLError as e:
         logger.warning("Webhook request failed to %s: %s", url, e)

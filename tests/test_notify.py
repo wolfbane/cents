@@ -148,6 +148,21 @@ class TestSendWebhook:
 
         assert payload["attachments"][0]["color"] == "#d00000"  # bearish = red
 
+    @patch("cents.notify.urlopen")
+    @patch("cents.notify.get_settings")
+    def test_webhook_unexpected_exception_returns_false(self, mock_settings, mock_urlopen):
+        """Returns False on unexpected exceptions (not just URLError)."""
+        mock_settings.return_value.default_webhook = None
+        mock_urlopen.side_effect = RuntimeError("Unexpected error")
+
+        alert = Alert(
+            symbol="AAPL",
+            alert_type=AlertType.CONVICTION_CHANGE,
+            message="Test alert",
+        )
+        result = send_webhook(alert, "https://hooks.example.com/webhook")
+        assert result is False
+
 
 class TestNotify:
     """Tests for notify function."""

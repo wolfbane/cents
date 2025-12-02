@@ -427,7 +427,7 @@ class TestResearchCLI:
         assert result.exit_code == 0
         assert "Run research agents" in result.output
 
-    @patch("cents.cli.AGENTS")
+    @patch("cents.cli.research.AGENTS")
     def test_research_runs_agents(self, mock_agents, runner, mock_db):
         """Research runs agents and displays results."""
         from unittest.mock import MagicMock
@@ -447,7 +447,7 @@ class TestResearchCLI:
             assert result.exit_code == 0
             assert "conviction delta" in result.output.lower()
 
-    @patch("cents.cli.AGENTS")
+    @patch("cents.cli.research.AGENTS")
     def test_research_json_output(self, mock_agents, runner, mock_db):
         """Research with JSON output format."""
         from unittest.mock import MagicMock
@@ -471,7 +471,7 @@ class TestResearchCLI:
             assert data["total_conviction_delta"] == 3.5
             assert "agents" in data
 
-    @patch("cents.cli.AGENTS")
+    @patch("cents.cli.research.AGENTS")
     def test_research_suggest_thesis(self, mock_agents, runner, mock_db):
         """Research with --suggest-thesis generates thesis suggestion."""
         from unittest.mock import MagicMock
@@ -492,7 +492,7 @@ class TestResearchCLI:
             assert "THESIS SUGGESTION" in result.output
             assert "NVDA" in result.output
 
-    @patch("cents.cli.AGENTS")
+    @patch("cents.cli.research.AGENTS")
     def test_research_suggest_thesis_json(self, mock_agents, runner, mock_db):
         """Research with --suggest-thesis includes suggestion in JSON output."""
         from unittest.mock import MagicMock

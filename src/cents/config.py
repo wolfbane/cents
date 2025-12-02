@@ -28,6 +28,7 @@ class Settings:
     default_webhook: str | None = None
     default_output: str = "text"
     fetch_forward_estimates: bool = False  # Enable forward P/E via FMP analyst-estimates
+    default_api_timeout: int = 10  # API request timeout in seconds
 
 
 def _load_config_file(config_path: Path) -> dict:
@@ -76,6 +77,15 @@ def get_settings(config_path: str | None = None) -> Settings:
     forward_raw = _get("fetch_forward_estimates", "CENTS_FETCH_FORWARD_ESTIMATES", False)
     fetch_forward = forward_raw in (True, "true", "True", "1", 1)
 
+    # Parse API timeout as integer
+    timeout_raw = _get("default_api_timeout", "CENTS_API_TIMEOUT", 10)
+    try:
+        timeout_value = int(timeout_raw)
+        if timeout_value < 1:
+            timeout_value = 10
+    except (TypeError, ValueError):
+        timeout_value = 10
+
     return Settings(
         news_api_key=_get("news_api_key", "NEWS_API_KEY", None),
         fred_api_key=_get("fred_api_key", "FRED_API_KEY", None),
@@ -86,5 +96,6 @@ def get_settings(config_path: str | None = None) -> Settings:
         default_webhook=_get("default_webhook", "CENTS_WEBHOOK_URL", None),
         default_output=default_output,
         fetch_forward_estimates=fetch_forward,
+        default_api_timeout=timeout_value,
     )
 

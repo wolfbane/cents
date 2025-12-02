@@ -72,9 +72,10 @@ class TechnicalAgent(BaseAgent):
         price_1m = _safe_get(closes, 21, closes[0])
         price_3m = _safe_get(closes, 63, closes[0])
 
-        change_1w = (current_price - price_1w) / price_1w * 100 if price_1w else 0
-        change_1m = (current_price - price_1m) / price_1m * 100 if price_1m else 0
-        change_3m = (current_price - price_3m) / price_3m * 100 if price_3m else 0
+        # Use explicit > 0 check to avoid division by zero (0.0 is falsy but explicit is clearer)
+        change_1w = (current_price - price_1w) / price_1w * 100 if price_1w and price_1w > 0 else 0
+        change_1m = (current_price - price_1m) / price_1m * 100 if price_1m and price_1m > 0 else 0
+        change_3m = (current_price - price_3m) / price_3m * 100 if price_3m and price_3m > 0 else 0
 
         # Momentum signal (TECHNICAL dimension)
         ev_type = EvidenceType.NEUTRAL

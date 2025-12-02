@@ -35,6 +35,7 @@ class FMPFundamentalsProvider:
         """
         settings = get_settings()
         self._api_key = api_key or settings.fmp_api_key
+        self._timeout = settings.default_api_timeout
 
         if not self._api_key:
             raise ConfigurationError(
@@ -52,7 +53,7 @@ class FMPFundamentalsProvider:
         query = "&".join(f"{k}={v}" for k, v in params.items())
         url = f"{FMP_BASE_URL}/{endpoint}?{query}"
         try:
-            with urllib.request.urlopen(url, timeout=10) as response:
+            with urllib.request.urlopen(url, timeout=self._timeout) as response:
                 data = json.loads(response.read().decode())
                 # FMP returns error messages as {"Error Message": "..."} on some endpoints
                 if isinstance(data, dict) and "Error Message" in data:
@@ -270,7 +271,7 @@ class FMPFundamentalsProvider:
         # Build lookup of metrics by date
         metrics_by_date = {m.get("date"): m for m in metrics_list}
 
-        # Merge ratios with ROIC from key-metrics
+        # Merge ratios with ROIC/ROE from key-metrics
         result = []
         for ratio in ratios_list:
             record_date = ratio.get("date")
@@ -281,11 +282,34 @@ class FMPFundamentalsProvider:
                 "grossProfitMargin": ratio.get("grossProfitMargin"),
                 "operatingProfitMargin": ratio.get("operatingProfitMargin"),
                 "netProfitMargin": ratio.get("netProfitMargin"),
-                "returnOnEquity": ratio.get("returnOnEquity"),
-                "roic": metrics.get("roic"),
+                # ROE and ROIC come from key-metrics endpoint
+                "returnOnEquity": metrics.get("returnOnEquity"),
+                "roic": metrics.get("returnOnInvestedCapital"),
             })
 
         return result
+
+    def get_insider_trades(self, symbol: str, limit: int = 100) -> list[dict]:
+        """Fetch insider trading transactions for a symbol.
+
+        Args:
+            symbol: Ticker symbol
+            limit: Maximum number of transactions to fetch (default 100)
+
+        Returns:
+            List of insider trade records with fields:
+            - transactionDate: Date of transaction
+            - transactionType: Type (S-Sale, P-Purchase, G-Gift, etc.)
+            - reportingName: Name of insider
+            - typeOfOwner: Role (e.g., "officer: CEO")
+            - securitiesTransacted: Number of shares
+            - price: Transaction price (0 for non-market trades)
+            - acquisitionOrDisposition: A=acquire, D=dispose
+        """
+        data = self._fetch_json(
+            "insider-trading/search", symbol=symbol, limit=limit
+        )
+        return data if data else []
 
 
 @functools.lru_cache(maxsize=1)

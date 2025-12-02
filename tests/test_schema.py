@@ -56,6 +56,7 @@ class TestInitDb:
             "idx_theses_status",
             "idx_positions_status",
             "idx_evidence_thesis",
+            "idx_evidence_thesis_timestamp",
             "idx_watchlist_symbol",
             "idx_alerts_read",
         }

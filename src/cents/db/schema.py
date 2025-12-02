@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS evidence (
     dimension TEXT,
     metadata TEXT DEFAULT '{}',
     timestamp TEXT NOT NULL,
-    FOREIGN KEY (thesis_id) REFERENCES theses(id)
+    FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS positions (
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS positions (
     paper INTEGER DEFAULT 1,
     notes TEXT DEFAULT '',
     created_at TEXT NOT NULL,
-    FOREIGN KEY (thesis_id) REFERENCES theses(id)
+    FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS outcomes (
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS outcomes (
     agent_performance TEXT DEFAULT '{}',
     retrospective TEXT DEFAULT '',
     recorded_at TEXT NOT NULL,
-    FOREIGN KEY (position_id) REFERENCES positions(id)
+    FOREIGN KEY (position_id) REFERENCES positions(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS watchlist (
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS watchlist (
     alert_destination TEXT,
     last_scanned TEXT,
     created_at TEXT NOT NULL,
-    FOREIGN KEY (thesis_id) REFERENCES theses(id)
+    FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS alerts (
@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE INDEX IF NOT EXISTS idx_theses_status ON theses(status);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_evidence_thesis ON evidence(thesis_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_thesis_timestamp ON evidence(thesis_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol);
 CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 """
@@ -115,7 +116,7 @@ def get_db_path() -> Path:
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Apply schema migrations for existing databases."""
-    migrations = [
+    column_migrations = [
         # Add threshold and alert_destination to watchlist (added in v0.2)
         ("watchlist", "threshold", "ALTER TABLE watchlist ADD COLUMN threshold REAL"),
         ("watchlist", "alert_destination", "ALTER TABLE watchlist ADD COLUMN alert_destination TEXT"),
@@ -136,12 +137,140 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("evidence", "dimension", "ALTER TABLE evidence ADD COLUMN dimension TEXT"),
     ]
 
-    for table, column, sql in migrations:
+    for table, column, sql in column_migrations:
         # Check if column exists
         cursor = conn.execute(f"PRAGMA table_info({table})")
         columns = [row[1] for row in cursor.fetchall()]
         if column not in columns:
             conn.execute(sql)
+
+    # Migrate foreign keys to include ON DELETE actions (added in v0.6)
+    _migrate_foreign_keys(conn)
+
+
+def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
+    """Migrate tables to use ON DELETE CASCADE/SET NULL for foreign keys.
+
+    SQLite doesn't support altering foreign key constraints, so we must
+    recreate the affected tables. This migration is idempotent.
+    """
+    # Check if all required tables exist (some tests create partial schemas)
+    cursor = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+        "('evidence', 'positions', 'outcomes', 'watchlist')"
+    )
+    existing_tables = {row[0] for row in cursor.fetchall()}
+    required_tables = {"evidence", "positions", "outcomes", "watchlist"}
+    if not required_tables.issubset(existing_tables):
+        return  # Not all tables exist yet, skip migration
+
+    # Check if migration is needed by inspecting foreign_key_list
+    # If on_delete is already set, skip the migration
+    cursor = conn.execute("PRAGMA foreign_key_list(evidence)")
+    fk_info = cursor.fetchall()
+    if fk_info and fk_info[0][6] == "CASCADE":  # on_delete is column 6
+        return  # Already migrated
+
+    # Temporarily disable foreign keys for the migration
+    conn.execute("PRAGMA foreign_keys = OFF")
+
+    try:
+        # Migrate evidence table (ON DELETE CASCADE)
+        conn.execute("ALTER TABLE evidence RENAME TO evidence_old")
+        conn.execute("""
+            CREATE TABLE evidence (
+                id TEXT PRIMARY KEY,
+                thesis_id TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                type TEXT DEFAULT 'neutral',
+                content TEXT NOT NULL,
+                source TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                dimension TEXT,
+                metadata TEXT DEFAULT '{}',
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("""
+            INSERT INTO evidence SELECT * FROM evidence_old
+        """)
+        conn.execute("DROP TABLE evidence_old")
+
+        # Migrate positions table (ON DELETE SET NULL)
+        conn.execute("ALTER TABLE positions RENAME TO positions_old")
+        conn.execute("""
+            CREATE TABLE positions (
+                id TEXT PRIMARY KEY,
+                thesis_id TEXT,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                entry_date TEXT NOT NULL,
+                size REAL NOT NULL,
+                status TEXT DEFAULT 'open',
+                exit_price REAL,
+                exit_date TEXT,
+                paper INTEGER DEFAULT 1,
+                notes TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO positions SELECT * FROM positions_old
+        """)
+        conn.execute("DROP TABLE positions_old")
+
+        # Migrate outcomes table (ON DELETE CASCADE)
+        conn.execute("ALTER TABLE outcomes RENAME TO outcomes_old")
+        conn.execute("""
+            CREATE TABLE outcomes (
+                id TEXT PRIMARY KEY,
+                position_id TEXT NOT NULL,
+                pnl REAL NOT NULL,
+                pnl_pct REAL NOT NULL,
+                thesis_accuracy TEXT DEFAULT 'unclear',
+                agent_performance TEXT DEFAULT '{}',
+                retrospective TEXT DEFAULT '',
+                recorded_at TEXT NOT NULL,
+                FOREIGN KEY (position_id) REFERENCES positions(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("""
+            INSERT INTO outcomes SELECT * FROM outcomes_old
+        """)
+        conn.execute("DROP TABLE outcomes_old")
+
+        # Migrate watchlist table (ON DELETE SET NULL)
+        conn.execute("ALTER TABLE watchlist RENAME TO watchlist_old")
+        conn.execute("""
+            CREATE TABLE watchlist (
+                id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL UNIQUE,
+                notes TEXT DEFAULT '',
+                thesis_id TEXT,
+                threshold REAL,
+                alert_destination TEXT,
+                last_scanned TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO watchlist SELECT * FROM watchlist_old
+        """)
+        conn.execute("DROP TABLE watchlist_old")
+
+        # Recreate indexes that were dropped with the tables
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_thesis ON evidence(thesis_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol)")
+
+        conn.commit()
+    finally:
+        # Re-enable foreign keys
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
