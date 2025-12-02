@@ -1,6 +1,6 @@
 """Research agents for cents."""
 
-from cents.agents.base import BaseAgent, AgentResult
+from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.agents.fundamentals import FundamentalsAgent
 from cents.agents.technical import TechnicalAgent
 from cents.agents.macro import MacroAgent
@@ -10,6 +10,7 @@ from cents.agents.orchestrator import OrchestratorAgent
 __all__ = [
     "BaseAgent",
     "AgentResult",
+    "RECOVERABLE_EXCEPTIONS",
     "FundamentalsAgent",
     "TechnicalAgent",
     "MacroAgent",

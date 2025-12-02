@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from cents.agents.base import BaseAgent, AgentResult
+from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.data import FundamentalsDataProvider, FundamentalsData
 from cents.models import EvidenceType, Thesis, ThesisDimension, Valuation
 
@@ -124,7 +124,7 @@ class FundamentalsAgent(BaseAgent):
 
         try:
             data = self._with_retries(lambda: self.provider.get_fundamentals(symbol))
-        except (ValueError, KeyError, TypeError, AttributeError) as e:
+        except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)
 
         # Check if we got any meaningful data

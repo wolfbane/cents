@@ -1,9 +1,11 @@
 """Base agent class for research agents."""
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import time
 from typing import Callable, Optional, TypeVar
+from urllib.error import URLError
 
 
 _T = TypeVar("_T")
@@ -13,6 +15,24 @@ from cents.db import EvidenceRepository, ThesisRepository
 
 # Maximum conviction delta any single agent can return (prevents wild swings)
 MAX_CONVICTION_DELTA = 10.0
+
+# Standard exceptions that agents should catch and handle gracefully.
+# These are "recoverable" errors that shouldn't crash the CLI.
+RECOVERABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
+    # Data structure errors
+    ValueError,
+    KeyError,
+    TypeError,
+    IndexError,
+    AttributeError,
+    # JSON parsing errors
+    json.JSONDecodeError,
+    # Network errors
+    URLError,
+    TimeoutError,
+    ConnectionError,
+    OSError,  # Covers socket errors and other IO issues
+)
 
 
 def clamp_conviction_delta(delta: float) -> float:

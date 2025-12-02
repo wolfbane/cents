@@ -1,12 +1,11 @@
 """Sentiment agent - analyzes news and market sentiment."""
 
+import json
 from typing import Optional
 from urllib.request import urlopen, Request
-from urllib.error import URLError
 from urllib.parse import quote
-import json
 
-from cents.agents.base import BaseAgent, AgentResult
+from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
@@ -59,7 +58,7 @@ class SentimentAgent(BaseAgent):
                     summary=f"{symbol}: No recent news found",
                 )
             return self._analyze_articles(articles, symbol, thesis_id)
-        except (ValueError, KeyError, TypeError, json.JSONDecodeError, URLError) as e:
+        except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)
 
     def _fetch_news(self, symbol: str) -> list[dict]:

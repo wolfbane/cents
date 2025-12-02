@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from cents.agents.base import BaseAgent, AgentResult
+from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.data import PriceDataProvider, get_price_provider
 from cents.models import EvidenceType, Thesis, ThesisDimension
 
@@ -58,7 +58,7 @@ class TechnicalAgent(BaseAgent):
                     conviction_delta=0,
                     summary=f"No historical data for {symbol}",
                 )
-        except (ValueError, KeyError, TypeError, IndexError) as e:
+        except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)
 
         closes = history.closes

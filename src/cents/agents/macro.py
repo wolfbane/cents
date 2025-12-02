@@ -7,7 +7,7 @@ from urllib.error import URLError
 import json
 import logging
 
-from cents.agents.base import BaseAgent, AgentResult
+from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
@@ -75,7 +75,7 @@ class MacroAgent(BaseAgent):
                         metadata={"series": series_id, "value": value, "date": date},
                     )
                 )
-            except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+            except RECOVERABLE_EXCEPTIONS as e:
                 evidence.append(
                     self.create_evidence(
                         thesis_id=thesis_id,
