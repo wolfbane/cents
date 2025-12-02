@@ -2,7 +2,6 @@
 
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Optional
 
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.models import EvidenceType, Thesis, ThesisDimension
@@ -76,7 +75,7 @@ class InsiderAgent(BaseAgent):
             self._provider = _get_fundamentals_provider()
         return self._provider
 
-    def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
+    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Research insider trading activity for a symbol."""
         evidence = []
         conviction_delta = 0.0

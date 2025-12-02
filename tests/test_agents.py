@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import json
 
 import pytest
-import pandas as pd
 
 from cents.agents import (
     FundamentalsAgent,

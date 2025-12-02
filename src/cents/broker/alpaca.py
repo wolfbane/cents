@@ -3,7 +3,6 @@
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
 
 try:
     from alpaca.trading.client import TradingClient
@@ -40,7 +39,7 @@ class OrderResult:
     qty: float
     side: str
     status: str
-    filled_avg_price: Optional[float] = None
+    filled_avg_price: float | None = None
 
 
 class AlpacaClient:
@@ -95,7 +94,7 @@ class AlpacaClient:
             for p in positions
         ]
 
-    def get_position(self, symbol: str) -> Optional[BrokerPosition]:
+    def get_position(self, symbol: str) -> BrokerPosition | None:
         """Get position for a specific symbol.
 
         Returns None if position not found, raises BrokerError on API failure.
@@ -158,7 +157,7 @@ class AlpacaClient:
             filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price else None,
         )
 
-    def to_cents_position(self, bp: BrokerPosition, thesis_id: Optional[str] = None) -> Position:
+    def to_cents_position(self, bp: BrokerPosition, thesis_id: str | None = None) -> Position:
         """Convert broker position to cents Position model.
 
         Note: Alpaca's position API doesn't expose the original entry date.

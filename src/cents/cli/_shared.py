@@ -1,11 +1,24 @@
 """Shared utilities for CLI commands."""
 
 import re
-from typing import Optional
+from typing import Any, TypedDict
 
 import click
 
 from cents.config import get_settings
+from cents.models import Evidence
+
+
+class ThesisSuggestion(TypedDict):
+    """Type definition for thesis suggestion returned by generate_thesis_suggestion."""
+
+    symbol: str
+    title: str
+    hypothesis: str
+    business_quality: str | None
+    valuation: str | None
+    key_risks: list[str]
+    conviction: float
 
 
 def get_settings_lazy():
@@ -35,8 +48,23 @@ def validate_symbol(symbol: str) -> str:
     return s
 
 
-def generate_thesis_suggestion(symbol: str, agent_outputs: list, total_conviction_delta: float) -> dict:
-    """Generate thesis field suggestions from research results."""
+def generate_thesis_suggestion(
+    symbol: str, agent_outputs: list[dict[str, Any]], total_conviction_delta: float
+) -> ThesisSuggestion:
+    """Generate thesis field suggestions from research agent outputs.
+
+    Analyzes agent research results to suggest initial values for thesis fields
+    like valuation assessment, business quality notes, and key risks.
+
+    Args:
+        symbol: Stock ticker symbol (will be uppercased)
+        agent_outputs: List of dicts with keys 'agent', 'summary', 'evidence'.
+            Each evidence item has 'metadata' with metric-specific values.
+        total_conviction_delta: Aggregated conviction change from all agents
+
+    Returns:
+        ThesisSuggestion with populated fields based on research findings
+    """
     suggestion = {
         "symbol": symbol.upper(),
         "title": f"{symbol.upper()} investment thesis",
@@ -110,8 +138,15 @@ def generate_thesis_suggestion(symbol: str, agent_outputs: list, total_convictio
     return suggestion
 
 
-def evidence_to_dict(evidence):
-    """Serialize Evidence objects for JSON output."""
+def evidence_to_dict(evidence: Evidence) -> dict[str, Any]:
+    """Serialize an Evidence object to a dictionary for JSON output.
+
+    Args:
+        evidence: Evidence model instance to serialize
+
+    Returns:
+        Dict with type, content, source, confidence, and metadata fields
+    """
     return {
         "type": evidence.type.value,
         "content": evidence.content,

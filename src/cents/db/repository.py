@@ -4,7 +4,6 @@ import json
 import logging
 import sqlite3
 from datetime import date, datetime
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,7 @@ class ThesisRepository:
         self.conn.commit()
         return thesis
 
-    def get(self, thesis_id: str) -> Optional[Thesis]:
+    def get(self, thesis_id: str) -> Thesis | None:
         """Get thesis by ID."""
         row = self.conn.execute(
             "SELECT * FROM theses WHERE id = ?", (thesis_id,)
@@ -79,7 +78,7 @@ class ThesisRepository:
             return None
         return self._row_to_thesis(row)
 
-    def list(self, status: Optional[ThesisStatus] = None) -> list[Thesis]:
+    def list(self, status: ThesisStatus | None = None) -> list[Thesis]:
         """List theses, optionally filtered by status."""
         if status:
             rows = self.conn.execute(
@@ -204,7 +203,7 @@ class PositionRepository:
         self.conn.commit()
         return position
 
-    def get(self, position_id: str) -> Optional[Position]:
+    def get(self, position_id: str) -> Position | None:
         """Get position by ID."""
         row = self.conn.execute(
             "SELECT * FROM positions WHERE id = ?", (position_id,)
@@ -213,7 +212,7 @@ class PositionRepository:
             return None
         return self._row_to_position(row)
 
-    def list(self, status: Optional[PositionStatus] = None) -> list[Position]:
+    def list(self, status: PositionStatus | None = None) -> list[Position]:
         """List positions, optionally filtered by status."""
         if status:
             rows = self.conn.execute(
@@ -374,7 +373,7 @@ class OutcomeRepository:
         self.conn.commit()
         return outcome
 
-    def get_for_position(self, position_id: str) -> Optional[Outcome]:
+    def get_for_position(self, position_id: str) -> Outcome | None:
         """Get outcome for a position."""
         row = self.conn.execute(
             "SELECT * FROM outcomes WHERE position_id = ?", (position_id,)
@@ -450,7 +449,7 @@ class WatchlistRepository:
         self.conn.commit()
         return cursor.rowcount > 0
 
-    def get(self, symbol: str) -> Optional[WatchlistItem]:
+    def get(self, symbol: str) -> WatchlistItem | None:
         """Get watchlist item by symbol."""
         row = self.conn.execute(
             "SELECT * FROM watchlist WHERE symbol = ?", (symbol.upper(),)

@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 from uuid import uuid4
 
 
@@ -42,18 +41,18 @@ class Thesis:
     conviction: float = 50.0  # 0-100
     tags: list[str] = field(default_factory=list)
     # Structured thesis fields
-    symbol: Optional[str] = None
-    business_quality: Optional[str] = None
-    valuation: Optional[Valuation] = None
-    moat: Optional[str] = None
-    time_horizon: Optional[TimeHorizon] = None
-    horizon_end: Optional[datetime] = None
+    symbol: str | None = None
+    business_quality: str | None = None
+    valuation: Valuation | None = None
+    moat: str | None = None
+    time_horizon: TimeHorizon | None = None
+    horizon_end: datetime | None = None
     key_risks: list[str] = field(default_factory=list)
     # Resolution triggers
-    target_price: Optional[float] = None
-    stop_price: Optional[float] = None
-    outcome: Optional[ThesisOutcome] = None
-    closed_at: Optional[datetime] = None
+    target_price: float | None = None
+    stop_price: float | None = None
+    outcome: ThesisOutcome | None = None
+    closed_at: datetime | None = None
     # Metadata
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)
@@ -73,7 +72,7 @@ class Thesis:
         self.conviction = max(0.0, min(100.0, self.conviction + delta))
         self.updated_at = datetime.now()
 
-    def close(self, outcome: Optional[ThesisOutcome] = None) -> None:
+    def close(self, outcome: ThesisOutcome | None = None) -> None:
         """Mark thesis as closed with optional outcome."""
         self.status = ThesisStatus.CLOSED
         self.outcome = outcome

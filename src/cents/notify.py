@@ -2,7 +2,6 @@
 
 import json
 import logging
-from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -12,7 +11,7 @@ from cents.models import Alert
 logger = logging.getLogger(__name__)
 
 
-def send_webhook(alert: Alert, webhook_url: Optional[str] = None) -> bool:
+def send_webhook(alert: Alert, webhook_url: str | None = None) -> bool:
     """Send alert to webhook URL (Slack/Discord compatible)."""
     settings = get_settings()
     url = webhook_url or settings.default_webhook
@@ -51,7 +50,7 @@ def send_webhook(alert: Alert, webhook_url: Optional[str] = None) -> bool:
         return False
 
 
-def notify(alert: Alert, webhook_url: Optional[str] = None, quiet: bool = False) -> None:
+def notify(alert: Alert, webhook_url: str | None = None, quiet: bool = False) -> None:
     """Send notification for an alert."""
 
     # Try webhook if configured

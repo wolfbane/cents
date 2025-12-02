@@ -4,7 +4,7 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import time
-from typing import Callable, Optional, TypeVar
+from typing import Callable, TypeVar
 from urllib.error import URLError
 
 
@@ -61,8 +61,8 @@ class BaseAgent(ABC):
 
     def __init__(self):
         # Lazy-initialized repositories (only created when needed for persistence)
-        self._evidence_repo: Optional[EvidenceRepository] = None
-        self._thesis_repo: Optional[ThesisRepository] = None
+        self._evidence_repo: EvidenceRepository | None = None
+        self._thesis_repo: ThesisRepository | None = None
 
     @property
     def evidence_repo(self) -> EvidenceRepository:
@@ -87,7 +87,7 @@ class BaseAgent(ABC):
     ) -> "_T":
         """Execute a callable with simple exponential backoff retries."""
 
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(retries):
             try:
                 return func()
@@ -102,7 +102,7 @@ class BaseAgent(ABC):
         raise RuntimeError("Retry helper exited without executing")
 
     @abstractmethod
-    def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
+    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """
         Perform research on a symbol.
 
@@ -132,8 +132,8 @@ class BaseAgent(ABC):
         source: str,
         evidence_type: EvidenceType = EvidenceType.NEUTRAL,
         confidence: float = 0.5,
-        dimension: Optional[ThesisDimension] = None,
-        metadata: Optional[dict] = None,
+        dimension: ThesisDimension | None = None,
+        metadata: dict | None = None,
     ) -> Evidence:
         """Helper to create evidence with this agent's name."""
         return Evidence(
@@ -162,3 +162,15 @@ class BaseAgent(ABC):
             conviction_delta=0,
             summary=f"{symbol}: {self.name} failed - {error}",
         )
+
+    def _accumulate_dimension(
+        self, scores: dict[str, float], dimension: str, delta: float
+    ) -> None:
+        """Accumulate a delta into a dimension score.
+
+        Args:
+            scores: The dimension_scores dict to update
+            dimension: The dimension key (e.g., "valuation", "quality", "risk")
+            delta: The conviction delta to add
+        """
+        scores[dimension] = scores.get(dimension, 0) + delta

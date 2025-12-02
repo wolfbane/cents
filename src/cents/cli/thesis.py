@@ -2,7 +2,6 @@
 
 import json
 from datetime import datetime as dt
-from typing import Optional
 
 import click
 
@@ -43,16 +42,16 @@ def thesis_create(
     title: str,
     hypothesis: str,
     tags: str,
-    symbol: Optional[str],
-    business_quality: Optional[str],
-    valuation: Optional[str],
-    moat: Optional[str],
-    time_horizon: Optional[str],
-    horizon_end: Optional[str],
+    symbol: str | None,
+    business_quality: str | None,
+    valuation: str | None,
+    moat: str | None,
+    time_horizon: str | None,
+    horizon_end: str | None,
     risks: str,
-    target_price: Optional[float],
-    stop_price: Optional[float],
-    research_symbol: Optional[str],
+    target_price: float | None,
+    stop_price: float | None,
+    research_symbol: str | None,
 ):
     """Create a new investment thesis.
 
@@ -150,7 +149,7 @@ def thesis_create(
 )
 @click.option("--symbol", "-S", help="Filter by symbol")
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def thesis_list(status: Optional[str], symbol: Optional[str], output: Optional[str]):
+def thesis_list(status: str | None, symbol: str | None, output: str | None):
     """List theses."""
     if output is None:
         output = get_settings_lazy().default_output
@@ -253,17 +252,17 @@ def thesis_show(thesis_id: str):
 @click.option("--stop-price", type=float, help="Stop price")
 def thesis_update(
     thesis_id: str,
-    conviction: Optional[float],
-    status: Optional[str],
-    symbol: Optional[str],
-    business_quality: Optional[str],
-    valuation: Optional[str],
-    moat: Optional[str],
-    time_horizon: Optional[str],
-    horizon_end: Optional[str],
-    risks: Optional[str],
-    target_price: Optional[float],
-    stop_price: Optional[float],
+    conviction: float | None,
+    status: str | None,
+    symbol: str | None,
+    business_quality: str | None,
+    valuation: str | None,
+    moat: str | None,
+    time_horizon: str | None,
+    horizon_end: str | None,
+    risks: str | None,
+    target_price: float | None,
+    stop_price: float | None,
 ):
     """Update a thesis."""
     repo = ThesisRepository()
@@ -316,7 +315,7 @@ def thesis_update(
     help="Was the thesis correct?",
 )
 @click.option("--notes", "-n", help="Closing notes (updates hypothesis)")
-def thesis_close(thesis_id: str, outcome: Optional[str], notes: Optional[str]):
+def thesis_close(thesis_id: str, outcome: str | None, notes: str | None):
     """Close a thesis with outcome assessment."""
     repo = ThesisRepository()
     t = repo.get(thesis_id)

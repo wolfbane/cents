@@ -1,7 +1,5 @@
 """Technical agent - analyzes price action and momentum."""
 
-from typing import Optional
-
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.data import PriceDataProvider, get_price_provider
 from cents.models import EvidenceType, Thesis, ThesisDimension
@@ -27,7 +25,7 @@ RANGE_52W_HIGH_PCT = 80     # Above 80% = near highs
 RANGE_52W_LOW_PCT = 20      # Below 20% = near lows
 
 
-def _rolling_mean(values: list[float], window: int) -> Optional[float]:
+def _rolling_mean(values: list[float], window: int) -> float | None:
     """Calculate rolling mean of last N values."""
     if len(values) < window:
         return None
@@ -45,7 +43,7 @@ class TechnicalAgent(BaseAgent):
 
     name = "technical"
 
-    def __init__(self, price_provider: Optional[PriceDataProvider] = None):
+    def __init__(self, price_provider: PriceDataProvider | None = None):
         """
         Initialize technical agent.
 
@@ -62,7 +60,7 @@ class TechnicalAgent(BaseAgent):
             self._provider = get_price_provider()
         return self._provider
 
-    def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
+    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Research technical indicators for a symbol."""
         evidence = []
         conviction_delta = 0.0

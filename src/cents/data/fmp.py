@@ -6,7 +6,6 @@ import logging
 import urllib.error
 import urllib.request
 from datetime import date
-from typing import Optional
 
 from cents.config import get_settings
 from cents.data.providers import FundamentalsData, FundamentalsDataProvider
@@ -26,7 +25,7 @@ def _sanitize_url(url: str) -> str:
 class FMPFundamentalsProvider:
     """Fundamentals data provider using Financial Modeling Prep API."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         """
         Initialize FMP client.
 
@@ -43,7 +42,7 @@ class FMPFundamentalsProvider:
                 "or fmp_api_key in ~/.cents/config.toml"
             )
 
-    def _fetch_json(self, endpoint: str, **params) -> Optional[dict | list]:
+    def _fetch_json(self, endpoint: str, **params) -> dict | list | None:
         """Fetch JSON from FMP API.
 
         Returns None on network/API errors, logs warnings for debugging.
@@ -68,7 +67,7 @@ class FMPFundamentalsProvider:
             logger.warning("FMP API returned invalid JSON for %s: %s", endpoint, e)
             return None
 
-    def _fetch_analyst_estimates(self, symbol: str) -> Optional[dict]:
+    def _fetch_analyst_estimates(self, symbol: str) -> dict | None:
         """Fetch analyst earnings estimates for forward P/E calculation.
 
         Only called when fetch_forward_estimates is enabled in config.
@@ -83,7 +82,7 @@ class FMPFundamentalsProvider:
         return None
 
     def get_fundamentals(
-        self, symbol: str, as_of: Optional[date] = None
+        self, symbol: str, as_of: date | None = None
     ) -> FundamentalsData:
         """
         Get fundamental data for a symbol from FMP.
@@ -210,7 +209,7 @@ class FMPFundamentalsProvider:
         )
 
     def _find_quarter_data(
-        self, data: Optional[list], as_of: date
+        self, data: list | None, as_of: date
     ) -> dict:
         """Find the most recent quarterly data before as_of date."""
         if not data:
@@ -226,7 +225,7 @@ class FMPFundamentalsProvider:
         # If no data before as_of, return empty
         return {}
 
-    def _map_rating(self, fmp_rating: Optional[str]) -> Optional[str]:
+    def _map_rating(self, fmp_rating: str | None) -> str | None:
         """Map FMP rating to standard recommendation string."""
         if not fmp_rating:
             return None

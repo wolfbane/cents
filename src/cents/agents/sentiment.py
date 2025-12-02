@@ -1,7 +1,6 @@
 """Sentiment agent - analyzes news and market sentiment."""
 
 import json
-from typing import Optional
 from urllib.request import urlopen, Request
 from urllib.parse import quote
 
@@ -43,7 +42,7 @@ class SentimentAgent(BaseAgent):
         self.news_api_key = settings.news_api_key
         self._timeout = settings.default_api_timeout
 
-    def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
+    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Analyze news sentiment for a symbol."""
         thesis_id = thesis.id if thesis else "standalone"
 

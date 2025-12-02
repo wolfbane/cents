@@ -2,11 +2,10 @@
 
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 # Singleton connection for the application
-_connection: Optional[sqlite3.Connection] = None
-_db_path: Optional[Path] = None
+_connection: sqlite3.Connection | None = None
+_db_path: Path | None = None
 
 
 SCHEMA = """

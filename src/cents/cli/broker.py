@@ -1,7 +1,6 @@
 """Broker integration CLI commands."""
 
 import logging
-from typing import Optional
 
 import click
 
@@ -84,7 +83,7 @@ def broker_positions():
 
 @broker.command("sync")
 @click.option("--thesis", "-t", "thesis_id", help="Link synced positions to thesis")
-def broker_sync(thesis_id: Optional[str]):
+def broker_sync(thesis_id: str | None):
     """Sync positions from broker to cents."""
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
@@ -136,7 +135,7 @@ def broker_sync(thesis_id: Optional[str]):
 @click.option("--qty", "-q", type=float, required=True, help="Number of shares")
 @click.option("--thesis", "-t", "thesis_id", help="Link to thesis ID")
 @click.confirmation_option(prompt="Are you sure you want to execute this trade?")
-def broker_buy(symbol: str, qty: float, thesis_id: Optional[str]):
+def broker_buy(symbol: str, qty: float, thesis_id: str | None):
     """Buy shares (paper trading).
 
     Example: cents broker buy NVDA --qty 10

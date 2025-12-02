@@ -1,7 +1,5 @@
 """Watchlist management CLI commands."""
 
-from typing import Optional
-
 import click
 
 from cents.db import WatchlistRepository
@@ -28,10 +26,10 @@ def watch():
 @click.option("--webhook", help="Custom webhook/alert destination for this symbol")
 def watch_add(
     symbol: str,
-    thesis_id: Optional[str],
+    thesis_id: str | None,
     notes: str,
-    threshold: Optional[float],
-    webhook: Optional[str],
+    threshold: float | None,
+    webhook: str | None,
 ):
     """Add or update a symbol on watchlist."""
     symbol = validate_symbol(symbol)

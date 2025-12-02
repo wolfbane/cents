@@ -3,7 +3,6 @@
 import functools
 import logging
 from datetime import date, datetime, timedelta
-from typing import Optional
 
 from cents.config import get_settings
 from cents.data.providers import PriceBar, PriceHistory, PriceDataProvider
@@ -24,7 +23,7 @@ except ImportError:
 class AlpacaPriceProvider:
     """Price data provider using Alpaca Market Data API."""
 
-    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None, secret_key: str | None = None):
         """
         Initialize Alpaca data client.
 
@@ -50,7 +49,7 @@ class AlpacaPriceProvider:
         self._client = StockHistoricalDataClient(self._api_key, self._secret_key)
 
     def get_history(
-        self, symbol: str, days: int = 180, as_of: Optional[date] = None
+        self, symbol: str, days: int = 180, as_of: date | None = None
     ) -> PriceHistory:
         """
         Get historical daily bars for a symbol.
@@ -96,8 +95,8 @@ class AlpacaPriceProvider:
         return PriceHistory(symbol=symbol, bars=bars)
 
     def get_latest_price(
-        self, symbol: str, as_of: Optional[date] = None
-    ) -> Optional[float]:
+        self, symbol: str, as_of: date | None = None
+    ) -> float | None:
         """
         Get latest quote midpoint for a symbol.
 

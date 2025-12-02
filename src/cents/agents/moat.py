@@ -1,7 +1,6 @@
 """Moat agent - analyzes competitive advantage durability."""
 
 import statistics
-from typing import Optional
 
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.models import EvidenceType, Thesis, ThesisDimension
@@ -53,7 +52,7 @@ class MoatAgent(BaseAgent):
             self._provider = _get_fundamentals_provider()
         return self._provider
 
-    def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
+    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Research moat characteristics for a symbol."""
         evidence = []
         conviction_delta = 0.0
@@ -334,7 +333,7 @@ class MoatAgent(BaseAgent):
         return evidence, delta, dims
 
     def _analyze_pricing_power(
-        self, ratios: list[dict], sector: Optional[str], thesis_id: str
+        self, ratios: list[dict], sector: str | None, thesis_id: str
     ) -> tuple[list, float, dict]:
         """Analyze pricing power signals.
 

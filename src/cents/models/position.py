@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
-from typing import Optional
 from uuid import uuid4
 
 
@@ -26,10 +25,10 @@ class Position:
     entry_price: float
     size: float  # shares or dollar amount
     entry_date: date = field(default_factory=date.today)
-    thesis_id: Optional[str] = None
+    thesis_id: str | None = None
     status: PositionStatus = PositionStatus.OPEN
-    exit_price: Optional[float] = None
-    exit_date: Optional[date] = None
+    exit_price: float | None = None
+    exit_date: date | None = None
     paper: bool = True
     notes: str = ""
     id: str = field(default_factory=lambda: str(uuid4())[:8])
@@ -44,7 +43,7 @@ class Position:
         if self.exit_price is not None and self.exit_price <= 0:
             raise ValueError(f"exit_price must be positive, got {self.exit_price}")
 
-    def close(self, exit_price: float, exit_date: Optional[date] = None) -> None:
+    def close(self, exit_price: float, exit_date: date | None = None) -> None:
         """Close the position with an exit price."""
         if exit_price <= 0:
             raise ValueError(f"exit_price must be positive, got {exit_price}")
@@ -53,7 +52,7 @@ class Position:
         self.exit_date = exit_date or date.today()
 
     @property
-    def pnl(self) -> Optional[float]:
+    def pnl(self) -> float | None:
         """Calculate P&L if position is closed."""
         if self.exit_price is None:
             return None
@@ -63,7 +62,7 @@ class Position:
         return diff * self.size
 
     @property
-    def pnl_pct(self) -> Optional[float]:
+    def pnl_pct(self) -> float | None:
         """Calculate P&L percentage if position is closed."""
         if self.exit_price is None:
             return None

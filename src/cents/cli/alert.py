@@ -1,7 +1,5 @@
 """Alert management CLI commands."""
 
-from typing import Optional
-
 import click
 
 from cents.db import AlertRepository
@@ -33,7 +31,7 @@ def alert_list(show_all: bool):
 @alert.command("read")
 @click.argument("alert_id", required=False)
 @click.option("--all", "mark_all", is_flag=True, help="Mark all as read")
-def alert_read(alert_id: Optional[str], mark_all: bool):
+def alert_read(alert_id: str | None, mark_all: bool):
     """Mark alert(s) as read."""
     repo = AlertRepository()
     if mark_all:

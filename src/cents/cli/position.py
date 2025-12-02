@@ -1,7 +1,6 @@
 """Position management CLI commands."""
 
 import json
-from typing import Optional
 
 import click
 
@@ -28,7 +27,7 @@ def position_open(
     symbol: str,
     size: float,
     price: float,
-    thesis_id: Optional[str],
+    thesis_id: str | None,
     short: bool,
     notes: str,
 ):
@@ -90,7 +89,7 @@ def position_close(position_id: str, price: float):
     help="Filter by status",
 )
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def position_list(status: Optional[str], output: Optional[str]):
+def position_list(status: str | None, output: str | None):
     """List positions."""
     if output is None:
         output = get_settings_lazy().default_output
@@ -192,7 +191,7 @@ def position_link(position_id: str, thesis: str):
 
 @position.command("value")
 @click.argument("symbol", required=False)
-def position_value(symbol: Optional[str]):
+def position_value(symbol: str | None):
     """Show current market value of open positions.
 
     Example: cents position value        # All open positions
@@ -225,7 +224,7 @@ def position_value(symbol: Optional[str]):
 
     # Fetch prices for all unique symbols
     symbols = list(set(p.symbol for p in positions))
-    prices: dict[str, Optional[float]] = {}
+    prices: dict[str, float | None] = {}
     for sym in symbols:
         try:
             prices[sym] = provider.get_latest_price(sym)

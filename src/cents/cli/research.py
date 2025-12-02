@@ -1,7 +1,6 @@
 """Research CLI command."""
 
 import json
-from typing import Optional
 
 import click
 
@@ -32,10 +31,10 @@ from ._shared import get_settings_lazy, validate_symbol, generate_thesis_suggest
 @click.option("--suggest-thesis", is_flag=True, help="Generate thesis suggestion from research")
 def research(
     symbol: str,
-    thesis_id: Optional[str],
-    agent_name: Optional[str],
+    thesis_id: str | None,
+    agent_name: str | None,
     save: bool,
-    output: Optional[str],
+    output: str | None,
     quiet: bool,
     suggest_thesis: bool,
 ):

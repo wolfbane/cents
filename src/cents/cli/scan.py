@@ -2,7 +2,6 @@
 
 import json
 from datetime import datetime as dt
-from typing import Optional
 
 import click
 
@@ -32,7 +31,7 @@ from ._shared import get_settings_lazy, generate_thesis_suggestion
 @click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
 @click.option("--expiry-days", type=int, default=7, help="Days before expiry to alert")
 @click.option("--batch-suggest", is_flag=True, help="Generate thesis suggestions for all symbols")
-def scan(threshold: Optional[float], webhook: Optional[str], output: Optional[str], quiet: bool, expiry_days: int, batch_suggest: bool):
+def scan(threshold: float | None, webhook: str | None, output: str | None, quiet: bool, expiry_days: int, batch_suggest: bool):
     """Scan watchlist and generate alerts for significant changes."""
     settings = get_settings_lazy()
     if threshold is None:

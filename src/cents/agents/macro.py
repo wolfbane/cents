@@ -1,7 +1,6 @@
 """Macro agent - analyzes economic environment."""
 
 import re
-from typing import Optional
 from urllib.request import urlopen
 from urllib.error import URLError
 import json
@@ -54,7 +53,7 @@ class MacroAgent(BaseAgent):
         settings = get_settings()
         self.api_key = settings.fred_api_key
 
-    def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
+    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Research macro environment (symbol-agnostic)."""
         evidence = []
         conviction_delta = 0.0
@@ -117,7 +116,7 @@ class MacroAgent(BaseAgent):
             dimension_scores=dimension_scores,
         )
 
-    def _fetch_fred_series(self, series_id: str) -> tuple[Optional[float], Optional[str]]:
+    def _fetch_fred_series(self, series_id: str) -> tuple[float | None, str | None]:
         """Fetch latest value from FRED API."""
         url = (
             f"https://api.stlouisfed.org/fred/series/observations"
@@ -138,7 +137,7 @@ class MacroAgent(BaseAgent):
 
     def _interpret_indicator(
         self, series_id: str, value: float
-    ) -> tuple[EvidenceType, float, Optional[str]]:
+    ) -> tuple[EvidenceType, float, str | None]:
         """Interpret indicator value for equity investing."""
         if series_id == "DFF":  # Fed Funds Rate
             if value > FED_RATE_HIGH:

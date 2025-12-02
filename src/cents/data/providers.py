@@ -1,9 +1,8 @@
 """Market data provider protocols and data classes."""
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 @dataclass
@@ -45,11 +44,11 @@ class PriceHistory:
         """Get low prices."""
         return [b.low for b in self.bars]
 
-    def latest_close(self) -> Optional[float]:
+    def latest_close(self) -> float | None:
         """Get most recent close price."""
         return self.bars[-1].close if self.bars else None
 
-    def close_at(self, days_ago: int) -> Optional[float]:
+    def close_at(self, days_ago: int) -> float | None:
         """Get close price N days ago (0 = most recent)."""
         idx = len(self.bars) - 1 - days_ago
         return self.bars[idx].close if 0 <= idx < len(self.bars) else None
@@ -60,28 +59,28 @@ class FundamentalsData:
     """Company fundamental data."""
 
     symbol: str
-    name: Optional[str] = None
-    sector: Optional[str] = None  # e.g., "Technology", "Healthcare", "Utilities"
+    name: str | None = None
+    sector: str | None = None  # e.g., "Technology", "Healthcare", "Utilities"
 
     # Valuation
-    pe_ratio: Optional[float] = None
-    forward_pe: Optional[float] = None
-    peg_ratio: Optional[float] = None
+    pe_ratio: float | None = None
+    forward_pe: float | None = None
+    peg_ratio: float | None = None
 
     # Growth
-    revenue_growth: Optional[float] = None  # As decimal (0.20 = 20%)
-    earnings_growth: Optional[float] = None
+    revenue_growth: float | None = None  # As decimal (0.20 = 20%)
+    earnings_growth: float | None = None
 
     # Profitability
-    profit_margin: Optional[float] = None  # As decimal
-    return_on_equity: Optional[float] = None
+    profit_margin: float | None = None  # As decimal
+    return_on_equity: float | None = None
 
     # Balance sheet
-    debt_to_equity: Optional[float] = None  # As percentage
-    current_ratio: Optional[float] = None
+    debt_to_equity: float | None = None  # As percentage
+    current_ratio: float | None = None
 
     # Analyst
-    recommendation: Optional[str] = None  # "buy", "hold", "sell", etc.
+    recommendation: str | None = None  # "buy", "hold", "sell", etc.
 
     # Raw data for extensibility
     raw: dict = field(default_factory=dict)
@@ -95,7 +94,7 @@ class PriceDataProvider(Protocol):
         self,
         symbol: str,
         days: int = 180,
-        as_of: Optional[date] = None,
+        as_of: date | None = None,
     ) -> PriceHistory:
         """
         Get historical price data.
@@ -114,8 +113,8 @@ class PriceDataProvider(Protocol):
         ...
 
     def get_latest_price(
-        self, symbol: str, as_of: Optional[date] = None
-    ) -> Optional[float]:
+        self, symbol: str, as_of: date | None = None
+    ) -> float | None:
         """
         Get current/latest price for symbol.
 
@@ -131,7 +130,7 @@ class FundamentalsDataProvider(Protocol):
     """Protocol for company fundamentals data providers."""
 
     def get_fundamentals(
-        self, symbol: str, as_of: Optional[date] = None
+        self, symbol: str, as_of: date | None = None
     ) -> FundamentalsData:
         """
         Get fundamental data for a symbol.

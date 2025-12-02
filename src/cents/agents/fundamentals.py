@@ -1,7 +1,5 @@
 """Fundamentals agent - analyzes company financials."""
 
-from typing import Optional
-
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.data import FundamentalsDataProvider, FundamentalsData
 from cents.models import EvidenceType, Thesis, ThesisDimension, Valuation
@@ -92,7 +90,7 @@ class FundamentalsAgent(BaseAgent):
 
     name = "fundamentals"
 
-    def __init__(self, fundamentals_provider: Optional[FundamentalsDataProvider] = None):
+    def __init__(self, fundamentals_provider: FundamentalsDataProvider | None = None):
         """
         Initialize fundamentals agent.
 
@@ -109,7 +107,7 @@ class FundamentalsAgent(BaseAgent):
             self._provider = _get_fundamentals_provider()
         return self._provider
 
-    def _get_pe_thresholds(self, sector: Optional[str]) -> tuple[float, float]:
+    def _get_pe_thresholds(self, sector: str | None) -> tuple[float, float]:
         """Get P/E thresholds adjusted for sector.
 
         Returns (low, high) where:
@@ -121,21 +119,21 @@ class FundamentalsAgent(BaseAgent):
             return (median * SECTOR_PE_LOW_MULT, median * SECTOR_PE_HIGH_MULT)
         return (DEFAULT_PE_LOW, DEFAULT_PE_HIGH)
 
-    def _get_margin_thresholds(self, sector: Optional[str]) -> tuple[float, float]:
+    def _get_margin_thresholds(self, sector: str | None) -> tuple[float, float]:
         """Get profit margin thresholds adjusted for sector."""
         if sector and sector in SECTOR_MARGIN_MEDIANS:
             median = SECTOR_MARGIN_MEDIANS[sector]
             return (median * SECTOR_MARGIN_LOW_MULT, median * SECTOR_MARGIN_HIGH_MULT)
         return (DEFAULT_MARGIN_LOW, DEFAULT_MARGIN_HIGH)
 
-    def _get_de_thresholds(self, sector: Optional[str]) -> tuple[float, float]:
+    def _get_de_thresholds(self, sector: str | None) -> tuple[float, float]:
         """Get debt/equity thresholds adjusted for sector."""
         if sector and sector in SECTOR_DE_NORMS:
             norm = SECTOR_DE_NORMS[sector]
             return (norm * SECTOR_DE_LOW_MULT, norm * SECTOR_DE_HIGH_MULT)
         return (DEFAULT_DE_LOW, DEFAULT_DE_HIGH)
 
-    def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
+    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Research fundamental data for a symbol."""
         evidence = []
         conviction_delta = 0.0

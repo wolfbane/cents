@@ -1,7 +1,5 @@
 """Orchestrator agent - runs and synthesizes all agents."""
 
-from typing import Optional
-
 from cents.agents.base import BaseAgent, AgentResult
 from cents.agents.fundamentals import FundamentalsAgent
 from cents.agents.technical import TechnicalAgent
@@ -40,7 +38,7 @@ class OrchestratorAgent(BaseAgent):
         avg_confidence = sum(e.confidence for e in result.evidence) / len(result.evidence)
         return result.conviction_delta * avg_confidence
 
-    def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
+    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Run all agents and synthesize results."""
         thesis_id = thesis.id if thesis else "standalone"
 
