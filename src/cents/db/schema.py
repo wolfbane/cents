@@ -2,6 +2,11 @@
 
 import sqlite3
 from pathlib import Path
+from typing import Optional
+
+# Singleton connection for the application
+_connection: Optional[sqlite3.Connection] = None
+_db_path: Optional[Path] = None
 
 
 SCHEMA = """
@@ -152,5 +157,51 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
-    """Get database connection, creating schema if needed."""
-    return init_db(db_path)
+    """Get or create the singleton database connection.
+
+    The connection is cached and reused across all repositories.
+    Use close_connection() to explicitly close it (e.g., for testing).
+
+    Args:
+        db_path: Optional path to database file. Only used on first call.
+
+    Returns:
+        The shared database connection.
+    """
+    global _connection, _db_path
+
+    if _connection is not None:
+        return _connection
+
+    _db_path = db_path
+    _connection = init_db(db_path)
+    return _connection
+
+
+def close_connection() -> None:
+    """Close the singleton database connection.
+
+    Call this when shutting down the application or between tests.
+    The next call to get_connection() will create a new connection.
+    """
+    global _connection, _db_path
+
+    if _connection is not None:
+        _connection.close()
+        _connection = None
+        _db_path = None
+
+
+def reset_connection(db_path: Path | None = None) -> sqlite3.Connection:
+    """Close existing connection and create a new one.
+
+    Useful for testing or when switching databases.
+
+    Args:
+        db_path: Optional path to database file.
+
+    Returns:
+        A fresh database connection.
+    """
+    close_connection()
+    return get_connection(db_path)

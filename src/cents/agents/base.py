@@ -40,8 +40,23 @@ class BaseAgent(ABC):
     name: str = "base"
 
     def __init__(self):
-        self.evidence_repo = EvidenceRepository()
-        self.thesis_repo = ThesisRepository()
+        # Lazy-initialized repositories (only created when needed for persistence)
+        self._evidence_repo: Optional[EvidenceRepository] = None
+        self._thesis_repo: Optional[ThesisRepository] = None
+
+    @property
+    def evidence_repo(self) -> EvidenceRepository:
+        """Get evidence repository, creating it lazily."""
+        if self._evidence_repo is None:
+            self._evidence_repo = EvidenceRepository()
+        return self._evidence_repo
+
+    @property
+    def thesis_repo(self) -> ThesisRepository:
+        """Get thesis repository, creating it lazily."""
+        if self._thesis_repo is None:
+            self._thesis_repo = ThesisRepository()
+        return self._thesis_repo
 
     def _with_retries(
         self,

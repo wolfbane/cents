@@ -161,6 +161,17 @@ class TestOutcomeRepository:
 
     def test_create_and_get_for_position(self, db_conn):
         """Create outcome and retrieve by position."""
+        # Create parent position first (FK constraint)
+        pos_repo = PositionRepository(db_conn)
+        position = Position(
+            id="pos123",
+            symbol="AAPL",
+            side=PositionSide.LONG,
+            entry_price=100.0,
+            size=10,
+        )
+        pos_repo.create(position)
+
         repo = OutcomeRepository(db_conn)
         outcome = Outcome(
             position_id="pos123",
@@ -182,6 +193,11 @@ class TestOutcomeRepository:
 
     def test_list(self, db_conn):
         """List all outcomes."""
+        # Create parent positions first (FK constraint)
+        pos_repo = PositionRepository(db_conn)
+        pos_repo.create(Position(id="p1", symbol="AAPL", side=PositionSide.LONG, entry_price=100, size=10))
+        pos_repo.create(Position(id="p2", symbol="MSFT", side=PositionSide.LONG, entry_price=200, size=5))
+
         repo = OutcomeRepository(db_conn)
         repo.create(Outcome(position_id="p1", pnl=100, pnl_pct=10))
         repo.create(Outcome(position_id="p2", pnl=-50, pnl_pct=-5))
@@ -195,6 +211,11 @@ class TestEvidenceRepository:
 
     def test_create_and_list_for_thesis(self, db_conn):
         """Create evidence and list by thesis."""
+        # Create parent thesis first (FK constraint)
+        thesis_repo = ThesisRepository(db_conn)
+        thesis = Thesis(id="t123", title="Test thesis")
+        thesis_repo.create(thesis)
+
         repo = EvidenceRepository(db_conn)
         e1 = Evidence(
             thesis_id="t123",
