@@ -247,3 +247,11 @@ class FMPFundamentalsProvider:
 def get_fundamentals_provider() -> FMPFundamentalsProvider:
     """Get or create the default FMP fundamentals provider (thread-safe singleton)."""
     return FMPFundamentalsProvider()
+
+
+def clear_fundamentals_provider_cache() -> None:
+    """Clear the cached fundamentals provider.
+
+    Call this if settings change and you need a fresh provider instance.
+    """
+    get_fundamentals_provider.cache_clear()

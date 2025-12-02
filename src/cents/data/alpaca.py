@@ -133,3 +133,11 @@ class AlpacaPriceProvider:
 def get_price_provider() -> AlpacaPriceProvider:
     """Get or create the default Alpaca price provider (thread-safe singleton)."""
     return AlpacaPriceProvider()
+
+
+def clear_price_provider_cache() -> None:
+    """Clear the cached price provider.
+
+    Call this if settings change and you need a fresh provider instance.
+    """
+    get_price_provider.cache_clear()

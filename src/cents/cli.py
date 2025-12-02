@@ -1146,23 +1146,35 @@ def watch_add(
     threshold: Optional[float],
     webhook: Optional[str],
 ):
-    """Add a symbol to watchlist."""
+    """Add or update a symbol on watchlist."""
     symbol = validate_symbol(symbol)
     repo = WatchlistRepository()
     existing = repo.get(symbol)
-    if existing:
-        click.echo(f"{symbol} is already on watchlist.")
-        return
 
-    item = WatchlistItem(
-        symbol=symbol,
-        thesis_id=thesis_id,
-        notes=notes,
-        threshold=threshold,
-        alert_destination=webhook,
-    )
-    repo.add(item)
-    click.echo(f"Added {symbol} to watchlist")
+    if existing:
+        # Update existing entry, preserving values not explicitly set
+        item = WatchlistItem(
+            id=existing.id,  # Keep same ID
+            symbol=symbol,
+            thesis_id=thesis_id if thesis_id else existing.thesis_id,
+            notes=notes if notes else existing.notes,
+            threshold=threshold if threshold is not None else existing.threshold,
+            alert_destination=webhook if webhook else existing.alert_destination,
+            last_scanned=existing.last_scanned,
+            created_at=existing.created_at,
+        )
+        repo.add(item)  # INSERT OR REPLACE
+        click.echo(f"Updated {symbol} on watchlist")
+    else:
+        item = WatchlistItem(
+            symbol=symbol,
+            thesis_id=thesis_id,
+            notes=notes,
+            threshold=threshold,
+            alert_destination=webhook,
+        )
+        repo.add(item)
+        click.echo(f"Added {symbol} to watchlist")
 
 
 @watch.command("remove")

@@ -7,8 +7,8 @@ from cents.data.providers import (
     PriceDataProvider,
     FundamentalsDataProvider,
 )
-from cents.data.alpaca import AlpacaPriceProvider, get_price_provider
-from cents.data.fmp import FMPFundamentalsProvider, get_fundamentals_provider
+from cents.data.alpaca import AlpacaPriceProvider, get_price_provider, clear_price_provider_cache
+from cents.data.fmp import FMPFundamentalsProvider, get_fundamentals_provider, clear_fundamentals_provider_cache
 
 __all__ = [
     "PriceBar",
@@ -18,6 +18,8 @@ __all__ = [
     "FundamentalsDataProvider",
     "AlpacaPriceProvider",
     "get_price_provider",
+    "clear_price_provider_cache",
     "FMPFundamentalsProvider",
     "get_fundamentals_provider",
+    "clear_fundamentals_provider_cache",
 ]

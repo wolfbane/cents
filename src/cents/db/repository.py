@@ -253,6 +253,12 @@ class PositionRepository:
         self.conn.commit()
         return position
 
+    def delete(self, position_id: str) -> bool:
+        """Delete a position by ID."""
+        cursor = self.conn.execute("DELETE FROM positions WHERE id = ?", (position_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     def _row_to_position(self, row: sqlite3.Row) -> Position:
         return Position(
             id=row["id"],
@@ -307,6 +313,18 @@ class EvidenceRepository:
             (thesis_id,),
         ).fetchall()
         return [self._row_to_evidence(row) for row in rows]
+
+    def delete(self, evidence_id: str) -> bool:
+        """Delete evidence by ID."""
+        cursor = self.conn.execute("DELETE FROM evidence WHERE id = ?", (evidence_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_for_thesis(self, thesis_id: str) -> int:
+        """Delete all evidence for a thesis. Returns count deleted."""
+        cursor = self.conn.execute("DELETE FROM evidence WHERE thesis_id = ?", (thesis_id,))
+        self.conn.commit()
+        return cursor.rowcount
 
     def _row_to_evidence(self, row: sqlite3.Row) -> Evidence:
         try:
@@ -371,6 +389,12 @@ class OutcomeRepository:
             "SELECT * FROM outcomes ORDER BY recorded_at DESC"
         ).fetchall()
         return [self._row_to_outcome(row) for row in rows]
+
+    def delete(self, outcome_id: str) -> bool:
+        """Delete an outcome by ID."""
+        cursor = self.conn.execute("DELETE FROM outcomes WHERE id = ?", (outcome_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     def _row_to_outcome(self, row: sqlite3.Row) -> Outcome:
         try:
@@ -514,6 +538,18 @@ class AlertRepository:
     def mark_all_read(self) -> int:
         """Mark all alerts as read."""
         cursor = self.conn.execute("UPDATE alerts SET read = 1 WHERE read = 0")
+        self.conn.commit()
+        return cursor.rowcount
+
+    def delete(self, alert_id: str) -> bool:
+        """Delete an alert by ID."""
+        cursor = self.conn.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_read(self) -> int:
+        """Delete all read alerts. Returns count deleted."""
+        cursor = self.conn.execute("DELETE FROM alerts WHERE read = 1")
         self.conn.commit()
         return cursor.rowcount
 

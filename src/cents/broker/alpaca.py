@@ -159,15 +159,21 @@ class AlpacaClient:
         )
 
     def to_cents_position(self, bp: BrokerPosition, thesis_id: Optional[str] = None) -> Position:
-        """Convert broker position to cents Position model."""
+        """Convert broker position to cents Position model.
+
+        Note: Alpaca's position API doesn't expose the original entry date.
+        The entry_date is set to today's date, which affects P&L duration
+        calculations. For accurate tracking, manually update entry_date
+        after syncing or open positions through cents first.
+        """
         return Position(
             symbol=bp.symbol,
             side=PositionSide.LONG if bp.side == "long" else PositionSide.SHORT,
             entry_price=bp.avg_entry_price,
             size=abs(bp.qty),
-            entry_date=date.today(),  # We don't have original entry date from Alpaca
+            entry_date=date.today(),  # Alpaca API doesn't expose original entry date
             thesis_id=thesis_id,
             status=PositionStatus.OPEN,
             paper=self.paper,
-            notes="Synced from Alpaca",
+            notes=f"Synced from Alpaca on {date.today()} (entry date unknown)",
         )

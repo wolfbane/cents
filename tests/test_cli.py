@@ -235,12 +235,12 @@ class TestWatchlistCLI:
             assert result.exit_code == 0
             assert "Added AAPL to watchlist" in result.output
 
-    def test_watch_add_duplicate(self, runner, mock_db):
-        """Adding duplicate shows warning."""
+    def test_watch_add_duplicate_updates(self, runner, mock_db):
+        """Adding duplicate updates the entry."""
         with runner.isolated_filesystem(temp_dir=mock_db):
             runner.invoke(cli, ["watch", "add", "AAPL"])
-            result = runner.invoke(cli, ["watch", "add", "AAPL"])
-            assert "already on watchlist" in result.output
+            result = runner.invoke(cli, ["watch", "add", "AAPL", "--threshold", "5.0"])
+            assert "Updated AAPL on watchlist" in result.output
 
     def test_watch_remove(self, runner, mock_db):
         """Remove symbol from watchlist."""
