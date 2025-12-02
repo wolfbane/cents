@@ -18,7 +18,7 @@ def runner():
 
 
 @pytest.fixture
-def mock_db(tmp_path):
+def mock_db(tmp_path, monkeypatch):
     """Create temporary database for CLI tests."""
     db_path = tmp_path / "data" / "cents.db"
     db_path.parent.mkdir()
@@ -27,6 +27,8 @@ def mock_db(tmp_path):
     conn.executescript(SCHEMA)
     conn.commit()
     conn.close()
+    # Set env var so CLI uses this database
+    monkeypatch.setenv("CENTS_DB_PATH", str(db_path))
     return tmp_path
 
 

@@ -1,13 +1,17 @@
 """Broker integration CLI commands."""
 
+import logging
 from typing import Optional
 
 import click
 
 from cents.db import PositionRepository
+from cents.exceptions import ConfigurationError, BrokerError, APIError
 from cents.models import PositionStatus
 
 from ._shared import validate_symbol
+
+logger = logging.getLogger(__name__)
 
 
 @click.group()
@@ -32,10 +36,13 @@ def broker_status():
         click.echo(f"  Buying Power: ${account['buying_power']:,.2f}")
         click.echo(f"  Cash: ${account['cash']:,.2f}")
         click.echo(f"  Portfolio Value: ${account['portfolio_value']:,.2f}")
-    except ValueError as e:
+    except (ConfigurationError, ValueError) as e:
         click.echo(f"Configuration error: {e}", err=True)
         raise SystemExit(1)
-    except Exception as e:
+    except (BrokerError, APIError) as e:
+        click.echo(f"API error: {e}", err=True)
+        raise SystemExit(1)
+    except (ConnectionError, TimeoutError, OSError) as e:
         click.echo(f"Connection failed: {e}", err=True)
         raise SystemExit(1)
 
@@ -64,8 +71,14 @@ def broker_positions():
                 f"  {p.symbol}: {p.qty:.0f} shares @ ${p.avg_entry_price:.2f} "
                 f"| Now: ${p.current_price:.2f} | P&L: {sign}${p.unrealized_pl:.2f} ({sign}{p.unrealized_plpc:.1f}%)"
             )
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    except (ConfigurationError, ValueError) as e:
+        click.echo(f"Configuration error: {e}", err=True)
+        raise SystemExit(1)
+    except (BrokerError, APIError) as e:
+        click.echo(f"API error: {e}", err=True)
+        raise SystemExit(1)
+    except (ConnectionError, TimeoutError, OSError) as e:
+        click.echo(f"Connection failed: {e}", err=True)
         raise SystemExit(1)
 
 
@@ -90,10 +103,14 @@ def broker_sync(thesis_id: Optional[str]):
         repo = PositionRepository()
         synced = 0
 
+        # Load existing positions once to avoid N+1 queries
+        existing_symbols = {
+            p.symbol for p in repo.list() if p.status == PositionStatus.OPEN
+        }
+
         for bp in positions:
             # Check if already tracked
-            existing = [p for p in repo.list() if p.symbol == bp.symbol and p.status == PositionStatus.OPEN]
-            if existing:
+            if bp.symbol in existing_symbols:
                 click.echo(f"  {bp.symbol}: already tracked, skipping")
                 continue
 
@@ -103,8 +120,14 @@ def broker_sync(thesis_id: Optional[str]):
             click.echo(f"  {bp.symbol}: synced {bp.qty:.0f} shares @ ${bp.avg_entry_price:.2f}")
 
         click.echo(f"\nSynced {synced} positions")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    except (ConfigurationError, ValueError) as e:
+        click.echo(f"Configuration error: {e}", err=True)
+        raise SystemExit(1)
+    except (BrokerError, APIError) as e:
+        click.echo(f"API error: {e}", err=True)
+        raise SystemExit(1)
+    except (ConnectionError, TimeoutError, OSError) as e:
+        click.echo(f"Connection failed: {e}", err=True)
         raise SystemExit(1)
 
 
@@ -132,8 +155,14 @@ def broker_buy(symbol: str, qty: float, thesis_id: Optional[str]):
         click.echo(f"  Order ID: {result.order_id}")
         if result.filled_avg_price:
             click.echo(f"  Filled @ ${result.filled_avg_price:.2f}")
-    except Exception as e:
+    except (ConfigurationError, ValueError) as e:
+        click.echo(f"Configuration error: {e}", err=True)
+        raise SystemExit(1)
+    except (BrokerError, APIError) as e:
         click.echo(f"Order failed: {e}", err=True)
+        raise SystemExit(1)
+    except (ConnectionError, TimeoutError, OSError) as e:
+        click.echo(f"Connection failed: {e}", err=True)
         raise SystemExit(1)
 
 
@@ -160,6 +189,12 @@ def broker_sell(symbol: str, qty: float):
         click.echo(f"  Order ID: {result.order_id}")
         if result.filled_avg_price:
             click.echo(f"  Filled @ ${result.filled_avg_price:.2f}")
-    except Exception as e:
+    except (ConfigurationError, ValueError) as e:
+        click.echo(f"Configuration error: {e}", err=True)
+        raise SystemExit(1)
+    except (BrokerError, APIError) as e:
         click.echo(f"Order failed: {e}", err=True)
+        raise SystemExit(1)
+    except (ConnectionError, TimeoutError, OSError) as e:
+        click.echo(f"Connection failed: {e}", err=True)
         raise SystemExit(1)

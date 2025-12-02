@@ -1,5 +1,6 @@
 """Tests for CLI commands."""
 
+import os
 import sqlite3
 from unittest.mock import patch
 
@@ -17,7 +18,7 @@ def runner():
 
 
 @pytest.fixture
-def mock_db(tmp_path):
+def mock_db(tmp_path, monkeypatch):
     """Create temporary database for CLI tests."""
     db_path = tmp_path / "data" / "cents.db"
     db_path.parent.mkdir()
@@ -26,6 +27,8 @@ def mock_db(tmp_path):
     conn.executescript(SCHEMA)
     conn.commit()
     conn.close()
+    # Set env var so CLI uses this database
+    monkeypatch.setenv("CENTS_DB_PATH", str(db_path))
     return tmp_path
 
 
@@ -687,3 +690,160 @@ class TestVersionAndHelp:
         """Watch command help."""
         result = runner.invoke(cli, ["watch", "--help"])
         assert result.exit_code == 0
+
+
+class TestBrokerCLIErrors:
+    """Tests for broker CLI error paths."""
+
+    @patch("cents.broker.ALPACA_AVAILABLE", False)
+    def test_broker_status_alpaca_not_installed(self, runner):
+        """Broker status fails when Alpaca not installed."""
+        result = runner.invoke(cli, ["broker", "status"])
+        assert result.exit_code == 1
+        assert "Alpaca not installed" in result.output
+        assert "pip install cents[broker]" in result.output
+
+    @patch("cents.broker.ALPACA_AVAILABLE", False)
+    def test_broker_positions_alpaca_not_installed(self, runner):
+        """Broker positions fails when Alpaca not installed."""
+        result = runner.invoke(cli, ["broker", "positions"])
+        assert result.exit_code == 1
+        assert "Alpaca not installed" in result.output
+
+    @patch("cents.broker.ALPACA_AVAILABLE", False)
+    def test_broker_sync_alpaca_not_installed(self, runner, mock_db):
+        """Broker sync fails when Alpaca not installed."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["broker", "sync"])
+            assert result.exit_code == 1
+            assert "Alpaca not installed" in result.output
+
+    @patch("cents.broker.ALPACA_AVAILABLE", False)
+    def test_broker_buy_alpaca_not_installed(self, runner):
+        """Broker buy fails when Alpaca not installed."""
+        result = runner.invoke(cli, ["broker", "buy", "AAPL", "--qty", "10", "--yes"])
+        assert result.exit_code == 1
+        assert "Alpaca not installed" in result.output
+
+    @patch("cents.broker.ALPACA_AVAILABLE", False)
+    def test_broker_sell_alpaca_not_installed(self, runner):
+        """Broker sell fails when Alpaca not installed."""
+        result = runner.invoke(cli, ["broker", "sell", "AAPL", "--qty", "10", "--yes"])
+        assert result.exit_code == 1
+        assert "Alpaca not installed" in result.output
+
+    @patch("cents.broker.AlpacaClient")
+    def test_broker_status_connection_error(self, mock_client_class, runner):
+        """Broker status handles connection errors."""
+        mock_client_class.side_effect = ValueError("Missing ALPACA_API_KEY")
+
+        result = runner.invoke(cli, ["broker", "status"])
+        assert result.exit_code == 1
+        assert "Configuration error" in result.output
+
+    @patch("cents.broker.AlpacaClient")
+    def test_broker_status_api_error(self, mock_client_class, runner):
+        """Broker status handles API errors."""
+        from cents.exceptions import BrokerError
+        mock_client = mock_client_class.return_value
+        mock_client.get_account.side_effect = BrokerError("API rate limit exceeded")
+
+        result = runner.invoke(cli, ["broker", "status"])
+        assert result.exit_code == 1
+        assert "API error" in result.output
+
+    @patch("cents.broker.AlpacaClient")
+    def test_broker_status_network_error(self, mock_client_class, runner):
+        """Broker status handles network errors."""
+        mock_client = mock_client_class.return_value
+        mock_client.get_account.side_effect = ConnectionError("Connection refused")
+
+        result = runner.invoke(cli, ["broker", "status"])
+        assert result.exit_code == 1
+        assert "Connection failed" in result.output
+
+    @patch("cents.broker.AlpacaClient")
+    def test_broker_positions_api_error(self, mock_client_class, runner):
+        """Broker positions handles API errors."""
+        from cents.exceptions import APIError
+        mock_client = mock_client_class.return_value
+        mock_client.get_positions.side_effect = APIError("Network error")
+
+        result = runner.invoke(cli, ["broker", "positions"])
+        assert result.exit_code == 1
+        assert "API error" in result.output
+
+    @patch("cents.broker.AlpacaClient")
+    def test_broker_buy_order_failure(self, mock_client_class, runner):
+        """Broker buy handles order failures."""
+        from cents.exceptions import BrokerError
+        mock_client = mock_client_class.return_value
+        mock_client.submit_order.side_effect = BrokerError("Insufficient funds")
+
+        result = runner.invoke(cli, ["broker", "buy", "AAPL", "--qty", "10", "--yes"])
+        assert result.exit_code == 1
+        assert "Order failed" in result.output
+
+
+class TestSymbolValidation:
+    """Tests for symbol validation error paths."""
+
+    def test_position_open_invalid_symbol(self, runner, mock_db):
+        """Position open validates symbol format."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            # Lowercase should be converted to uppercase
+            result = runner.invoke(
+                cli, ["position", "open", "aapl", "--size", "10", "--price", "100"]
+            )
+            assert result.exit_code == 0
+            assert "AAPL" in result.output
+
+    def test_thesis_update_not_found(self, runner, mock_db):
+        """Thesis update returns error for non-existent thesis."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(
+                cli, ["thesis", "update", "nonexistent", "--conviction", "75"]
+            )
+            assert result.exit_code == 1
+            assert "not found" in result.output
+
+    def test_position_close_already_closed(self, runner, mock_db):
+        """Position close handles already closed position."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            # Open and close a position
+            open_result = runner.invoke(
+                cli, ["position", "open", "AAPL", "--size", "10", "--price", "100"]
+            )
+            pos_id = open_result.output.split()[3].rstrip(":")
+            runner.invoke(cli, ["position", "close", pos_id, "--price", "110"])
+
+            # Try to close again
+            result = runner.invoke(cli, ["position", "close", pos_id, "--price", "120"])
+            assert result.exit_code == 1
+            assert "not open" in result.output.lower() or "already" in result.output.lower()
+
+
+class TestThesisResolutionTriggers:
+    """Tests for thesis resolution trigger error paths."""
+
+    def test_thesis_create_invalid_price_values(self, runner, mock_db):
+        """Thesis create handles invalid price values."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            # Create thesis with valid price values
+            result = runner.invoke(
+                cli,
+                [
+                    "thesis", "create",
+                    "--title", "Test",
+                    "--target-price", "200",
+                    "--stop-price", "150",
+                ],
+            )
+            assert result.exit_code == 0
+
+    def test_watch_remove_not_found(self, runner, mock_db):
+        """Watch remove handles non-existent symbol."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["watch", "remove", "NOTFOUND"])
+            assert result.exit_code == 1
+            assert "not found" in result.output

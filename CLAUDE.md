@@ -108,9 +108,9 @@ default_scan_threshold = 5.0   # conviction delta for alerts
 default_output = "text"        # "text" or "json"
 ```
 
-Environment variables override config: `NEWS_API_KEY`, `FRED_API_KEY`, `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `CENTS_OUTPUT_FORMAT`, `CENTS_SCAN_THRESHOLD`, `CENTS_WEBHOOK_URL`.
+Environment variables override config: `NEWS_API_KEY`, `FRED_API_KEY`, `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `CENTS_OUTPUT_FORMAT`, `CENTS_SCAN_THRESHOLD`, `CENTS_WEBHOOK_URL`, `CENTS_DB_PATH`.
 
-Database stored at `./data/cents.db` (created automatically).
+Database stored at `~/.cents/data/cents.db` (created automatically). Override with `CENTS_DB_PATH` env var.
 
 ## Testing Notes
 

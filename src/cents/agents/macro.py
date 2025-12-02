@@ -13,6 +13,22 @@ from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 logger = logging.getLogger(__name__)
 
+# Fed Funds Rate thresholds (percentage)
+FED_RATE_HIGH = 5.0    # Above 5% = restrictive (bearish for equities)
+FED_RATE_LOW = 2.0     # Below 2% = accommodative (bullish)
+
+# Yield curve thresholds (10Y-2Y spread in percentage points)
+YIELD_CURVE_INVERTED = 0.0   # Below 0 = inverted (recession signal)
+YIELD_CURVE_STEEP = 1.0      # Above 1% = steep (healthy)
+
+# Unemployment rate thresholds (percentage)
+UNEMPLOYMENT_HIGH = 6.0      # Above 6% = weak economy
+UNEMPLOYMENT_LOW = 4.0       # Below 4% = strong labor market
+
+# VIX thresholds (index points)
+VIX_HIGH = 30    # Above 30 = high fear/volatility
+VIX_LOW = 15     # Below 15 = complacency
+
 
 def _sanitize_url(url: str) -> str:
     """Remove API keys from URL for safe logging."""
@@ -125,30 +141,30 @@ class MacroAgent(BaseAgent):
     ) -> tuple[EvidenceType, float, Optional[str]]:
         """Interpret indicator value for equity investing."""
         if series_id == "DFF":  # Fed Funds Rate
-            if value > 5:
+            if value > FED_RATE_HIGH:
                 return EvidenceType.CONTRADICTING, -3, f"High rates ({value:.2f}%)"
-            elif value < 2:
+            elif value < FED_RATE_LOW:
                 return EvidenceType.SUPPORTING, 3, f"Low rates ({value:.2f}%)"
             return EvidenceType.NEUTRAL, 0, None
 
         elif series_id == "T10Y2Y":  # Yield curve
-            if value < 0:
+            if value < YIELD_CURVE_INVERTED:
                 return EvidenceType.CONTRADICTING, -5, "Inverted yield curve"
-            elif value > 1:
+            elif value > YIELD_CURVE_STEEP:
                 return EvidenceType.SUPPORTING, 2, "Steep yield curve"
             return EvidenceType.NEUTRAL, 0, None
 
         elif series_id == "UNRATE":  # Unemployment
-            if value > 6:
+            if value > UNEMPLOYMENT_HIGH:
                 return EvidenceType.CONTRADICTING, -2, f"High unemployment ({value:.1f}%)"
-            elif value < 4:
+            elif value < UNEMPLOYMENT_LOW:
                 return EvidenceType.SUPPORTING, 2, f"Low unemployment ({value:.1f}%)"
             return EvidenceType.NEUTRAL, 0, None
 
         elif series_id == "VIXCLS":  # VIX
-            if value > 30:
+            if value > VIX_HIGH:
                 return EvidenceType.CONTRADICTING, -3, f"High VIX ({value:.0f})"
-            elif value < 15:
+            elif value < VIX_LOW:
                 return EvidenceType.SUPPORTING, 2, f"Low VIX ({value:.0f})"
             return EvidenceType.NEUTRAL, 0, None
 

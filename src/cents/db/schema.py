@@ -107,10 +107,22 @@ CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 
 
 def get_db_path() -> Path:
-    """Get the default database path."""
-    # Look for data dir relative to working directory
-    data_dir = Path.cwd() / "data"
-    data_dir.mkdir(exist_ok=True)
+    """Get the default database path.
+
+    Uses ~/.cents/data/cents.db by default. Can be overridden with
+    CENTS_DB_PATH environment variable.
+    """
+    import os
+
+    # Allow override via environment variable
+    if env_path := os.environ.get("CENTS_DB_PATH"):
+        path = Path(env_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # Default: ~/.cents/data/cents.db
+    data_dir = Path.home() / ".cents" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "cents.db"
 
 

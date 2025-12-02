@@ -6,6 +6,26 @@ from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.data import PriceDataProvider, get_price_provider
 from cents.models import EvidenceType, Thesis, ThesisDimension
 
+# Moving average periods
+MA_SHORT_PERIOD = 20   # Short-term moving average (20 days)
+MA_LONG_PERIOD = 50    # Long-term moving average (50 days)
+
+# Momentum thresholds (percentage change)
+MOMENTUM_STRONG_PCT = 10    # ±10% monthly change = strong momentum
+
+# Volume analysis
+VOLUME_AVG_PERIOD = 20      # Days for average volume calculation
+VOLUME_RECENT_PERIOD = 5    # Days for recent volume comparison
+VOLUME_HIGH_RATIO = 1.5     # 1.5x average = high volume
+
+# Volatility analysis
+VOLATILITY_PERIOD = 14      # Days for ATR-style volatility
+VOLATILITY_HIGH_PCT = 5     # 5% daily range = high volatility
+
+# 52-week position thresholds (percentage of range)
+RANGE_52W_HIGH_PCT = 80     # Above 80% = near highs
+RANGE_52W_LOW_PCT = 20      # Below 20% = near lows
+
 
 def _rolling_mean(values: list[float], window: int) -> Optional[float]:
     """Calculate rolling mean of last N values."""
@@ -80,11 +100,11 @@ class TechnicalAgent(BaseAgent):
         # Momentum signal (TECHNICAL dimension)
         ev_type = EvidenceType.NEUTRAL
         tech_delta = 0.0
-        if change_1m > 10:
+        if change_1m > MOMENTUM_STRONG_PCT:
             ev_type = EvidenceType.SUPPORTING
             tech_delta = 3
             summaries.append(f"Strong momentum (+{change_1m:.1f}% 1M)")
-        elif change_1m < -10:
+        elif change_1m < -MOMENTUM_STRONG_PCT:
             ev_type = EvidenceType.CONTRADICTING
             tech_delta = -3
             summaries.append(f"Weak momentum ({change_1m:.1f}% 1M)")
@@ -111,8 +131,8 @@ class TechnicalAgent(BaseAgent):
         )
 
         # Moving averages (TECHNICAL dimension)
-        ma_20 = _rolling_mean(closes, 20)
-        ma_50 = _rolling_mean(closes, 50)
+        ma_20 = _rolling_mean(closes, MA_SHORT_PERIOD)
+        ma_50 = _rolling_mean(closes, MA_LONG_PERIOD)
 
         if ma_20 and ma_50:
             ev_type = EvidenceType.NEUTRAL
@@ -142,13 +162,13 @@ class TechnicalAgent(BaseAgent):
             )
 
         # Volume analysis (TECHNICAL dimension)
-        avg_volume = _rolling_mean([float(v) for v in volumes], 20) or sum(volumes) / len(volumes)
-        recent_volume = sum(volumes[-5:]) / min(5, len(volumes))
+        avg_volume = _rolling_mean([float(v) for v in volumes], VOLUME_AVG_PERIOD) or sum(volumes) / len(volumes)
+        recent_volume = sum(volumes[-VOLUME_RECENT_PERIOD:]) / min(VOLUME_RECENT_PERIOD, len(volumes))
         volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
 
         ev_type = EvidenceType.NEUTRAL
         vol_delta = 0.0
-        if volume_ratio > 1.5:
+        if volume_ratio > VOLUME_HIGH_RATIO:
             ev_type = EvidenceType.SUPPORTING if change_1w > 0 else EvidenceType.CONTRADICTING
             vol_delta = 2 if change_1w > 0 else -2
             summaries.append(f"High volume ({volume_ratio:.1f}x avg)")
@@ -170,12 +190,12 @@ class TechnicalAgent(BaseAgent):
 
         # Volatility - RISK dimension (affects risk assessment)
         high_low_ranges = [h - l for h, l in zip(highs, lows)]
-        avg_range = _rolling_mean(high_low_ranges, 14) or sum(high_low_ranges) / len(high_low_ranges)
+        avg_range = _rolling_mean(high_low_ranges, VOLATILITY_PERIOD) or sum(high_low_ranges) / len(high_low_ranges)
         volatility_pct = (avg_range / current_price) * 100 if current_price else 0
 
         ev_type = EvidenceType.NEUTRAL
         risk_delta = 0.0
-        if volatility_pct > 5:
+        if volatility_pct > VOLATILITY_HIGH_PCT:
             ev_type = EvidenceType.CONTRADICTING
             risk_delta = -1
             summaries.append(f"High volatility ({volatility_pct:.1f}%)")
@@ -202,11 +222,11 @@ class TechnicalAgent(BaseAgent):
 
         ev_type = EvidenceType.NEUTRAL
         range_delta = 0.0
-        if position_52w > 80:
+        if position_52w > RANGE_52W_HIGH_PCT:
             ev_type = EvidenceType.SUPPORTING
             range_delta = 1
             summaries.append("Near 52w high")
-        elif position_52w < 20:
+        elif position_52w < RANGE_52W_LOW_PCT:
             ev_type = EvidenceType.CONTRADICTING
             range_delta = -1
             summaries.append("Near 52w low")
