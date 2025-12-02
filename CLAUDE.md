@@ -65,3 +65,7 @@ Env vars override config: `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, 
 ## Testing
 
 Tests mock `get_settings()` and use in-memory DB fixtures from `conftest.py`.
+
+## Beads
+
+`bd dep add A B` means "A is blocked by B" (B must complete before A can start).
