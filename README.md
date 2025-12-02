@@ -49,7 +49,7 @@ default_scan_threshold = 5.0   # conviction delta for alerts
 default_output = "text"        # "text" or "json"
 ```
 
-Environment variables override config: `NEWS_API_KEY`, `FRED_API_KEY`, `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`.
+Environment variables override config: `NEWS_API_KEY`, `FRED_API_KEY`, `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `CENTS_OUTPUT_FORMAT`, `CENTS_SCAN_THRESHOLD`, `CENTS_WEBHOOK_URL`, `CENTS_DB_PATH`.
 
 ## Commands
 
@@ -70,11 +70,13 @@ Research runs multiple agents that gather evidence and calculate conviction delt
 
 | Agent | Source | Data |
 |-------|--------|------|
-| **Fundamentals** | FMP | P/E, margins, ROE, debt ratios |
-| **Technical** | Alpaca | Price momentum, moving averages, volume |
+| **Fundamentals** | FMP | P/E, margins, ROE, debt ratios, analyst ratings |
+| **Technical** | Alpaca | Price momentum, moving averages, volume, 52w range |
 | **Macro** | FRED | Fed funds rate, yield curve, VIX, unemployment |
 | **Sentiment** | NewsAPI | Recent news sentiment analysis |
-| **Orchestrator** | All | Synthesizes all agents into overall conviction |
+| **Moat** | FMP | Margin stability, ROIC trends, competitive advantages |
+| **Insider** | FMP | Insider buying/selling patterns, cluster activity |
+| **Orchestrator** | All | Synthesizes all agents into weighted conviction |
 
 Each agent returns:
 - Evidence items (supporting/contradicting/neutral)
@@ -110,4 +112,4 @@ pytest tests/test_agents.py   # Run specific test file
 pytest -k "test_research"     # Run tests matching pattern
 ```
 
-Database stored at `./data/cents.db` (SQLite, created automatically).
+Database stored at `~/.cents/data/cents.db` (SQLite, created automatically). Override with `CENTS_DB_PATH` env var.

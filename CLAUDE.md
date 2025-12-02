@@ -39,6 +39,10 @@ cents --help                  # CLI usage
 │  │   Macro     │ │  Sentiment  │    All return structured  │
 │  │   (FRED)    │ │  (NewsAPI)  │    AgentResult or         │
 │  └─────────────┘ └─────────────┘    BrokerPosition          │
+│  ┌─────────────┐ ┌─────────────┐                           │
+│  │    Moat     │ │   Insider   │                           │
+│  │   (FMP)     │ │   (FMP)     │                           │
+│  └─────────────┘ └─────────────┘                           │
 │  ┌─────────────────────────────┐                           │
 │  │      Orchestrator           │ ← Aggregates all agents   │
 │  └─────────────────────────────┘                           │
