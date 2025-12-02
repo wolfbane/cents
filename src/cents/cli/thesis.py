@@ -1,5 +1,6 @@
 """Thesis management CLI commands."""
 
+import json
 from datetime import datetime as dt
 from typing import Optional
 
@@ -15,7 +16,7 @@ from cents.models import (
     ThesisOutcome,
 )
 
-from ._shared import validate_symbol, generate_thesis_suggestion, evidence_to_dict
+from ._shared import validate_symbol, generate_thesis_suggestion, evidence_to_dict, get_settings_lazy
 
 
 @click.group()
@@ -95,6 +96,10 @@ def thesis_create(
         if not risks and suggestion.get("key_risks"):
             risks = ",".join(suggestion["key_risks"])
 
+    # Validate symbol if provided
+    if symbol:
+        symbol = validate_symbol(symbol)
+
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     risk_list = [r.strip() for r in risks.split(",") if r.strip()] if risks else []
 
@@ -144,8 +149,12 @@ def thesis_create(
     help="Filter by status",
 )
 @click.option("--symbol", "-S", help="Filter by symbol")
-def thesis_list(status: Optional[str], symbol: Optional[str]):
+@click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
+def thesis_list(status: Optional[str], symbol: Optional[str], output: Optional[str]):
     """List theses."""
+    if output is None:
+        output = get_settings_lazy().default_output
+
     repo = ThesisRepository()
     status_filter = ThesisStatus(status) if status else None
     theses = repo.list(status=status_filter)
@@ -154,6 +163,25 @@ def thesis_list(status: Optional[str], symbol: Optional[str]):
     if symbol:
         symbol_upper = symbol.upper()
         theses = [t for t in theses if t.symbol and t.symbol.upper() == symbol_upper]
+
+    if output == "json":
+        result = [
+            {
+                "id": t.id,
+                "title": t.title,
+                "symbol": t.symbol,
+                "status": t.status.value,
+                "conviction": t.conviction,
+                "valuation": t.valuation.value if t.valuation else None,
+                "time_horizon": t.time_horizon.value if t.time_horizon else None,
+                "outcome": t.outcome.value if t.outcome else None,
+                "created_at": t.created_at.isoformat(),
+                "updated_at": t.updated_at.isoformat(),
+            }
+            for t in theses
+        ]
+        click.echo(json.dumps(result, indent=2))
+        return
 
     if not theses:
         click.echo("No theses found.")

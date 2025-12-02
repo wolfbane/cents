@@ -1,5 +1,6 @@
 """Position management CLI commands."""
 
+import json
 from typing import Optional
 
 import click
@@ -7,7 +8,7 @@ import click
 from cents.db import PositionRepository, ThesisRepository
 from cents.models import Position, PositionSide, PositionStatus
 
-from ._shared import validate_symbol
+from ._shared import validate_symbol, get_settings_lazy
 
 
 @click.group()
@@ -88,11 +89,37 @@ def position_close(position_id: str, price: float):
     type=click.Choice(["open", "closed"]),
     help="Filter by status",
 )
-def position_list(status: Optional[str]):
+@click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
+def position_list(status: Optional[str], output: Optional[str]):
     """List positions."""
+    if output is None:
+        output = get_settings_lazy().default_output
+
     repo = PositionRepository()
     status_filter = PositionStatus(status) if status else None
     positions = repo.list(status=status_filter)
+
+    if output == "json":
+        result = [
+            {
+                "id": p.id,
+                "symbol": p.symbol,
+                "side": p.side.value,
+                "size": p.size,
+                "entry_price": p.entry_price,
+                "entry_date": p.entry_date.isoformat(),
+                "status": p.status.value,
+                "exit_price": p.exit_price,
+                "exit_date": p.exit_date.isoformat() if p.exit_date else None,
+                "pnl": p.pnl,
+                "pnl_pct": p.pnl_pct,
+                "thesis_id": p.thesis_id,
+                "paper": p.paper,
+            }
+            for p in positions
+        ]
+        click.echo(json.dumps(result, indent=2))
+        return
 
     if not positions:
         click.echo("No positions found.")
