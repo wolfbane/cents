@@ -1,12 +1,22 @@
 """Macro agent - analyzes economic environment."""
 
+import re
 from typing import Optional
 from urllib.request import urlopen
+from urllib.error import URLError
 import json
+import logging
 
 from cents.agents.base import BaseAgent, AgentResult
 from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
+
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_url(url: str) -> str:
+    """Remove API keys from URL for safe logging."""
+    return re.sub(r"(api_key=)[^&]+", r"\1***", url, flags=re.IGNORECASE)
 
 
 class MacroAgent(BaseAgent):
@@ -98,12 +108,17 @@ class MacroAgent(BaseAgent):
             f"?series_id={series_id}&api_key={self.api_key}"
             f"&file_type=json&sort_order=desc&limit=1"
         )
-        with urlopen(url, timeout=10) as response:
-            data = json.loads(response.read())
-            obs = data.get("observations", [])
-            if obs and obs[0].get("value") != ".":
-                return float(obs[0]["value"]), obs[0]["date"]
-        return None, None
+        try:
+            with urlopen(url, timeout=10) as response:
+                data = json.loads(response.read())
+                obs = data.get("observations", [])
+                if obs and obs[0].get("value") != ".":
+                    return float(obs[0]["value"]), obs[0]["date"]
+            return None, None
+        except URLError as e:
+            logger.warning("FRED API request failed for %s: %s", series_id, e)
+            logger.debug("Failed URL: %s", _sanitize_url(url))
+            raise
 
     def _interpret_indicator(
         self, series_id: str, value: float

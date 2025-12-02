@@ -1,6 +1,9 @@
 """CLI entry point for cents."""
 
 import json
+import logging
+import re
+from importlib.metadata import version as pkg_version
 from typing import Optional
 
 import click
@@ -36,6 +39,28 @@ from cents.config import get_settings
 def _get_settings():
     """Lazy-load settings to avoid import-time configuration errors."""
     return get_settings()
+
+
+def validate_symbol(symbol: str) -> str:
+    """Validate and normalize a stock symbol.
+
+    Args:
+        symbol: Raw symbol input from user
+
+    Returns:
+        Normalized uppercase symbol
+
+    Raises:
+        click.BadParameter: If symbol is invalid
+    """
+    s = symbol.strip().upper()
+    if not s:
+        raise click.BadParameter("Symbol cannot be empty")
+    if len(s) > 10:
+        raise click.BadParameter(f"Symbol too long: {symbol}")
+    if not re.match(r"^[A-Z0-9\.\-]+$", s):
+        raise click.BadParameter(f"Invalid symbol characters: {symbol}")
+    return s
 
 
 def _generate_thesis_suggestion(symbol: str, agent_outputs: list, total_conviction_delta: float) -> dict:
@@ -126,10 +151,15 @@ def _evidence_to_dict(evidence):
 
 
 @click.group()
-@click.version_option(version="0.1.0", package_name="cents")
-def cli():
+@click.version_option(version=pkg_version("cents"), package_name="cents")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+def cli(verbose: bool):
     """Cents: Agentic investing guidance."""
-    pass
+    if verbose:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
 
 
 # --- Research command ---
@@ -164,6 +194,7 @@ def research(
     suggest_thesis: bool,
 ):
     """Run research agents on a symbol."""
+    symbol = validate_symbol(symbol)
     if output is None:
         output = _get_settings().default_output
     verbose = output == "text" and not quiet
@@ -606,10 +637,11 @@ def position_open(
 
     Example: cents position open NVDA --size 10 --price 137
     """
+    symbol = validate_symbol(symbol)
     repo = PositionRepository()
     side = PositionSide.SHORT if short else PositionSide.LONG
     p = Position(
-        symbol=symbol.upper(),
+        symbol=symbol,
         size=size,
         entry_price=price,
         side=side,
@@ -618,7 +650,7 @@ def position_open(
         paper=True,
     )
     repo.create(p)
-    click.echo(f"Opened {side.value} position {p.id}: {size} {symbol.upper()} @ ${price:.2f}")
+    click.echo(f"Opened {side.value} position {p.id}: {size} {symbol} @ ${price:.2f}")
 
 
 @position.command("close")
@@ -1115,32 +1147,34 @@ def watch_add(
     webhook: Optional[str],
 ):
     """Add a symbol to watchlist."""
+    symbol = validate_symbol(symbol)
     repo = WatchlistRepository()
     existing = repo.get(symbol)
     if existing:
-        click.echo(f"{symbol.upper()} is already on watchlist.")
+        click.echo(f"{symbol} is already on watchlist.")
         return
 
     item = WatchlistItem(
-        symbol=symbol.upper(),
+        symbol=symbol,
         thesis_id=thesis_id,
         notes=notes,
         threshold=threshold,
         alert_destination=webhook,
     )
     repo.add(item)
-    click.echo(f"Added {symbol.upper()} to watchlist")
+    click.echo(f"Added {symbol} to watchlist")
 
 
 @watch.command("remove")
 @click.argument("symbol")
 def watch_remove(symbol: str):
     """Remove a symbol from watchlist."""
+    symbol = validate_symbol(symbol)
     repo = WatchlistRepository()
     if repo.remove(symbol):
-        click.echo(f"Removed {symbol.upper()} from watchlist")
+        click.echo(f"Removed {symbol} from watchlist")
     else:
-        click.echo(f"{symbol.upper()} not found in watchlist.", err=True)
+        click.echo(f"{symbol} not found in watchlist.", err=True)
 
 
 @watch.command("list")
@@ -1316,6 +1350,7 @@ def broker_buy(symbol: str, qty: float, thesis_id: Optional[str]):
 
     Example: cents broker buy NVDA --qty 10
     """
+    symbol = validate_symbol(symbol)
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
     if not ALPACA_AVAILABLE:
@@ -1324,7 +1359,7 @@ def broker_buy(symbol: str, qty: float, thesis_id: Optional[str]):
 
     try:
         client = AlpacaClient(paper=True)
-        result = client.submit_order(symbol.upper(), qty, "buy")
+        result = client.submit_order(symbol, qty, "buy")
         click.echo(f"Order submitted: {result.status}")
         click.echo(f"  Order ID: {result.order_id}")
         if result.filled_avg_price:
@@ -1342,6 +1377,7 @@ def broker_sell(symbol: str, qty: float):
 
     Example: cents broker sell NVDA --qty 10
     """
+    symbol = validate_symbol(symbol)
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
     if not ALPACA_AVAILABLE:
@@ -1350,7 +1386,7 @@ def broker_sell(symbol: str, qty: float):
 
     try:
         client = AlpacaClient(paper=True)
-        result = client.submit_order(symbol.upper(), qty, "sell")
+        result = client.submit_order(symbol, qty, "sell")
         click.echo(f"Order submitted: {result.status}")
         click.echo(f"  Order ID: {result.order_id}")
         if result.filled_avg_price:

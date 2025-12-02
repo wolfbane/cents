@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 
 
+def _sanitize_url(url: str) -> str:
+    """Remove API keys from URL for safe logging."""
+    import re
+    return re.sub(r"(apikey=)[^&]+", r"\1***", url, flags=re.IGNORECASE)
+
+
 class FMPFundamentalsProvider:
     """Fundamentals data provider using Financial Modeling Prep API."""
 
@@ -55,6 +61,7 @@ class FMPFundamentalsProvider:
                 return data
         except urllib.error.URLError as e:
             logger.warning("FMP API request failed for %s: %s", endpoint, e)
+            logger.debug("Failed URL: %s", _sanitize_url(url))
             return None
         except json.JSONDecodeError as e:
             logger.warning("FMP API returned invalid JSON for %s: %s", endpoint, e)

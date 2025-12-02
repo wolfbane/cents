@@ -11,6 +11,14 @@ _T = TypeVar("_T")
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 from cents.db import EvidenceRepository, ThesisRepository
 
+# Maximum conviction delta any single agent can return (prevents wild swings)
+MAX_CONVICTION_DELTA = 10.0
+
+
+def clamp_conviction_delta(delta: float) -> float:
+    """Clamp conviction delta to prevent extreme swings from a single agent."""
+    return max(-MAX_CONVICTION_DELTA, min(MAX_CONVICTION_DELTA, delta))
+
 
 @dataclass
 class AgentResult:
@@ -20,6 +28,10 @@ class AgentResult:
     conviction_delta: float  # How much to adjust thesis conviction
     summary: str  # Human-readable summary
     dimension_scores: dict[str, float] = field(default_factory=dict)  # Per-dimension conviction deltas
+
+    def __post_init__(self):
+        """Clamp conviction delta to prevent extreme values."""
+        self.conviction_delta = clamp_conviction_delta(self.conviction_delta)
 
 
 class BaseAgent(ABC):

@@ -624,8 +624,8 @@ class TestOrchestratorAgent:
         agent = OrchestratorAgent()
         result = agent.research("TEST")
 
-        # All 4 agents bullish = 20 total
-        assert result.conviction_delta == 20.0
+        # All 4 agents bullish = 20 total, but clamped to MAX_CONVICTION_DELTA (10.0)
+        assert result.conviction_delta == 10.0
         # Synthesis should note agreement
         synthesis = [e for e in result.evidence if e.agent == "orchestrator"]
         assert any("agreement" in e.content.lower() for e in synthesis)

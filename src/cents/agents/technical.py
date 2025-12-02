@@ -51,7 +51,7 @@ class TechnicalAgent(BaseAgent):
         thesis_id = thesis.id if thesis else "standalone"
 
         try:
-            history = self._with_retries(lambda: self.provider.get_history(symbol, days=180))
+            history = self._with_retries(lambda: self.provider.get_history(symbol, days=365))
             if not history.bars:
                 return AgentResult(
                     evidence=[],
