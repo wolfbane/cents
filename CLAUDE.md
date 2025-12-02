@@ -1,5 +1,21 @@
 # CLAUDE.md
 
+## Using cents CLI
+
+When the user asks about investing, stock research, theses, positions, or watchlists, use the `cents` CLI directly rather than writing code. Common workflows:
+
+```bash
+cents research NVDA --suggest-thesis     # Research a symbol
+cents thesis create --title "..." --from-research NVDA  # Create thesis from research
+cents thesis list                        # List theses
+cents position open NVDA --size 100 --price 135 --thesis ID  # Open position
+cents watch add NVDA --thesis ID         # Add to watchlist
+cents scan                               # Scan watchlist for alerts
+cents alert list                         # View alerts
+```
+
+Use `--output json` for machine-readable output. Run `cents --help` or `cents <command> --help` for full options.
+
 ## Build & Test
 
 ```bash
