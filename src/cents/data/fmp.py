@@ -1,5 +1,6 @@
 """Financial Modeling Prep (FMP) fundamentals data provider."""
 
+import functools
 import json
 import logging
 import urllib.error
@@ -36,13 +37,21 @@ class FMPFundamentalsProvider:
             )
 
     def _fetch_json(self, endpoint: str, **params) -> Optional[dict | list]:
-        """Fetch JSON from FMP API."""
+        """Fetch JSON from FMP API.
+
+        Returns None on network/API errors, logs warnings for debugging.
+        Callers should handle None gracefully (e.g., return empty dict for missing data).
+        """
         params["apikey"] = self._api_key
         query = "&".join(f"{k}={v}" for k, v in params.items())
         url = f"{FMP_BASE_URL}/{endpoint}?{query}"
         try:
             with urllib.request.urlopen(url, timeout=10) as response:
                 data = json.loads(response.read().decode())
+                # FMP returns error messages as {"Error Message": "..."} on some endpoints
+                if isinstance(data, dict) and "Error Message" in data:
+                    logger.warning("FMP API error for %s: %s", endpoint, data["Error Message"])
+                    return None
                 return data
         except urllib.error.URLError as e:
             logger.warning("FMP API request failed for %s: %s", endpoint, e)
@@ -127,7 +136,9 @@ class FMPFundamentalsProvider:
             forward_pe=forward_pe,
             peg_ratio=ratios.get("priceToEarningsGrowthRatioTTM"),
             # Growth - FMP provides these as decimals
-            revenue_growth=metrics.get("revenuePerShareTTM"),  # Use as proxy
+            # Note: FMP key-metrics-ttm doesn't provide revenue growth rate directly
+            # Revenue growth requires comparing historical income statements
+            revenue_growth=None,
             earnings_growth=earnings_growth,
             # Profitability
             profit_margin=ratios.get("netProfitMarginTTM"),
@@ -171,7 +182,8 @@ class FMPFundamentalsProvider:
             forward_pe=None,
             peg_ratio=ratios.get("priceEarningsToGrowthRatio"),
             # Growth
-            revenue_growth=metrics.get("revenuePerShare"),
+            # Note: Historical endpoint doesn't provide revenue growth rate directly
+            revenue_growth=None,
             earnings_growth=None,
             # Profitability
             profit_margin=ratios.get("netProfitMargin"),
@@ -224,13 +236,7 @@ class FMPFundamentalsProvider:
         return rating_lower.replace(" ", "_")
 
 
-# Singleton instance for convenience
-_default_provider: Optional[FMPFundamentalsProvider] = None
-
-
+@functools.lru_cache(maxsize=1)
 def get_fundamentals_provider() -> FMPFundamentalsProvider:
-    """Get or create the default FMP fundamentals provider."""
-    global _default_provider
-    if _default_provider is None:
-        _default_provider = FMPFundamentalsProvider()
-    return _default_provider
+    """Get or create the default FMP fundamentals provider (thread-safe singleton)."""
+    return FMPFundamentalsProvider()

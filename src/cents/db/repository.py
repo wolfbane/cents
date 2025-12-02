@@ -1,9 +1,12 @@
 """Repository layer for CRUD operations."""
 
 import json
+import logging
 import sqlite3
 from datetime import date, datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from cents.models import (
     Alert,
@@ -133,20 +136,32 @@ class ThesisRepository:
         return cursor.rowcount > 0
 
     def _row_to_thesis(self, row: sqlite3.Row) -> Thesis:
+        try:
+            tags = json.loads(row["tags"])
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse tags JSON for thesis %s", row["id"])
+            tags = []
+
+        try:
+            key_risks = json.loads(row["key_risks"]) if row["key_risks"] else []
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse key_risks JSON for thesis %s", row["id"])
+            key_risks = []
+
         return Thesis(
             id=row["id"],
             title=row["title"],
             hypothesis=row["hypothesis"],
             status=ThesisStatus(row["status"]),
             conviction=row["conviction"],
-            tags=json.loads(row["tags"]),
+            tags=tags,
             symbol=row["symbol"],
             business_quality=row["business_quality"],
             valuation=Valuation(row["valuation"]) if row["valuation"] else None,
             moat=row["moat"],
             time_horizon=TimeHorizon(row["time_horizon"]) if row["time_horizon"] else None,
             horizon_end=datetime.fromisoformat(row["horizon_end"]) if row["horizon_end"] else None,
-            key_risks=json.loads(row["key_risks"]) if row["key_risks"] else [],
+            key_risks=key_risks,
             target_price=row["target_price"],
             stop_price=row["stop_price"],
             outcome=ThesisOutcome(row["outcome"]) if row["outcome"] else None,
@@ -294,6 +309,12 @@ class EvidenceRepository:
         return [self._row_to_evidence(row) for row in rows]
 
     def _row_to_evidence(self, row: sqlite3.Row) -> Evidence:
+        try:
+            metadata = json.loads(row["metadata"])
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse metadata JSON for evidence %s", row["id"])
+            metadata = {}
+
         return Evidence(
             id=row["id"],
             thesis_id=row["thesis_id"],
@@ -303,7 +324,7 @@ class EvidenceRepository:
             source=row["source"],
             confidence=row["confidence"],
             dimension=ThesisDimension(row["dimension"]) if row["dimension"] else None,
-            metadata=json.loads(row["metadata"]),
+            metadata=metadata,
             timestamp=datetime.fromisoformat(row["timestamp"]),
         )
 
@@ -352,13 +373,19 @@ class OutcomeRepository:
         return [self._row_to_outcome(row) for row in rows]
 
     def _row_to_outcome(self, row: sqlite3.Row) -> Outcome:
+        try:
+            agent_performance = json.loads(row["agent_performance"])
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse agent_performance JSON for outcome %s", row["id"])
+            agent_performance = {}
+
         return Outcome(
             id=row["id"],
             position_id=row["position_id"],
             pnl=row["pnl"],
             pnl_pct=row["pnl_pct"],
             thesis_accuracy=ThesisAccuracy(row["thesis_accuracy"]),
-            agent_performance=json.loads(row["agent_performance"]),
+            agent_performance=agent_performance,
             retrospective=row["retrospective"],
             recorded_at=datetime.fromisoformat(row["recorded_at"]),
         )
@@ -491,12 +518,18 @@ class AlertRepository:
         return cursor.rowcount
 
     def _row_to_alert(self, row: sqlite3.Row) -> Alert:
+        try:
+            data = json.loads(row["data"])
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse data JSON for alert %s", row["id"])
+            data = {}
+
         return Alert(
             id=row["id"],
             symbol=row["symbol"],
             alert_type=AlertType(row["alert_type"]),
             message=row["message"],
-            data=json.loads(row["data"]),
+            data=data,
             read=bool(row["read"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )

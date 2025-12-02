@@ -65,7 +65,7 @@ class MacroAgent(BaseAgent):
                         metadata={"series": series_id, "value": value, "date": date},
                     )
                 )
-            except Exception as e:
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
                 evidence.append(
                     self.create_evidence(
                         thesis_id=thesis_id,

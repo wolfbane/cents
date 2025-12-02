@@ -138,7 +138,7 @@ class TestFundamentalsAgent:
     def test_research_api_error(self):
         """Handles API errors gracefully."""
         mock_provider = MagicMock()
-        mock_provider.get_fundamentals.side_effect = Exception("API Error")
+        mock_provider.get_fundamentals.side_effect = ValueError("API Error")
 
         agent = FundamentalsAgent(fundamentals_provider=mock_provider)
         result = agent.research("TEST")
@@ -152,7 +152,7 @@ class TestFundamentalsAgent:
         from cents.data import FundamentalsData
         mock_provider = MagicMock()
         mock_provider.get_fundamentals.side_effect = [
-            Exception("temporary"),
+            ValueError("temporary"),
             FundamentalsData(symbol="TEST", name="Retry Corp", pe_ratio=20.0),
         ]
 

@@ -58,7 +58,7 @@ class TechnicalAgent(BaseAgent):
                     conviction_delta=0,
                     summary=f"No historical data for {symbol}",
                 )
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, IndexError) as e:
             return self._error_result(symbol, e)
 
         closes = history.closes
@@ -72,9 +72,9 @@ class TechnicalAgent(BaseAgent):
         price_1m = _safe_get(closes, 21, closes[0])
         price_3m = _safe_get(closes, 63, closes[0])
 
-        change_1w = (current_price - price_1w) / price_1w * 100
-        change_1m = (current_price - price_1m) / price_1m * 100
-        change_3m = (current_price - price_3m) / price_3m * 100
+        change_1w = (current_price - price_1w) / price_1w * 100 if price_1w else 0
+        change_1m = (current_price - price_1m) / price_1m * 100 if price_1m else 0
+        change_3m = (current_price - price_3m) / price_3m * 100 if price_3m else 0
 
         # Momentum signal (TECHNICAL dimension)
         ev_type = EvidenceType.NEUTRAL
@@ -170,7 +170,7 @@ class TechnicalAgent(BaseAgent):
         # Volatility - RISK dimension (affects risk assessment)
         high_low_ranges = [h - l for h, l in zip(highs, lows)]
         avg_range = _rolling_mean(high_low_ranges, 14) or sum(high_low_ranges) / len(high_low_ranges)
-        volatility_pct = (avg_range / current_price) * 100
+        volatility_pct = (avg_range / current_price) * 100 if current_price else 0
 
         ev_type = EvidenceType.NEUTRAL
         risk_delta = 0.0

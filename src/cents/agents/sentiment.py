@@ -59,7 +59,7 @@ class SentimentAgent(BaseAgent):
                     summary=f"{symbol}: No recent news found",
                 )
             return self._analyze_articles(articles, symbol, thesis_id)
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError, URLError) as e:
             return self._error_result(symbol, e)
 
     def _fetch_news(self, symbol: str) -> list[dict]:

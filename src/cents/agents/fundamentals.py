@@ -124,7 +124,7 @@ class FundamentalsAgent(BaseAgent):
 
         try:
             data = self._with_retries(lambda: self.provider.get_fundamentals(symbol))
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
             return self._error_result(symbol, e)
 
         # Check if we got any meaningful data

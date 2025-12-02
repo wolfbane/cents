@@ -1,5 +1,6 @@
 """Alpaca market data provider."""
 
+import functools
 import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -128,13 +129,7 @@ class AlpacaPriceProvider:
             return None
 
 
-# Singleton instance for convenience
-_default_provider: Optional[AlpacaPriceProvider] = None
-
-
+@functools.lru_cache(maxsize=1)
 def get_price_provider() -> AlpacaPriceProvider:
-    """Get or create the default Alpaca price provider."""
-    global _default_provider
-    if _default_provider is None:
-        _default_provider = AlpacaPriceProvider()
-    return _default_provider
+    """Get or create the default Alpaca price provider (thread-safe singleton)."""
+    return AlpacaPriceProvider()

@@ -1,7 +1,6 @@
 """CLI entry point for cents."""
 
 import json
-from datetime import date
 from typing import Optional
 
 import click
