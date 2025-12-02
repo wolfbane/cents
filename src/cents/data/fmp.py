@@ -242,6 +242,51 @@ class FMPFundamentalsProvider:
             return "sell"
         return rating_lower.replace(" ", "_")
 
+    def get_historical_ratios(self, symbol: str, years: int = 5) -> list[dict]:
+        """Fetch historical annual ratios for moat analysis.
+
+        Returns list of dicts with: date, grossProfitMargin, operatingProfitMargin,
+        returnOnEquity, and ROIC (from key-metrics).
+
+        Args:
+            symbol: Ticker symbol
+            years: Number of years of history (default 5)
+
+        Returns:
+            List of annual ratio records, most recent first
+        """
+        # Fetch historical ratios (annual)
+        ratios_data = self._fetch_json(
+            "ratios", symbol=symbol, period="annual", limit=years
+        )
+        ratios_list = ratios_data if ratios_data else []
+
+        # Fetch historical key metrics for ROIC
+        metrics_data = self._fetch_json(
+            "key-metrics", symbol=symbol, period="annual", limit=years
+        )
+        metrics_list = metrics_data if metrics_data else []
+
+        # Build lookup of metrics by date
+        metrics_by_date = {m.get("date"): m for m in metrics_list}
+
+        # Merge ratios with ROIC from key-metrics
+        result = []
+        for ratio in ratios_list:
+            record_date = ratio.get("date")
+            metrics = metrics_by_date.get(record_date, {})
+
+            result.append({
+                "date": record_date,
+                "grossProfitMargin": ratio.get("grossProfitMargin"),
+                "operatingProfitMargin": ratio.get("operatingProfitMargin"),
+                "netProfitMargin": ratio.get("netProfitMargin"),
+                "returnOnEquity": ratio.get("returnOnEquity"),
+                "roic": metrics.get("roic"),
+            })
+
+        return result
+
 
 @functools.lru_cache(maxsize=1)
 def get_fundamentals_provider() -> FMPFundamentalsProvider:

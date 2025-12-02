@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 
@@ -35,7 +35,7 @@ class Evidence:
     source: str
     type: EvidenceType = EvidenceType.NEUTRAL
     confidence: float = 0.5  # 0-1, agent's confidence in this evidence
-    dimension: Optional[ThesisDimension] = None  # Which thesis aspect this relates to
+    dimension: ThesisDimension | None = None  # Which thesis aspect this relates to
     metadata: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     timestamp: datetime = field(default_factory=datetime.now)

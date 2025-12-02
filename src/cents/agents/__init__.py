@@ -5,6 +5,7 @@ from cents.agents.fundamentals import FundamentalsAgent
 from cents.agents.technical import TechnicalAgent
 from cents.agents.macro import MacroAgent
 from cents.agents.sentiment import SentimentAgent
+from cents.agents.moat import MoatAgent
 from cents.agents.orchestrator import OrchestratorAgent
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "TechnicalAgent",
     "MacroAgent",
     "SentimentAgent",
+    "MoatAgent",
     "OrchestratorAgent",
 ]
 
@@ -24,5 +26,6 @@ AGENTS = {
     "technical": TechnicalAgent,
     "macro": MacroAgent,
     "sentiment": SentimentAgent,
+    "moat": MoatAgent,
     "orchestrator": OrchestratorAgent,
 }

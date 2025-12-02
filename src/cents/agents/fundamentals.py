@@ -60,6 +60,26 @@ DEFAULT_MARGIN_HIGH = 0.20
 DEFAULT_DE_LOW = 50.0
 DEFAULT_DE_HIGH = 200.0
 
+# Sector-relative threshold multipliers
+# Values below median * SECTOR_LOW_MULT are considered favorable
+# Values above median * SECTOR_HIGH_MULT are considered unfavorable
+SECTOR_PE_LOW_MULT = 0.7   # 30% below sector median = undervalued
+SECTOR_PE_HIGH_MULT = 1.3  # 30% above sector median = overvalued
+SECTOR_MARGIN_LOW_MULT = 0.5   # 50% below sector median = weak
+SECTOR_MARGIN_HIGH_MULT = 1.5  # 50% above sector median = strong
+SECTOR_DE_LOW_MULT = 0.5   # 50% below sector norm = conservative
+SECTOR_DE_HIGH_MULT = 1.5  # 50% above sector norm = leveraged
+
+# Forward P/E comparison thresholds
+FORWARD_PE_GROWTH_MULT = 0.8   # Forward < trailing * 0.8 = growth expected
+FORWARD_PE_DECLINE_MULT = 1.2  # Forward > trailing * 1.2 = decline expected
+
+# Growth rate thresholds (percentages)
+HIGH_GROWTH_THRESHOLD = 0.20      # 20% revenue growth = high growth
+STRONG_REVENUE_GROWTH_PCT = 20    # 20% for display comparison
+STRONG_EARNINGS_GROWTH_PCT = 15   # 15% earnings growth = strong
+EARNINGS_DECLINE_PCT = -10        # -10% earnings = decline
+
 
 def _get_fundamentals_provider():
     """Lazy import to avoid circular dependencies."""
@@ -98,21 +118,21 @@ class FundamentalsAgent(BaseAgent):
         """
         if sector and sector in SECTOR_PE_MEDIANS:
             median = SECTOR_PE_MEDIANS[sector]
-            return (median * 0.7, median * 1.3)  # 30% below/above median
+            return (median * SECTOR_PE_LOW_MULT, median * SECTOR_PE_HIGH_MULT)
         return (DEFAULT_PE_LOW, DEFAULT_PE_HIGH)
 
     def _get_margin_thresholds(self, sector: Optional[str]) -> tuple[float, float]:
         """Get profit margin thresholds adjusted for sector."""
         if sector and sector in SECTOR_MARGIN_MEDIANS:
             median = SECTOR_MARGIN_MEDIANS[sector]
-            return (median * 0.5, median * 1.5)  # 50% below/above median
+            return (median * SECTOR_MARGIN_LOW_MULT, median * SECTOR_MARGIN_HIGH_MULT)
         return (DEFAULT_MARGIN_LOW, DEFAULT_MARGIN_HIGH)
 
     def _get_de_thresholds(self, sector: Optional[str]) -> tuple[float, float]:
         """Get debt/equity thresholds adjusted for sector."""
         if sector and sector in SECTOR_DE_NORMS:
             norm = SECTOR_DE_NORMS[sector]
-            return (norm * 0.5, norm * 1.5)  # 50% below/above norm
+            return (norm * SECTOR_DE_LOW_MULT, norm * SECTOR_DE_HIGH_MULT)
         return (DEFAULT_DE_LOW, DEFAULT_DE_HIGH)
 
     def research(self, symbol: str, thesis: Optional[Thesis] = None) -> AgentResult:
@@ -152,9 +172,9 @@ class FundamentalsAgent(BaseAgent):
 
             # Handle negative P/E (unprofitable company) separately
             if data.pe_ratio < 0:
-                # Check if high-growth company (revenue growth > 20%)
+                # Check if high-growth company
                 has_strong_growth = (
-                    data.revenue_growth is not None and data.revenue_growth > 0.20
+                    data.revenue_growth is not None and data.revenue_growth > HIGH_GROWTH_THRESHOLD
                 )
                 if has_strong_growth:
                     # High-growth unprofitable = neutral (acceptable for growth stocks)
@@ -222,11 +242,11 @@ class FundamentalsAgent(BaseAgent):
             fwd_delta = 0.0
 
             # Forward P/E significantly lower than trailing = earnings growth expected
-            if data.forward_pe < data.pe_ratio * 0.8:
+            if data.forward_pe < data.pe_ratio * FORWARD_PE_GROWTH_MULT:
                 ev_type = EvidenceType.SUPPORTING
                 fwd_delta = 2
                 summaries.append(f"Forward P/E {data.forward_pe:.1f} < trailing (growth expected)")
-            elif data.forward_pe > data.pe_ratio * 1.2:
+            elif data.forward_pe > data.pe_ratio * FORWARD_PE_DECLINE_MULT:
                 # Forward P/E higher = earnings decline expected
                 ev_type = EvidenceType.CONTRADICTING
                 fwd_delta = -2
@@ -254,7 +274,7 @@ class FundamentalsAgent(BaseAgent):
             ev_type = EvidenceType.NEUTRAL
             quality_delta = 0.0
 
-            if growth_pct > 20:
+            if growth_pct > STRONG_REVENUE_GROWTH_PCT:
                 ev_type = EvidenceType.SUPPORTING
                 quality_delta = 5
                 summaries.append(f"Strong revenue growth ({growth_pct:.0f}%)")
@@ -284,11 +304,11 @@ class FundamentalsAgent(BaseAgent):
             ev_type = EvidenceType.NEUTRAL
             eg_delta = 0.0
 
-            if growth_pct > 15:
+            if growth_pct > STRONG_EARNINGS_GROWTH_PCT:
                 ev_type = EvidenceType.SUPPORTING
                 eg_delta = 3
                 summaries.append(f"Expected earnings growth ({growth_pct:.0f}%)")
-            elif growth_pct < -10:
+            elif growth_pct < EARNINGS_DECLINE_PCT:
                 ev_type = EvidenceType.CONTRADICTING
                 eg_delta = -3
                 summaries.append(f"Expected earnings decline ({growth_pct:.0f}%)")

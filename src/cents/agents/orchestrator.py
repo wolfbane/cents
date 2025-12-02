@@ -7,6 +7,7 @@ from cents.agents.fundamentals import FundamentalsAgent
 from cents.agents.technical import TechnicalAgent
 from cents.agents.macro import MacroAgent
 from cents.agents.sentiment import SentimentAgent
+from cents.agents.moat import MoatAgent
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 
@@ -22,6 +23,7 @@ class OrchestratorAgent(BaseAgent):
             TechnicalAgent(),
             MacroAgent(),
             SentimentAgent(),
+            MoatAgent(),
         ]
 
     def _weighted_conviction(self, result: AgentResult) -> float:
