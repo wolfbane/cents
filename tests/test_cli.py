@@ -443,7 +443,8 @@ class TestResearchCLI:
             summary="Test agent: bullish signal",
         )
         mock_agent_class = MagicMock(return_value=mock_agent_instance)
-        mock_agents.items.return_value = [("test", mock_agent_class)]
+        # Default (no --agent) now uses orchestrator only
+        mock_agents.__getitem__.return_value = mock_agent_class
 
         with runner.isolated_filesystem(temp_dir=mock_db):
             result = runner.invoke(cli, ["research", "AAPL", "--no-save"])
@@ -463,7 +464,8 @@ class TestResearchCLI:
             summary="Test summary",
         )
         mock_agent_class = MagicMock(return_value=mock_agent_instance)
-        mock_agents.items.return_value = [("test", mock_agent_class)]
+        # Default (no --agent) now uses orchestrator only
+        mock_agents.__getitem__.return_value = mock_agent_class
 
         with runner.isolated_filesystem(temp_dir=mock_db):
             result = runner.invoke(cli, ["research", "AAPL", "--output", "json", "--no-save"])
@@ -487,7 +489,8 @@ class TestResearchCLI:
             summary="Strong fundamentals detected",
         )
         mock_agent_class = MagicMock(return_value=mock_agent_instance)
-        mock_agents.items.return_value = [("fundamentals", mock_agent_class)]
+        # Default (no --agent) now uses orchestrator only
+        mock_agents.__getitem__.return_value = mock_agent_class
 
         with runner.isolated_filesystem(temp_dir=mock_db):
             result = runner.invoke(cli, ["research", "NVDA", "--suggest-thesis", "--no-save"])
@@ -508,7 +511,8 @@ class TestResearchCLI:
             summary="Bullish signal",
         )
         mock_agent_class = MagicMock(return_value=mock_agent_instance)
-        mock_agents.items.return_value = [("test", mock_agent_class)]
+        # Default (no --agent) now uses orchestrator only
+        mock_agents.__getitem__.return_value = mock_agent_class
 
         with runner.isolated_filesystem(temp_dir=mock_db):
             result = runner.invoke(cli, [

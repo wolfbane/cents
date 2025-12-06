@@ -56,7 +56,12 @@ def research(
             click.echo(f"Evaluating against thesis: {thesis.title}\n")
 
     # Determine which agents to run
-    agents_to_run = {agent_name: AGENTS[agent_name]} if agent_name else AGENTS
+    # If no agent specified, use orchestrator (which runs all agents internally)
+    # This avoids double execution since orchestrator aggregates all agents
+    if agent_name:
+        agents_to_run = {agent_name: AGENTS[agent_name]}
+    else:
+        agents_to_run = {"orchestrator": AGENTS["orchestrator"]}
 
     all_evidence = []
     agent_outputs = []
