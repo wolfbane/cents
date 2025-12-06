@@ -98,22 +98,27 @@ def research(
         total_conviction_delta = sum(agent_deltas.values())
 
     evidence_saved = False
-    if save and all_evidence and thesis:
+    if save and all_evidence:
         evidence_repo = EvidenceRepository()
         for e in all_evidence:
-            e.thesis_id = thesis.id
+            e.symbol = symbol.upper()
+            if thesis:
+                e.thesis_id = thesis.id
             evidence_repo.create(e)
-
-        thesis_repo = ThesisRepository()
-        thesis.update_conviction(total_conviction_delta)
-        thesis_repo.update(thesis)
         evidence_saved = True
+
+        if thesis:
+            thesis_repo = ThesisRepository()
+            thesis.update_conviction(total_conviction_delta)
+            thesis_repo.update(thesis)
 
         if verbose:
             click.echo(f"Saved {len(all_evidence)} evidence items")
-            click.echo(f"Thesis conviction: {thesis.conviction:.1f}% ({total_conviction_delta:+.1f})")
-    elif not thesis and all_evidence and verbose:
-        click.echo(f"Generated {len(all_evidence)} evidence items (not saved - no thesis linked)")
+            if thesis:
+                click.echo(f"Thesis conviction: {thesis.conviction:.1f}% ({total_conviction_delta:+.1f})")
+            else:
+                click.echo(f"Evidence saved for {symbol.upper()} (no thesis linked)")
+                click.echo(f"Link later with: cents evidence link {symbol.upper()} --thesis <ID>")
 
     # Generate thesis suggestion if requested
     thesis_suggestion = None

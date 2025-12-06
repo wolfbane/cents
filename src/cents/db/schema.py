@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS theses (
 
 CREATE TABLE IF NOT EXISTS evidence (
     id TEXT PRIMARY KEY,
-    thesis_id TEXT NOT NULL,
+    thesis_id TEXT,
+    symbol TEXT,
     agent TEXT NOT NULL,
     type TEXT DEFAULT 'neutral',
     content TEXT NOT NULL,
@@ -42,7 +43,7 @@ CREATE TABLE IF NOT EXISTS evidence (
     dimension TEXT,
     metadata TEXT DEFAULT '{}',
     timestamp TEXT NOT NULL,
-    FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE CASCADE
+    FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS positions (
@@ -146,6 +147,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "closed_at", "ALTER TABLE theses ADD COLUMN closed_at TEXT"),
         # Add dimension to evidence (added in v0.5)
         ("evidence", "dimension", "ALTER TABLE evidence ADD COLUMN dimension TEXT"),
+        # Add symbol to evidence for standalone research (added in v0.7)
+        ("evidence", "symbol", "ALTER TABLE evidence ADD COLUMN symbol TEXT"),
     ]
 
     for table, column, sql in column_migrations:
@@ -176,22 +179,23 @@ def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
         return  # Not all tables exist yet, skip migration
 
     # Check if migration is needed by inspecting foreign_key_list
-    # If on_delete is already set, skip the migration
+    # Evidence should have SET NULL, others should have CASCADE/SET NULL
     cursor = conn.execute("PRAGMA foreign_key_list(evidence)")
     fk_info = cursor.fetchall()
-    if fk_info and fk_info[0][6] == "CASCADE":  # on_delete is column 6
-        return  # Already migrated
+    if fk_info and fk_info[0][6] == "SET NULL":  # on_delete is column 6
+        return  # Already migrated to latest (SET NULL for evidence)
 
     # Temporarily disable foreign keys for the migration
     conn.execute("PRAGMA foreign_keys = OFF")
 
     try:
-        # Migrate evidence table (ON DELETE CASCADE)
+        # Migrate evidence table (ON DELETE SET NULL, nullable thesis_id, add symbol)
         conn.execute("ALTER TABLE evidence RENAME TO evidence_old")
         conn.execute("""
             CREATE TABLE evidence (
                 id TEXT PRIMARY KEY,
-                thesis_id TEXT NOT NULL,
+                thesis_id TEXT,
+                symbol TEXT,
                 agent TEXT NOT NULL,
                 type TEXT DEFAULT 'neutral',
                 content TEXT NOT NULL,
@@ -200,11 +204,13 @@ def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
                 dimension TEXT,
                 metadata TEXT DEFAULT '{}',
                 timestamp TEXT NOT NULL,
-                FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE CASCADE
+                FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
             )
         """)
         conn.execute("""
-            INSERT INTO evidence SELECT * FROM evidence_old
+            INSERT INTO evidence (id, thesis_id, agent, type, content, source, confidence, dimension, metadata, timestamp)
+            SELECT id, thesis_id, agent, type, content, source, confidence, dimension, metadata, timestamp
+            FROM evidence_old
         """)
         conn.execute("DROP TABLE evidence_old")
 

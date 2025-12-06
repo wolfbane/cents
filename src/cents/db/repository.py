@@ -286,12 +286,13 @@ class EvidenceRepository:
         """Insert new evidence."""
         self.conn.execute(
             """
-            INSERT INTO evidence (id, thesis_id, agent, type, content, source, confidence, dimension, metadata, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO evidence (id, thesis_id, symbol, agent, type, content, source, confidence, dimension, metadata, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 evidence.id,
                 evidence.thesis_id,
+                evidence.symbol,
                 evidence.agent,
                 evidence.type.value,
                 evidence.content,
@@ -313,6 +314,45 @@ class EvidenceRepository:
         ).fetchall()
         return [self._row_to_evidence(row) for row in rows]
 
+    def list_for_symbol(self, symbol: str) -> list[Evidence]:
+        """List all evidence for a symbol (including orphan evidence)."""
+        rows = self.conn.execute(
+            "SELECT * FROM evidence WHERE symbol = ? ORDER BY timestamp DESC",
+            (symbol.upper(),),
+        ).fetchall()
+        return [self._row_to_evidence(row) for row in rows]
+
+    def list_orphans(self, symbol: str | None = None) -> list[Evidence]:
+        """List evidence without a thesis, optionally filtered by symbol."""
+        if symbol:
+            rows = self.conn.execute(
+                "SELECT * FROM evidence WHERE thesis_id IS NULL AND symbol = ? ORDER BY timestamp DESC",
+                (symbol.upper(),),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM evidence WHERE thesis_id IS NULL ORDER BY timestamp DESC"
+            ).fetchall()
+        return [self._row_to_evidence(row) for row in rows]
+
+    def link_to_thesis(self, evidence_id: str, thesis_id: str) -> bool:
+        """Link orphan evidence to a thesis."""
+        cursor = self.conn.execute(
+            "UPDATE evidence SET thesis_id = ? WHERE id = ?",
+            (thesis_id, evidence_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def link_symbol_to_thesis(self, symbol: str, thesis_id: str) -> int:
+        """Link all orphan evidence for a symbol to a thesis. Returns count updated."""
+        cursor = self.conn.execute(
+            "UPDATE evidence SET thesis_id = ? WHERE thesis_id IS NULL AND symbol = ?",
+            (thesis_id, symbol.upper()),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def delete(self, evidence_id: str) -> bool:
         """Delete evidence by ID."""
         cursor = self.conn.execute("DELETE FROM evidence WHERE id = ?", (evidence_id,))
@@ -322,6 +362,30 @@ class EvidenceRepository:
     def delete_for_thesis(self, thesis_id: str) -> int:
         """Delete all evidence for a thesis. Returns count deleted."""
         cursor = self.conn.execute("DELETE FROM evidence WHERE thesis_id = ?", (thesis_id,))
+        self.conn.commit()
+        return cursor.rowcount
+
+    def prune_for_closed_theses(self, retention_days: int = 30) -> int:
+        """Delete evidence for theses closed more than retention_days ago.
+
+        Args:
+            retention_days: Days to retain evidence after thesis closure (default 30)
+
+        Returns:
+            Number of evidence items deleted
+        """
+        cursor = self.conn.execute(
+            """
+            DELETE FROM evidence
+            WHERE thesis_id IN (
+                SELECT id FROM theses
+                WHERE status = 'closed'
+                AND closed_at IS NOT NULL
+                AND date(closed_at) < date('now', ?)
+            )
+            """,
+            (f"-{retention_days} days",),
+        )
         self.conn.commit()
         return cursor.rowcount
 
@@ -335,6 +399,7 @@ class EvidenceRepository:
         return Evidence(
             id=row["id"],
             thesis_id=row["thesis_id"],
+            symbol=row["symbol"],
             agent=row["agent"],
             type=EvidenceType(row["type"]),
             content=row["content"],

@@ -29,10 +29,11 @@ class ThesisDimension(str, Enum):
 class Evidence:
     """A piece of evidence produced by an agent for a thesis."""
 
-    thesis_id: str
     agent: str
     content: str
     source: str
+    thesis_id: str | None = None  # None for standalone research
+    symbol: str | None = None  # For standalone evidence without thesis
     type: EvidenceType = EvidenceType.NEUTRAL
     confidence: float = 0.5  # 0-1, agent's confidence in this evidence
     dimension: ThesisDimension | None = None  # Which thesis aspect this relates to

@@ -451,8 +451,8 @@ class TestMigrateForeignKeys:
         """)
         conn.commit()
 
-    def test_adds_cascade_to_evidence(self, tmp_path):
-        """Migration adds ON DELETE CASCADE to evidence foreign key."""
+    def test_adds_set_null_to_evidence(self, tmp_path):
+        """Migration adds ON DELETE SET NULL to evidence foreign key."""
         db_path = tmp_path / "test.db"
         conn = sqlite3.connect(db_path)
         conn.execute("PRAGMA foreign_keys = ON")
@@ -462,11 +462,11 @@ class TestMigrateForeignKeys:
         # Run migration
         _migrate_foreign_keys(conn)
 
-        # Verify CASCADE is set
+        # Verify SET NULL is set (evidence thesis_id is nullable)
         cursor = conn.execute("PRAGMA foreign_key_list(evidence)")
         fk_info = cursor.fetchall()
         assert len(fk_info) == 1
-        assert fk_info[0][6] == "CASCADE"  # on_delete column
+        assert fk_info[0][6] == "SET NULL"  # on_delete column
         conn.close()
 
     def test_adds_set_null_to_positions(self, tmp_path):
@@ -596,7 +596,7 @@ class TestMigrateForeignKeys:
         cursor = conn.execute("PRAGMA foreign_key_list(evidence)")
         fk_info = cursor.fetchall()
         assert len(fk_info) == 1
-        assert fk_info[0][6] == "CASCADE"
+        assert fk_info[0][6] == "SET NULL"
         conn.close()
 
     def test_skips_if_tables_missing(self, tmp_path):

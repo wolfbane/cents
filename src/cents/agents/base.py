@@ -127,17 +127,19 @@ class BaseAgent(ABC):
 
     def create_evidence(
         self,
-        thesis_id: str,
+        thesis_id: str | None,
         content: str,
         source: str,
         evidence_type: EvidenceType = EvidenceType.NEUTRAL,
         confidence: float = 0.5,
         dimension: ThesisDimension | None = None,
         metadata: dict | None = None,
+        symbol: str | None = None,
     ) -> Evidence:
         """Helper to create evidence with this agent's name."""
         return Evidence(
             thesis_id=thesis_id,
+            symbol=symbol,
             agent=self.name,
             content=content,
             source=source,
