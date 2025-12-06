@@ -66,6 +66,23 @@ Env vars override config: `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, 
 
 Tests mock `get_settings()` and use in-memory DB fixtures from `conftest.py`.
 
+## Setting Price Targets
+
+When creating theses with `--target-price` or `--stop-price`, anchor to real data:
+
+1. **Web search analyst consensus** before setting targets (e.g., "SYMBOL analyst price target consensus")
+2. **Use available anchors**: analyst targets, P/E × forward EPS, technical levels (52W range, MAs)
+3. **When multiple values exist**, present options to user:
+   ```
+   | Target | Basis |
+   | $55 | Analyst consensus |
+   | $70 | Analyst high |
+   | $75 | 52W midpoint |
+
+   Which target should we use?
+   ```
+4. **Never guess** - if no data available, ask user or omit the field
+
 ## Beads
 
 `bd dep add A B` means "A is blocked by B" (B must complete before A can start).

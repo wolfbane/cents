@@ -1089,3 +1089,197 @@ class TestFundamentalsNegativePE:
         # 15 is below Tech threshold (19.6) - should be bullish
         assert "Low P/E" in result.summary
         assert result.conviction_delta > 0
+
+
+class TestEvidenceAgeWeighting:
+    """Tests for evidence age weighting in orchestrator."""
+
+    def test_fresh_evidence_full_weight(self):
+        """Fresh evidence (today) gets weight 1.0."""
+        from cents.agents.orchestrator import evidence_age_weight
+        from cents.models import Evidence, ThesisDimension
+
+        evidence = Evidence(
+            thesis_id="test",
+            agent="test",
+            type=EvidenceType.SUPPORTING,
+            content="Fresh data",
+            source="test",
+            timestamp=datetime.now(),
+            dimension=ThesisDimension.TECHNICAL,
+        )
+
+        weight = evidence_age_weight(evidence)
+        assert weight == 1.0
+
+    def test_old_evidence_minimum_weight(self):
+        """Evidence older than TTL gets minimum weight (0.1)."""
+        from cents.agents.orchestrator import evidence_age_weight, DIMENSION_TTL_DAYS, AGE_WEIGHT_FLOOR
+        from cents.models import Evidence, ThesisDimension
+
+        # Technical TTL is 7 days - use 10 day old evidence
+        evidence = Evidence(
+            thesis_id="test",
+            agent="test",
+            type=EvidenceType.SUPPORTING,
+            content="Stale technical data",
+            source="test",
+            timestamp=datetime.now() - timedelta(days=10),
+            dimension=ThesisDimension.TECHNICAL,
+        )
+
+        weight = evidence_age_weight(evidence)
+        assert weight == AGE_WEIGHT_FLOOR
+
+    def test_evidence_linear_decay(self):
+        """Evidence weight decays linearly from 1.0 to floor over TTL."""
+        from cents.agents.orchestrator import evidence_age_weight, DIMENSION_TTL_DAYS, AGE_WEIGHT_FLOOR
+        from cents.models import Evidence, ThesisDimension
+
+        # Macro TTL is 30 days - test at 15 days (halfway)
+        evidence = Evidence(
+            thesis_id="test",
+            agent="test",
+            type=EvidenceType.SUPPORTING,
+            content="Mid-age macro data",
+            source="test",
+            timestamp=datetime.now() - timedelta(days=15),
+            dimension=ThesisDimension.MACRO,
+        )
+
+        weight = evidence_age_weight(evidence)
+        # At halfway point: 1.0 - (0.5 * (1.0 - 0.1)) = 1.0 - 0.45 = 0.55
+        expected = 1.0 - (0.5 * (1.0 - AGE_WEIGHT_FLOOR))
+        assert weight == pytest.approx(expected, rel=0.01)
+
+    def test_dimension_specific_ttl(self):
+        """Different dimensions have different TTL values."""
+        from cents.agents.orchestrator import evidence_age_weight, DIMENSION_TTL_DAYS, AGE_WEIGHT_FLOOR
+        from cents.models import Evidence, ThesisDimension
+
+        # 7 day old evidence - should be at floor for technical (TTL=7)
+        # but still fresh for moat (TTL=90)
+        tech_evidence = Evidence(
+            thesis_id="test",
+            agent="test",
+            type=EvidenceType.SUPPORTING,
+            content="Technical data",
+            source="test",
+            timestamp=datetime.now() - timedelta(days=7),
+            dimension=ThesisDimension.TECHNICAL,
+        )
+        moat_evidence = Evidence(
+            thesis_id="test",
+            agent="test",
+            type=EvidenceType.SUPPORTING,
+            content="Moat data",
+            source="test",
+            timestamp=datetime.now() - timedelta(days=7),
+            dimension=ThesisDimension.MOAT,
+        )
+
+        tech_weight = evidence_age_weight(tech_evidence)
+        moat_weight = evidence_age_weight(moat_evidence)
+
+        # Technical at TTL boundary gets floor weight
+        assert tech_weight == AGE_WEIGHT_FLOOR
+        # Moat at 7 days (out of 90) is still mostly fresh
+        assert moat_weight > 0.9
+
+    def test_no_dimension_uses_default_ttl(self):
+        """Evidence without dimension uses default TTL (30 days)."""
+        from cents.agents.orchestrator import evidence_age_weight, DEFAULT_TTL_DAYS, AGE_WEIGHT_FLOOR
+        from cents.models import Evidence
+
+        # 15 days old with no dimension
+        evidence = Evidence(
+            thesis_id="test",
+            agent="test",
+            type=EvidenceType.SUPPORTING,
+            content="Generic data",
+            source="test",
+            timestamp=datetime.now() - timedelta(days=15),
+            dimension=None,
+        )
+
+        weight = evidence_age_weight(evidence)
+        # Halfway through 30 day default TTL
+        expected = 1.0 - (0.5 * (1.0 - AGE_WEIGHT_FLOOR))
+        assert weight == pytest.approx(expected, rel=0.01)
+
+    @patch.object(FundamentalsAgent, "research")
+    @patch.object(TechnicalAgent, "research")
+    @patch.object(MacroAgent, "research")
+    @patch.object(SentimentAgent, "research")
+    def test_weighted_conviction_uses_age(
+        self, mock_sentiment, mock_macro, mock_technical, mock_fundamentals
+    ):
+        """Orchestrator weights conviction by both confidence and age."""
+        from cents.models import Evidence, ThesisDimension
+
+        # Fresh high-confidence evidence
+        fresh_evidence = Evidence(
+            thesis_id="test",
+            agent="fundamentals",
+            type=EvidenceType.SUPPORTING,
+            content="Fresh data",
+            source="test",
+            confidence=1.0,
+            timestamp=datetime.now(),
+            dimension=ThesisDimension.VALUATION,
+        )
+
+        mock_fundamentals.return_value = AgentResult(
+            evidence=[fresh_evidence],
+            conviction_delta=10.0,
+            summary="Fresh bullish",
+        )
+        for mock in [mock_technical, mock_macro, mock_sentiment]:
+            mock.return_value = AgentResult(
+                evidence=[], conviction_delta=0, summary="Neutral"
+            )
+
+        agent = OrchestratorAgent()
+        result = agent.research("TEST")
+
+        # Fresh (age=1.0) * confidence (1.0) * delta (10.0) = 10.0
+        assert result.conviction_delta == pytest.approx(10.0, rel=0.01)
+
+    @patch.object(FundamentalsAgent, "research")
+    @patch.object(TechnicalAgent, "research")
+    @patch.object(MacroAgent, "research")
+    @patch.object(SentimentAgent, "research")
+    def test_stale_evidence_reduces_conviction(
+        self, mock_sentiment, mock_macro, mock_technical, mock_fundamentals
+    ):
+        """Stale evidence reduces conviction impact."""
+        from cents.agents.orchestrator import AGE_WEIGHT_FLOOR
+        from cents.models import Evidence, ThesisDimension
+
+        # Stale technical evidence (older than 7 day TTL)
+        stale_evidence = Evidence(
+            thesis_id="test",
+            agent="technical",
+            type=EvidenceType.SUPPORTING,
+            content="Stale technical data",
+            source="test",
+            confidence=1.0,
+            timestamp=datetime.now() - timedelta(days=14),  # 2x TTL
+            dimension=ThesisDimension.TECHNICAL,
+        )
+
+        mock_technical.return_value = AgentResult(
+            evidence=[stale_evidence],
+            conviction_delta=10.0,
+            summary="Stale bullish",
+        )
+        for mock in [mock_fundamentals, mock_macro, mock_sentiment]:
+            mock.return_value = AgentResult(
+                evidence=[], conviction_delta=0, summary="Neutral"
+            )
+
+        agent = OrchestratorAgent()
+        result = agent.research("TEST")
+
+        # Stale (age=0.1) * confidence (1.0) * delta (10.0) = 1.0
+        assert result.conviction_delta == pytest.approx(10.0 * AGE_WEIGHT_FLOOR, rel=0.01)

@@ -1,5 +1,7 @@
 """Orchestrator agent - runs and synthesizes all agents."""
 
+from datetime import datetime
+
 from cents.agents.base import BaseAgent, AgentResult
 from cents.agents.fundamentals import FundamentalsAgent
 from cents.agents.technical import TechnicalAgent
@@ -8,6 +10,42 @@ from cents.agents.sentiment import SentimentAgent
 from cents.agents.moat import MoatAgent
 from cents.agents.insider import InsiderAgent
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
+
+# Evidence TTL by dimension (days) - older evidence is weighted less
+DIMENSION_TTL_DAYS: dict[str, int] = {
+    "technical": 7,
+    "sentiment": 7,
+    "macro": 30,
+    "valuation": 30,
+    "quality": 90,
+    "moat": 90,
+    "risk": 30,
+}
+DEFAULT_TTL_DAYS = 30
+AGE_WEIGHT_FLOOR = 0.1  # Minimum weight for very old evidence
+
+
+def evidence_age_weight(evidence: Evidence) -> float:
+    """Calculate age-based weight for evidence.
+
+    Returns 1.0 for fresh evidence, decaying linearly to AGE_WEIGHT_FLOOR
+    as evidence approaches its dimension-specific TTL.
+
+    Evidence older than TTL still gets AGE_WEIGHT_FLOOR (not fully ignored)
+    to preserve historical context.
+    """
+    dimension = evidence.dimension.value if evidence.dimension else None
+    ttl = DIMENSION_TTL_DAYS.get(dimension, DEFAULT_TTL_DAYS)
+
+    age_days = (datetime.now() - evidence.timestamp).days
+    if age_days <= 0:
+        return 1.0
+    if age_days >= ttl:
+        return AGE_WEIGHT_FLOOR
+
+    # Linear decay from 1.0 to AGE_WEIGHT_FLOOR over TTL period
+    decay_range = 1.0 - AGE_WEIGHT_FLOOR
+    return 1.0 - (age_days / ttl) * decay_range
 
 
 class OrchestratorAgent(BaseAgent):
@@ -27,16 +65,24 @@ class OrchestratorAgent(BaseAgent):
         ]
 
     def _weighted_conviction(self, result: AgentResult) -> float:
-        """Weight conviction delta by average evidence confidence.
+        """Weight conviction delta by evidence confidence and age.
 
-        High-confidence evidence should influence conviction more than
-        low-confidence evidence. If no evidence, use raw delta.
+        High-confidence, fresh evidence influences conviction more than
+        low-confidence or stale evidence. If no evidence, use raw delta.
+
+        The weighting combines:
+        - Confidence (0-1): How certain the agent is about the finding
+        - Age weight (0.1-1): How fresh the evidence is (decays per dimension TTL)
         """
         if not result.evidence or result.conviction_delta == 0:
             return result.conviction_delta
 
-        avg_confidence = sum(e.confidence for e in result.evidence) / len(result.evidence)
-        return result.conviction_delta * avg_confidence
+        # Weight each evidence by both confidence and age
+        weighted_sum = sum(
+            e.confidence * evidence_age_weight(e) for e in result.evidence
+        )
+        avg_weighted = weighted_sum / len(result.evidence)
+        return result.conviction_delta * avg_weighted
 
     def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Run all agents and synthesize results."""
