@@ -282,8 +282,19 @@ class EvidenceRepository:
     def __init__(self, conn: sqlite3.Connection | None = None):
         self.conn = conn or get_connection()
 
-    def create(self, evidence: Evidence) -> Evidence:
-        """Insert new evidence."""
+    def create(self, evidence: Evidence, dedupe: bool = False) -> Evidence | None:
+        """Insert new evidence.
+
+        Args:
+            evidence: The evidence to insert
+            dedupe: If True, skip insert if similar evidence exists (same agent + content)
+
+        Returns:
+            The evidence if inserted, None if skipped due to deduplication
+        """
+        if dedupe and self.exists_similar(evidence):
+            return None
+
         self.conn.execute(
             """
             INSERT INTO evidence (id, thesis_id, symbol, agent, type, content, source, confidence, dimension, metadata, timestamp)
@@ -305,6 +316,25 @@ class EvidenceRepository:
         )
         self.conn.commit()
         return evidence
+
+    def exists_similar(self, evidence: Evidence) -> bool:
+        """Check if similar evidence already exists.
+
+        Matches on (thesis_id OR symbol) + agent + content.
+        """
+        if evidence.thesis_id:
+            cursor = self.conn.execute(
+                "SELECT 1 FROM evidence WHERE thesis_id = ? AND agent = ? AND content = ? LIMIT 1",
+                (evidence.thesis_id, evidence.agent, evidence.content),
+            )
+        elif evidence.symbol:
+            cursor = self.conn.execute(
+                "SELECT 1 FROM evidence WHERE symbol = ? AND agent = ? AND content = ? LIMIT 1",
+                (evidence.symbol, evidence.agent, evidence.content),
+            )
+        else:
+            return False
+        return cursor.fetchone() is not None
 
     def list_for_thesis(self, thesis_id: str) -> list[Evidence]:
         """List all evidence for a thesis."""

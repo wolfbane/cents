@@ -73,21 +73,30 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
 
         # Save evidence and update conviction if --apply
         evidence_saved = 0
+        evidence_skipped = 0
         if apply_changes and result.evidence:
             for e in result.evidence:
                 e.symbol = item.symbol
                 if thesis:
                     e.thesis_id = thesis.id
-                evidence_repo.create(e)
-                evidence_saved += 1
+                if evidence_repo.create(e, dedupe=True):
+                    evidence_saved += 1
+                else:
+                    evidence_skipped += 1
 
-            if thesis:
-                thesis.update_conviction(result.conviction_delta)
+            # Only update conviction if we actually added new evidence
+            if evidence_saved > 0 and thesis:
+                # Scale delta by proportion of new evidence
+                scale = evidence_saved / (evidence_saved + evidence_skipped)
+                scaled_delta = result.conviction_delta * scale
+                thesis.update_conviction(scaled_delta)
                 thesis_repo.update(thesis)
                 if verbose:
-                    click.echo(f"  Applied: {evidence_saved} evidence, conviction now {thesis.conviction:.1f}%")
-            elif verbose:
-                click.echo(f"  Saved {evidence_saved} evidence (no thesis linked)")
+                    click.echo(f"  Applied: {evidence_saved} new evidence ({evidence_skipped} duplicates skipped), conviction now {thesis.conviction:.1f}%")
+            elif evidence_saved > 0 and verbose:
+                click.echo(f"  Saved {evidence_saved} new evidence ({evidence_skipped} duplicates skipped, no thesis linked)")
+            elif verbose and evidence_skipped > 0:
+                click.echo(f"  No new evidence ({evidence_skipped} duplicates skipped)")
 
         effective_threshold = item.threshold if item.threshold is not None else threshold
         destination = webhook or item.alert_destination or settings.default_webhook

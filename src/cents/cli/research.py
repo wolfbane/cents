@@ -98,25 +98,36 @@ def research(
         total_conviction_delta = sum(agent_deltas.values())
 
     evidence_saved = False
+    evidence_count = 0
+    evidence_skipped = 0
     if save and all_evidence:
         evidence_repo = EvidenceRepository()
         for e in all_evidence:
             e.symbol = symbol.upper()
             if thesis:
                 e.thesis_id = thesis.id
-            evidence_repo.create(e)
-        evidence_saved = True
+            if evidence_repo.create(e, dedupe=True):
+                evidence_count += 1
+            else:
+                evidence_skipped += 1
+        evidence_saved = evidence_count > 0
 
-        if thesis:
+        if thesis and evidence_count > 0:
+            # Scale delta by proportion of new evidence
+            scale = evidence_count / (evidence_count + evidence_skipped)
+            scaled_delta = total_conviction_delta * scale
             thesis_repo = ThesisRepository()
-            thesis.update_conviction(total_conviction_delta)
+            thesis.update_conviction(scaled_delta)
             thesis_repo.update(thesis)
 
         if verbose:
-            click.echo(f"Saved {len(all_evidence)} evidence items")
+            if evidence_skipped > 0:
+                click.echo(f"Saved {evidence_count} evidence items ({evidence_skipped} duplicates skipped)")
+            else:
+                click.echo(f"Saved {evidence_count} evidence items")
             if thesis:
                 click.echo(f"Thesis conviction: {thesis.conviction:.1f}% ({total_conviction_delta:+.1f})")
-            else:
+            elif evidence_count > 0:
                 click.echo(f"Evidence saved for {symbol.upper()} (no thesis linked)")
                 click.echo(f"Link later with: cents evidence link {symbol.upper()} --thesis <ID>")
 
