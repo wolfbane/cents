@@ -6,7 +6,7 @@ from datetime import datetime as dt
 import click
 
 from cents.agents import OrchestratorAgent
-from cents.db import WatchlistRepository, AlertRepository, ThesisRepository
+from cents.db import WatchlistRepository, AlertRepository, ThesisRepository, EvidenceRepository
 from cents.models import Alert, AlertType, ThesisStatus
 from cents.notify import notify
 
@@ -31,7 +31,8 @@ from ._shared import get_settings_lazy, generate_thesis_suggestion
 @click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
 @click.option("--expiry-days", type=int, default=7, help="Days before expiry to alert")
 @click.option("--batch-suggest", is_flag=True, help="Generate thesis suggestions for all symbols")
-def scan(threshold: float | None, webhook: str | None, output: str | None, quiet: bool, expiry_days: int, batch_suggest: bool):
+@click.option("--apply", "apply_changes", is_flag=True, help="Save evidence and update thesis conviction")
+def scan(threshold: float | None, webhook: str | None, output: str | None, quiet: bool, expiry_days: int, batch_suggest: bool, apply_changes: bool):
     """Scan watchlist and generate alerts for significant changes."""
     settings = get_settings_lazy()
     if threshold is None:
@@ -43,6 +44,7 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
     watch_repo = WatchlistRepository()
     alert_repo = AlertRepository()
     thesis_repo = ThesisRepository()
+    evidence_repo = EvidenceRepository() if apply_changes else None
 
     items = watch_repo.list()
     if not items:
@@ -68,6 +70,24 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
         # Run orchestrator
         agent = OrchestratorAgent()
         result = agent.research(item.symbol, thesis)
+
+        # Save evidence and update conviction if --apply
+        evidence_saved = 0
+        if apply_changes and result.evidence:
+            for e in result.evidence:
+                e.symbol = item.symbol
+                if thesis:
+                    e.thesis_id = thesis.id
+                evidence_repo.create(e)
+                evidence_saved += 1
+
+            if thesis:
+                thesis.update_conviction(result.conviction_delta)
+                thesis_repo.update(thesis)
+                if verbose:
+                    click.echo(f"  Applied: {evidence_saved} evidence, conviction now {thesis.conviction:.1f}%")
+            elif verbose:
+                click.echo(f"  Saved {evidence_saved} evidence (no thesis linked)")
 
         effective_threshold = item.threshold if item.threshold is not None else threshold
         destination = webhook or item.alert_destination or settings.default_webhook
@@ -153,6 +173,8 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
             "alert_message": alert_message,
             "alert_destination": destination if triggered else None,
             "expiry_alert": expiry_alert.message if expiry_alert else None,
+            "evidence_saved": evidence_saved,
+            "conviction_updated": thesis.conviction if (apply_changes and thesis) else None,
         }
 
         # Generate thesis suggestion if requested
