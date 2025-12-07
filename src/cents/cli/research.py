@@ -1,6 +1,7 @@
 """Research CLI command."""
 
 import json
+import logging
 
 import click
 
@@ -9,6 +10,8 @@ from cents.db import ThesisRepository, EvidenceRepository
 
 from cents.serialization import serialize
 from ._shared import get_settings_lazy, validate_symbol, generate_thesis_suggestion
+
+logger = logging.getLogger(__name__)
 
 
 @click.command("research")
@@ -63,6 +66,18 @@ def research(
         agents_to_run = {agent_name: AGENTS[agent_name]}
     else:
         agents_to_run = {"orchestrator": AGENTS["orchestrator"]}
+
+    # Fetch current price
+    price: float | None = None
+    try:
+        from cents.data.alpaca import get_price_provider
+        provider = get_price_provider()
+        price = provider.get_latest_price(symbol.upper())
+    except Exception as e:
+        logger.debug("Could not fetch price: %s", e)
+
+    if verbose and price:
+        click.echo(f"Current price: ${price:.2f}\n")
 
     all_evidence = []
     agent_outputs = []
@@ -145,6 +160,7 @@ def research(
     if output == "json":
         payload = {
             "symbol": symbol.upper(),
+            "price": price,
             "thesis_id": thesis.id if thesis else None,
             "total_conviction_delta": total_conviction_delta,
             "agents": agent_outputs,

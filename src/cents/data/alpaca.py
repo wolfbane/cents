@@ -94,6 +94,37 @@ class AlpacaPriceProvider:
 
         return PriceHistory(symbol=symbol, bars=bars)
 
+    def get_latest_prices(
+        self, symbols: list[str]
+    ) -> dict[str, float]:
+        """
+        Get latest quote midpoints for multiple symbols (batch).
+
+        Args:
+            symbols: List of ticker symbols
+
+        Returns:
+            Dict mapping symbol to price (missing symbols excluded)
+        """
+        if not symbols:
+            return {}
+        try:
+            request = StockLatestQuoteRequest(symbol_or_symbols=symbols)
+            quotes = self._client.get_stock_latest_quote(request)
+
+            prices = {}
+            for sym in symbols:
+                if sym in quotes:
+                    quote = quotes[sym]
+                    if quote.bid_price and quote.ask_price:
+                        prices[sym] = (float(quote.bid_price) + float(quote.ask_price)) / 2
+                    elif quote.ask_price or quote.bid_price:
+                        prices[sym] = float(quote.ask_price or quote.bid_price)
+            return prices
+        except Exception as e:
+            logger.warning("Failed to get batch prices: %s", e)
+            return {}
+
     def get_latest_price(
         self, symbol: str, as_of: date | None = None
     ) -> float | None:

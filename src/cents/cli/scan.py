@@ -1,6 +1,7 @@
 """Scan command for watchlist monitoring."""
 
 import json
+import logging
 from datetime import datetime as dt
 
 import click
@@ -12,6 +13,8 @@ from cents.notify import notify
 
 from cents.serialization import serialize
 from ._shared import get_settings_lazy, generate_thesis_suggestion
+
+logger = logging.getLogger(__name__)
 
 
 @click.command("scan")
@@ -58,12 +61,23 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
     if verbose:
         click.echo(f"Scanning {len(items)} symbols...\n")
 
+    # Fetch current prices for all symbols
+    prices: dict[str, float] = {}
+    try:
+        from cents.data.alpaca import get_price_provider
+        provider = get_price_provider()
+        prices = provider.get_latest_prices([item.symbol for item in items])
+    except Exception as e:
+        logger.debug("Could not fetch prices: %s", e)
+
     alerts_generated = 0
     scan_results: list[dict] = []
 
     for item in items:
+        price = prices.get(item.symbol)
+        price_str = f" @ ${price:.2f}" if price else ""
         if verbose:
-            click.echo(f"--- {item.symbol} ---")
+            click.echo(f"--- {item.symbol}{price_str} ---")
 
         # Get linked thesis if any
         thesis = thesis_repo.get(item.thesis_id) if item.thesis_id else None
@@ -175,6 +189,7 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
 
         scan_result = {
             "symbol": item.symbol,
+            "price": price,
             "summary": result.summary,
             "conviction_delta": result.conviction_delta,
             "dimension_scores": result.dimension_scores,

@@ -86,3 +86,4 @@ When creating theses with `--target-price` or `--stop-price`, anchor to real dat
 ## Beads
 
 `bd dep add A B` means "A is blocked by B" (B must complete before A can start).
+- Always include the current price
