@@ -7,7 +7,8 @@ import click
 from cents.agents import AGENTS
 from cents.db import ThesisRepository, EvidenceRepository
 
-from ._shared import get_settings_lazy, validate_symbol, generate_thesis_suggestion, evidence_to_dict
+from cents.serialization import serialize
+from ._shared import get_settings_lazy, validate_symbol, generate_thesis_suggestion
 
 
 @click.command("research")
@@ -88,7 +89,7 @@ def research(
                 "agent": name,
                 "summary": result.summary,
                 "conviction_delta": result.conviction_delta,
-                "evidence": [evidence_to_dict(e) for e in result.evidence],
+                "evidence": [serialize(e) for e in result.evidence],
             }
         )
 

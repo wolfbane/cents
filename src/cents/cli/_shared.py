@@ -6,7 +6,6 @@ from typing import Any, TypedDict
 import click
 
 from cents.config import get_settings
-from cents.models import Evidence
 
 
 class ThesisSuggestion(TypedDict):
@@ -136,21 +135,3 @@ def generate_thesis_suggestion(
     suggestion["conviction"] = max(0, min(100, suggestion["conviction"]))
 
     return suggestion
-
-
-def evidence_to_dict(evidence: Evidence) -> dict[str, Any]:
-    """Serialize an Evidence object to a dictionary for JSON output.
-
-    Args:
-        evidence: Evidence model instance to serialize
-
-    Returns:
-        Dict with type, content, source, confidence, and metadata fields
-    """
-    return {
-        "type": evidence.type.value,
-        "content": evidence.content,
-        "source": evidence.source,
-        "confidence": evidence.confidence,
-        "metadata": evidence.metadata,
-    }

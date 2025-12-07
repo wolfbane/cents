@@ -10,6 +10,7 @@ from cents.db import WatchlistRepository, AlertRepository, ThesisRepository, Evi
 from cents.models import Alert, AlertType, ThesisStatus
 from cents.notify import notify
 
+from cents.serialization import serialize
 from ._shared import get_settings_lazy, generate_thesis_suggestion
 
 
@@ -188,21 +189,11 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
 
         # Generate thesis suggestion if requested
         if batch_suggest:
-            # Collect evidence as dicts for suggestion generation
-            evidence_dicts = []
-            for ev in result.evidence:
-                evidence_dicts.append({
-                    "agent": ev.agent,
-                    "type": ev.type.value,
-                    "content": ev.content,
-                    "dimension": ev.dimension.value if ev.dimension else None,
-                    "metadata": ev.metadata,
-                })
             agent_outputs = [{
                 "agent": "orchestrator",
                 "summary": result.summary,
                 "conviction_delta": result.conviction_delta,
-                "evidence": evidence_dicts,
+                "evidence": [serialize(ev) for ev in result.evidence],
             }]
             suggestion = generate_thesis_suggestion(
                 item.symbol, agent_outputs, result.conviction_delta

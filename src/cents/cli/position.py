@@ -7,6 +7,7 @@ import click
 from cents.db import PositionRepository, ThesisRepository
 from cents.models import Position, PositionSide, PositionStatus
 
+from cents.serialization import serialize
 from ._shared import validate_symbol, get_settings_lazy
 
 
@@ -99,25 +100,7 @@ def position_list(status: str | None, output: str | None):
     positions = repo.list(status=status_filter)
 
     if output == "json":
-        result = [
-            {
-                "id": p.id,
-                "symbol": p.symbol,
-                "side": p.side.value,
-                "size": p.size,
-                "entry_price": p.entry_price,
-                "entry_date": p.entry_date.isoformat(),
-                "status": p.status.value,
-                "exit_price": p.exit_price,
-                "exit_date": p.exit_date.isoformat() if p.exit_date else None,
-                "pnl": p.pnl,
-                "pnl_pct": p.pnl_pct,
-                "thesis_id": p.thesis_id,
-                "paper": p.paper,
-            }
-            for p in positions
-        ]
-        click.echo(json.dumps(result, indent=2))
+        click.echo(json.dumps([serialize(p) for p in positions], indent=2))
         return
 
     if not positions:

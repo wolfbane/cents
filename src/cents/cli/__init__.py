@@ -30,8 +30,8 @@ from .evidence import evidence
 from ._shared import (
     validate_symbol,
     generate_thesis_suggestion as _generate_thesis_suggestion,
-    evidence_to_dict as _evidence_to_dict,
 )
+from cents.serialization import serialize as _serialize
 
 
 @click.group()

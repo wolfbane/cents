@@ -5,6 +5,7 @@ import json
 import click
 
 from cents.db import EvidenceRepository, ThesisRepository
+from cents.serialization import serialize
 
 from ._shared import validate_symbol
 
@@ -37,22 +38,7 @@ def evidence_list(symbol: str | None, orphans: bool, output: str):
         items = repo.list_orphans()
 
     if output == "json":
-        data = [
-            {
-                "id": e.id,
-                "symbol": e.symbol,
-                "thesis_id": e.thesis_id,
-                "agent": e.agent,
-                "type": e.type.value,
-                "content": e.content,
-                "source": e.source,
-                "confidence": e.confidence,
-                "dimension": e.dimension.value if e.dimension else None,
-                "timestamp": e.timestamp.isoformat(),
-            }
-            for e in items
-        ]
-        click.echo(json.dumps(data, indent=2))
+        click.echo(json.dumps([serialize(e) for e in items], indent=2))
     else:
         if not items:
             if orphans:
