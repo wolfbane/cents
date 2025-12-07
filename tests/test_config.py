@@ -20,6 +20,7 @@ class TestSettings:
         assert s.fmp_api_key is None
         assert s.alpaca_api_key is None
         assert s.alpaca_secret_key is None
+        assert s.anthropic_api_key is None
         assert s.default_scan_threshold == 5.0
         assert s.default_webhook is None
         assert s.default_output == "text"
@@ -101,6 +102,7 @@ default_output = "json"
             "FMP_API_KEY": "fmp",
             "ALPACA_API_KEY": "alpaca",
             "ALPACA_SECRET_KEY": "secret",
+            "ANTHROPIC_API_KEY": "anthropic",
             "CENTS_SCAN_THRESHOLD": "8.0",
             "CENTS_WEBHOOK_URL": "https://hook.test",
             "CENTS_OUTPUT_FORMAT": "json",
@@ -113,6 +115,7 @@ default_output = "json"
         assert settings.fmp_api_key == "fmp"
         assert settings.alpaca_api_key == "alpaca"
         assert settings.alpaca_secret_key == "secret"
+        assert settings.anthropic_api_key == "anthropic"
         assert settings.default_scan_threshold == 8.0
         assert settings.default_webhook == "https://hook.test"
         assert settings.default_output == "json"

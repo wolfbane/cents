@@ -24,6 +24,7 @@ class Settings:
     fmp_api_key: str | None = None
     alpaca_api_key: str | None = None
     alpaca_secret_key: str | None = None
+    anthropic_api_key: str | None = None
     default_scan_threshold: float = 5.0
     default_webhook: str | None = None
     default_output: str = "text"
@@ -92,6 +93,7 @@ def get_settings(config_path: str | None = None) -> Settings:
         fmp_api_key=_get("fmp_api_key", "FMP_API_KEY", None),
         alpaca_api_key=_get("alpaca_api_key", "ALPACA_API_KEY", None),
         alpaca_secret_key=_get("alpaca_secret_key", "ALPACA_SECRET_KEY", None),
+        anthropic_api_key=_get("anthropic_api_key", "ANTHROPIC_API_KEY", None),
         default_scan_threshold=threshold_value,
         default_webhook=_get("default_webhook", "CENTS_WEBHOOK_URL", None),
         default_output=default_output,

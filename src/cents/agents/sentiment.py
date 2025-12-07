@@ -1,12 +1,19 @@
 """Sentiment agent - analyzes news and market sentiment."""
 
 import json
+import logging
 from urllib.request import urlopen, Request
 from urllib.parse import quote
 
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
+
+
+logger = logging.getLogger(__name__)
+
+# Module-level cache for LLM article scores (keyed by URL)
+_article_score_cache: dict[str, dict] = {}
 
 
 class SentimentAgent(BaseAgent):
@@ -36,11 +43,27 @@ class SentimentAgent(BaseAgent):
     }
     NEGATION_WINDOW = 3  # Check this many words before the sentiment word
 
-    def __init__(self):
+    def __init__(self, anthropic_client=None):
         super().__init__()
         settings = get_settings()
         self.news_api_key = settings.news_api_key
+        self.anthropic_api_key = settings.anthropic_api_key
         self._timeout = settings.default_api_timeout
+        self._anthropic_client = anthropic_client
+
+    def _get_anthropic_client(self):
+        """Get or create anthropic client."""
+        if self._anthropic_client is not None:
+            return self._anthropic_client
+        if not self.anthropic_api_key:
+            return None
+        try:
+            import anthropic
+            self._anthropic_client = anthropic.Anthropic(api_key=self.anthropic_api_key)
+            return self._anthropic_client
+        except ImportError:
+            logger.warning("anthropic package not installed")
+            return None
 
     def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Analyze news sentiment for a symbol."""
@@ -57,7 +80,7 @@ class SentimentAgent(BaseAgent):
                     conviction_delta=0,
                     summary=f"{symbol}: No recent news found",
                 )
-            return self._analyze_articles(articles, symbol, thesis_id)
+            return self._analyze_articles(articles, symbol, thesis, thesis_id)
         except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)
 
@@ -115,33 +138,206 @@ class SentimentAgent(BaseAgent):
 
         return pos_count, neg_count
 
+    def _score_article(self, article: dict) -> tuple[EvidenceType, int, float, dict]:
+        """Score an article using keyword-based sentiment (fallback).
+
+        Returns (evidence_type, score, confidence, metadata).
+        """
+        title = article.get("title", "")
+        description = article.get("description", "") or ""
+
+        text = f"{title} {description}"
+        pos_count, neg_count = self._count_sentiment_words(text)
+
+        if pos_count > neg_count:
+            ev_type = EvidenceType.SUPPORTING
+            score = min(pos_count - neg_count, 3)
+        elif neg_count > pos_count:
+            ev_type = EvidenceType.CONTRADICTING
+            score = -min(neg_count - pos_count, 3)
+        else:
+            ev_type = EvidenceType.NEUTRAL
+            score = 0
+
+        return ev_type, score, 0.5, {
+            "positive_words": pos_count,
+            "negative_words": neg_count,
+            "scoring_method": "keyword",
+        }
+
+    def _filter_relevant_articles(
+        self, articles: list[dict], symbol: str, thesis: Thesis | None
+    ) -> list[dict]:
+        """Use LLM to filter relevant articles. Returns relevant articles."""
+        client = self._get_anthropic_client()
+        if not client or len(articles) == 0:
+            return articles[:5]
+
+        # Build article list for prompt
+        article_list = []
+        for i, article in enumerate(articles[:10]):
+            title = article.get("title", "No title")
+            snippet = (article.get("description", "") or "")[:200]
+            article_list.append(f"{i}. {title}\n   {snippet}")
+
+        hypothesis = thesis.hypothesis if thesis else "General investment analysis"
+
+        prompt = f"""Given these news articles about {symbol}, which are relevant to evaluating this investment thesis?
+Thesis: {hypothesis}
+
+Articles:
+{chr(10).join(article_list)}
+
+Return only the indices (0-based) of relevant articles, one per line. Filter out:
+- PyPI/npm package releases
+- Job postings
+- Unrelated companies with similar names
+- Press releases with no real news
+
+Return 3-5 relevant indices, or fewer if less are relevant."""
+
+        try:
+            response = client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=100,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.content[0].text.strip()
+
+            # Parse indices from response
+            indices = []
+            for line in text.split("\n"):
+                line = line.strip()
+                # Extract digits from each line
+                for word in line.split():
+                    if word.isdigit():
+                        idx = int(word)
+                        if 0 <= idx < len(articles):
+                            indices.append(idx)
+                        break
+
+            if indices:
+                return [articles[i] for i in indices[:5]]
+        except Exception as e:
+            logger.warning(f"LLM filter failed: {e}")
+
+        # Fallback to first 5
+        return articles[:5]
+
+    def _score_with_llm(
+        self, article: dict, symbol: str, thesis: Thesis | None
+    ) -> tuple[EvidenceType, float, float, dict]:
+        """Score an article using LLM. Returns (evidence_type, score, confidence, metadata)."""
+        url = article.get("url", "")
+
+        # Check cache
+        if url and url in _article_score_cache:
+            cached = _article_score_cache[url]
+            return (
+                cached["evidence_type"],
+                cached["score"],
+                cached["confidence"],
+                cached["metadata"],
+            )
+
+        client = self._get_anthropic_client()
+        if not client:
+            return self._score_article(article)
+
+        title = article.get("title", "No title")
+        snippet = (article.get("description", "") or "")[:500]
+        hypothesis = thesis.hypothesis if thesis else "General investment"
+
+        prompt = f"""Score the sentiment of this news for the investment thesis.
+Symbol: {symbol}
+Thesis: {hypothesis}
+
+Article: {title} - {snippet}
+
+Return a JSON object: {{"score": <-1 to 1>, "reasoning": "<brief explanation>"}}
+Score meaning: -1 = very bearish for thesis, 0 = neutral, +1 = very bullish for thesis."""
+
+        try:
+            response = client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=150,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.content[0].text.strip()
+
+            # Parse JSON from response (may have text before/after)
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                result = json.loads(text[start:end])
+                score = float(result.get("score", 0))
+                reasoning = result.get("reasoning", "")
+
+                # Clamp score to [-1, 1]
+                score = max(-1.0, min(1.0, score))
+
+                if score > 0.2:
+                    ev_type = EvidenceType.SUPPORTING
+                elif score < -0.2:
+                    ev_type = EvidenceType.CONTRADICTING
+                else:
+                    ev_type = EvidenceType.NEUTRAL
+
+                # Higher confidence for LLM scoring (0.7-0.9 based on score magnitude)
+                confidence = 0.7 + 0.2 * abs(score)
+
+                metadata = {
+                    "llm_score": score,
+                    "reasoning": reasoning,
+                    "scoring_method": "llm",
+                }
+
+                # Cache result
+                if url:
+                    _article_score_cache[url] = {
+                        "evidence_type": ev_type,
+                        "score": score,
+                        "confidence": confidence,
+                        "metadata": metadata,
+                    }
+
+                return ev_type, score, confidence, metadata
+
+        except Exception as e:
+            logger.warning(f"LLM scoring failed: {e}")
+
+        # Fallback to keyword scoring
+        return self._score_article(article)
+
     def _analyze_articles(
-        self, articles: list[dict], symbol: str, thesis_id: str
+        self, articles: list[dict], symbol: str, thesis: Thesis | None, thesis_id: str
     ) -> AgentResult:
         """Analyze sentiment of news articles."""
         evidence = []
-        total_score = 0
+        total_score = 0.0
         summaries = []
 
-        for article in articles[:5]:  # Analyze top 5
+        # Use LLM to filter relevant articles if available
+        client = self._get_anthropic_client()
+        if client:
+            filtered_articles = self._filter_relevant_articles(articles, symbol, thesis)
+        else:
+            filtered_articles = articles[:5]
+
+        for article in filtered_articles:
             title = article.get("title", "")
-            description = article.get("description", "") or ""
             source = article.get("source", {}).get("name", "Unknown")
             url = article.get("url", "")
 
-            # Keyword sentiment with negation detection
-            text = f"{title} {description}"
-            pos_count, neg_count = self._count_sentiment_words(text)
-
-            if pos_count > neg_count:
-                ev_type = EvidenceType.SUPPORTING
-                score = min(pos_count - neg_count, 3)
-            elif neg_count > pos_count:
-                ev_type = EvidenceType.CONTRADICTING
-                score = -min(neg_count - pos_count, 3)
+            # Use LLM scoring if available, otherwise keyword scoring
+            if client:
+                ev_type, score, confidence, metadata = self._score_with_llm(
+                    article, symbol, thesis
+                )
+                # Scale LLM score (-1 to 1) to match keyword scale (-3 to 3)
+                score = score * 3
             else:
-                ev_type = EvidenceType.NEUTRAL
-                score = 0
+                ev_type, score, confidence, metadata = self._score_article(article)
 
             total_score += score
 
@@ -151,12 +347,9 @@ class SentimentAgent(BaseAgent):
                     content=f"{title[:80]}..." if len(title) > 80 else title,
                     source=f"{source}: {url}" if url else source,
                     evidence_type=ev_type,
-                    confidence=0.5,  # Keyword analysis is low confidence
+                    confidence=confidence,
                     dimension=ThesisDimension.SENTIMENT,
-                    metadata={
-                        "positive_words": pos_count,
-                        "negative_words": neg_count,
-                    },
+                    metadata=metadata,
                 )
             )
 
@@ -171,7 +364,11 @@ class SentimentAgent(BaseAgent):
         else:
             summaries.append("Mixed/neutral news sentiment")
 
-        summary = f"{symbol}: " + "; ".join(summaries) + f" ({len(articles)} articles)"
+        # Note if LLM was used
+        if client:
+            summaries.append("LLM-enhanced analysis")
+
+        summary = f"{symbol}: " + "; ".join(summaries) + f" ({len(filtered_articles)} articles)"
 
         return AgentResult(
             evidence=evidence,
@@ -203,3 +400,8 @@ class SentimentAgent(BaseAgent):
                 "(get a free key at newsapi.org)"
             ),
         )
+
+
+def clear_sentiment_cache():
+    """Clear the article score cache. Useful for testing."""
+    _article_score_cache.clear()
