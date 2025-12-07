@@ -477,8 +477,8 @@ class TestAlpacaPriceProvider:
 
     @patch("cents.data.alpaca.StockHistoricalDataClient")
     @patch("cents.data.alpaca.get_settings")
-    def test_get_latest_price_ask_only(self, mock_settings, mock_client_class):
-        """Use ask price when bid not available."""
+    def test_get_latest_price_ask_only_falls_back_to_close(self, mock_settings, mock_client_class):
+        """Fall back to last close when only ask available (no bid)."""
         mock_settings.return_value.alpaca_api_key = "test_key"
         mock_settings.return_value.alpaca_secret_key = "test_secret"
 
@@ -486,14 +486,20 @@ class TestAlpacaPriceProvider:
         mock_quote.bid_price = None
         mock_quote.ask_price = 150.10
 
+        # Mock bar data for fallback
+        mock_bar = MagicMock()
+        mock_bar.close = 149.50
+
         mock_client = MagicMock()
         mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
+        mock_client.get_stock_bars.return_value.data = {"AAPL": [mock_bar]}
         mock_client_class.return_value = mock_client
 
         provider = AlpacaPriceProvider()
         price = provider.get_latest_price("AAPL")
 
-        assert price == 150.10
+        # Should use last close, not ask
+        assert price == 149.50
 
     @patch("cents.data.alpaca.StockHistoricalDataClient")
     @patch("cents.data.alpaca.get_settings")

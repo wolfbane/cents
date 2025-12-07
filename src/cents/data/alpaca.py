@@ -23,6 +23,9 @@ except ImportError:
 class AlpacaPriceProvider:
     """Price data provider using Alpaca Market Data API."""
 
+    # Max bid/ask spread as percentage of midpoint before falling back to close
+    MAX_SPREAD_PCT = 0.02  # 2%
+
     def __init__(self, api_key: str | None = None, secret_key: str | None = None):
         """
         Initialize Alpaca data client.
@@ -94,11 +97,31 @@ class AlpacaPriceProvider:
 
         return PriceHistory(symbol=symbol, bars=bars)
 
+    def _get_last_closes(self, symbols: list[str]) -> dict[str, float]:
+        """Fetch last daily close for multiple symbols."""
+        closes = {}
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=symbols,
+                timeframe=TimeFrame.Day,
+                start=datetime.now() - timedelta(days=5),
+                end=datetime.now(),
+            )
+            bars = self._client.get_stock_bars(request)
+            for sym in symbols:
+                if sym in bars.data and bars.data[sym]:
+                    closes[sym] = float(bars.data[sym][-1].close)
+        except Exception as e:
+            logger.debug("Failed to get closes: %s", e)
+        return closes
+
     def get_latest_prices(
         self, symbols: list[str]
     ) -> dict[str, float]:
         """
-        Get latest quote midpoints for multiple symbols (batch).
+        Get latest prices for multiple symbols (batch).
+
+        Uses quote midpoint if spread is tight, otherwise falls back to last close.
 
         Args:
             symbols: List of ticker symbols
@@ -113,13 +136,29 @@ class AlpacaPriceProvider:
             quotes = self._client.get_stock_latest_quote(request)
 
             prices = {}
+            need_close = []
+
             for sym in symbols:
                 if sym in quotes:
                     quote = quotes[sym]
-                    if quote.bid_price and quote.ask_price:
-                        prices[sym] = (float(quote.bid_price) + float(quote.ask_price)) / 2
-                    elif quote.ask_price or quote.bid_price:
-                        prices[sym] = float(quote.ask_price or quote.bid_price)
+                    bid = float(quote.bid_price) if quote.bid_price else 0
+                    ask = float(quote.ask_price) if quote.ask_price else 0
+
+                    if bid and ask:
+                        mid = (bid + ask) / 2
+                        spread_pct = (ask - bid) / mid if mid else 1
+                        if spread_pct <= self.MAX_SPREAD_PCT:
+                            prices[sym] = mid
+                        else:
+                            need_close.append(sym)
+                    elif ask or bid:
+                        need_close.append(sym)
+
+            # Fall back to last close for wide spreads
+            if need_close:
+                closes = self._get_last_closes(need_close)
+                prices.update(closes)
+
             return prices
         except Exception as e:
             logger.warning("Failed to get batch prices: %s", e)
@@ -129,14 +168,16 @@ class AlpacaPriceProvider:
         self, symbol: str, as_of: date | None = None
     ) -> float | None:
         """
-        Get latest quote midpoint for a symbol.
+        Get latest price for a symbol.
+
+        Uses quote midpoint if spread is tight, otherwise falls back to last close.
 
         Args:
             symbol: Ticker symbol
             as_of: Date to get closing price for (default: current quote)
 
         Returns:
-            Latest price (bid/ask midpoint) or close price for as_of date
+            Latest price or close price for as_of date
         """
         try:
             if as_of:
@@ -149,10 +190,20 @@ class AlpacaPriceProvider:
 
             if symbol in quotes:
                 quote = quotes[symbol]
-                # Use midpoint of bid/ask, fallback to ask or bid
-                if quote.bid_price and quote.ask_price:
-                    return (float(quote.bid_price) + float(quote.ask_price)) / 2
-                return float(quote.ask_price or quote.bid_price or 0) or None
+                bid = float(quote.bid_price) if quote.bid_price else 0
+                ask = float(quote.ask_price) if quote.ask_price else 0
+
+                if bid and ask:
+                    mid = (bid + ask) / 2
+                    spread_pct = (ask - bid) / mid if mid else 1
+                    if spread_pct <= self.MAX_SPREAD_PCT:
+                        return mid
+                    # Wide spread - fall back to last close
+                    closes = self._get_last_closes([symbol])
+                    return closes.get(symbol)
+                elif ask or bid:
+                    closes = self._get_last_closes([symbol])
+                    return closes.get(symbol)
             return None
         except Exception as e:
             logger.warning("Failed to get latest price for %s: %s", symbol, e)
