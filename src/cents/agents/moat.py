@@ -78,7 +78,7 @@ class MoatAgent(BaseAgent):
                 summary=f"{symbol}: No historical data for moat analysis",
             )
 
-        thesis_id = thesis.id if thesis else "standalone"
+        thesis_id = thesis.id if thesis else None
         sector = fundamentals.sector if fundamentals else None
         company_name = fundamentals.name if fundamentals else symbol
 

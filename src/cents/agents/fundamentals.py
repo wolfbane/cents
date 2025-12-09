@@ -158,7 +158,7 @@ class FundamentalsAgent(BaseAgent):
                 summary=f"No data available for {symbol}",
             )
 
-        thesis_id = thesis.id if thesis else "standalone"
+        thesis_id = thesis.id if thesis else None
         company_name = data.name or symbol
 
         # Valuation metrics (VALUATION dimension) - sector-relative

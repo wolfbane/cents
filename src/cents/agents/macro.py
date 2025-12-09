@@ -60,7 +60,7 @@ class MacroAgent(BaseAgent):
         dimension_scores: dict[str, float] = {}
         summaries = []
 
-        thesis_id = thesis.id if thesis else "standalone"
+        thesis_id = thesis.id if thesis else None
 
         if not self.api_key:
             # Provide general macro context without FRED

@@ -86,7 +86,7 @@ class OrchestratorAgent(BaseAgent):
 
     def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Run all agents and synthesize results."""
-        thesis_id = thesis.id if thesis else "standalone"
+        thesis_id = thesis.id if thesis else None
 
         all_evidence = []
         agent_results = {}

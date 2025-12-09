@@ -67,7 +67,7 @@ class SentimentAgent(BaseAgent):
 
     def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
         """Analyze news sentiment for a symbol."""
-        thesis_id = thesis.id if thesis else "standalone"
+        thesis_id = thesis.id if thesis else None
 
         if not self.news_api_key:
             return self._research_without_api(symbol, thesis_id)

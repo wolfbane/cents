@@ -66,7 +66,7 @@ class TechnicalAgent(BaseAgent):
         conviction_delta = 0.0
         dimension_scores: dict[str, float] = {}
         summaries = []
-        thesis_id = thesis.id if thesis else "standalone"
+        thesis_id = thesis.id if thesis else None
 
         try:
             history = self._with_retries(lambda: self.provider.get_history(symbol, days=365))

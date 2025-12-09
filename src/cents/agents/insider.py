@@ -89,7 +89,7 @@ class InsiderAgent(BaseAgent):
         except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)
 
-        thesis_id = thesis.id if thesis else "standalone"
+        thesis_id = thesis.id if thesis else None
 
         # Filter to informative trades only
         informative = self._filter_informative_trades(trades)
