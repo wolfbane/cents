@@ -25,6 +25,7 @@ from .watch import watch
 from .alert import alert
 from .broker import broker
 from .evidence import evidence
+from .dataset import dataset
 
 # Re-export shared utilities for backwards compatibility with tests
 from ._shared import (
@@ -56,6 +57,7 @@ cli.add_command(watch)
 cli.add_command(alert)
 cli.add_command(broker)
 cli.add_command(evidence)
+cli.add_command(dataset)
 
 
 def main():

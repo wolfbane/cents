@@ -107,23 +107,27 @@ CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 
 
 def get_db_path() -> Path:
-    """Get the default database path.
+    """Get the database path based on configuration.
 
-    Uses ~/.cents/data/cents.db by default. Can be overridden with
-    CENTS_DB_PATH environment variable.
+    Priority:
+    1. CENTS_DB_PATH environment variable (highest)
+    2. Active dataset from ~/.cents/datasets.toml
+    3. Default: ~/.cents/data/cents.db
     """
     import os
 
-    # Allow override via environment variable
+    # 1. Allow override via environment variable (highest priority)
     if env_path := os.environ.get("CENTS_DB_PATH"):
         path = Path(env_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    # Default: ~/.cents/data/cents.db
-    data_dir = Path.home() / ".cents" / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir / "cents.db"
+    # 2. Check for active dataset
+    from cents.datasets import get_active_dataset
+
+    _name, path = get_active_dataset()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
