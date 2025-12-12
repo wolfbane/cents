@@ -357,6 +357,212 @@ def show_backtest(backtest_id: str, output: str):
                 click.echo(f"  {agent_name:<14} {len(data):<8} {avg_delta:+.2f}      {corr_str}")
 
 
+def _calculate_correlation(x: list[float], y: list[float]) -> float | None:
+    """Calculate Pearson correlation between two lists."""
+    if len(x) < 3 or len(x) != len(y):
+        return None
+
+    mean_x = sum(x) / len(x)
+    mean_y = sum(y) / len(y)
+
+    num = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
+    den_x = sum((xi - mean_x) ** 2 for xi in x) ** 0.5
+    den_y = sum((yi - mean_y) ** 2 for yi in y) ** 0.5
+
+    if den_x > 0 and den_y > 0:
+        return num / (den_x * den_y)
+    return None
+
+
+def _calculate_hit_rate(deltas: list[float], returns: list[float]) -> float | None:
+    """Calculate hit rate: % of times delta sign matches return sign."""
+    if not deltas or len(deltas) != len(returns):
+        return None
+
+    hits = sum(1 for d, r in zip(deltas, returns) if (d > 0 and r > 0) or (d < 0 and r < 0))
+    return hits / len(deltas)
+
+
+@backtest.command("analyze")
+@click.argument("backtest_id", required=False)
+@click.option("--symbol", "-s", default=None, help="Analyze all backtests for symbol")
+@click.option("--all", "analyze_all", is_flag=True, help="Analyze all backtests")
+@click.option(
+    "--output",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    help="Output format"
+)
+def analyze_backtest(backtest_id: str | None, symbol: str | None, analyze_all: bool, output: str):
+    """Analyze signal-to-return correlations.
+
+    Shows correlation and hit rate by agent across time horizons.
+
+    Examples:
+      cents backtest analyze abc123        # Single backtest
+      cents backtest analyze --symbol NVDA # All NVDA backtests
+      cents backtest analyze --all         # All backtests
+    """
+    repo = BacktestRepository()
+
+    # Gather backtests to analyze
+    if backtest_id:
+        bt = repo.get(backtest_id)
+        if bt is None:
+            click.echo(f"Backtest {backtest_id} not found.", err=True)
+            raise SystemExit(1)
+        backtests = [bt]
+    elif symbol:
+        backtests = repo.list(symbol=symbol.upper())
+        if not backtests:
+            click.echo(f"No backtests found for {symbol.upper()}.", err=True)
+            raise SystemExit(1)
+    elif analyze_all:
+        backtests = repo.list()
+        if not backtests:
+            click.echo("No backtests found.", err=True)
+            raise SystemExit(1)
+    else:
+        click.echo("Specify a backtest ID, --symbol, or --all.", err=True)
+        raise SystemExit(1)
+
+    # Collect all signals
+    all_signals = []
+    for bt in backtests:
+        all_signals.extend(repo.get_signals(bt.id))
+
+    if not all_signals:
+        click.echo("No signals found.", err=True)
+        raise SystemExit(1)
+
+    # Group by agent
+    agent_data: dict[str, list[tuple[float, dict, dict]]] = {}  # delta, returns, dimensions
+    for s in all_signals:
+        if s.agent_name not in agent_data:
+            agent_data[s.agent_name] = []
+        agent_data[s.agent_name].append((s.conviction_delta, s.forward_returns, s.dimension_scores))
+
+    # Calculate stats per agent
+    horizons = ["5d", "20d", "60d"]
+    results = []
+
+    for agent_name in sorted(agent_data.keys()):
+        data = agent_data[agent_name]
+        deltas = [d[0] for d in data]
+        n = len(deltas)
+        avg_delta = sum(deltas) / n if n else 0
+
+        agent_result = {
+            "agent": agent_name,
+            "signals": n,
+            "avg_delta": avg_delta,
+            "correlations": {},
+            "hit_rates": {},
+        }
+
+        for horizon in horizons:
+            # Filter to signals that have this horizon's returns
+            pairs = [(d[0], d[1][horizon]) for d in data if horizon in d[1]]
+            if pairs:
+                h_deltas = [p[0] for p in pairs]
+                h_returns = [p[1] for p in pairs]
+
+                corr = _calculate_correlation(h_deltas, h_returns)
+                hit = _calculate_hit_rate(h_deltas, h_returns)
+
+                agent_result["correlations"][horizon] = corr
+                agent_result["hit_rates"][horizon] = hit
+
+        results.append(agent_result)
+
+    # Also calculate dimension-level stats
+    dimension_data: dict[str, list[tuple[float, dict]]] = {}
+    for s in all_signals:
+        for dim, score in s.dimension_scores.items():
+            if dim not in dimension_data:
+                dimension_data[dim] = []
+            dimension_data[dim].append((score, s.forward_returns))
+
+    dimension_results = []
+    for dim_name in sorted(dimension_data.keys()):
+        data = dimension_data[dim_name]
+        scores = [d[0] for d in data]
+        n = len(scores)
+
+        dim_result = {
+            "dimension": dim_name,
+            "signals": n,
+            "correlations": {},
+            "hit_rates": {},
+        }
+
+        for horizon in horizons:
+            pairs = [(d[0], d[1][horizon]) for d in data if horizon in d[1]]
+            if pairs:
+                h_scores = [p[0] for p in pairs]
+                h_returns = [p[1] for p in pairs]
+
+                corr = _calculate_correlation(h_scores, h_returns)
+                hit = _calculate_hit_rate(h_scores, h_returns)
+
+                dim_result["correlations"][horizon] = corr
+                dim_result["hit_rates"][horizon] = hit
+
+        dimension_results.append(dim_result)
+
+    if output == "json":
+        click.echo(json.dumps({
+            "backtests": len(backtests),
+            "total_signals": len(all_signals),
+            "agents": results,
+            "dimensions": dimension_results,
+        }, indent=2))
+    else:
+        symbols = list(set(bt.symbol for bt in backtests))
+        click.echo(f"Analysis: {len(backtests)} backtest(s), {len(all_signals)} signals")
+        click.echo(f"Symbols: {', '.join(symbols)}")
+        click.echo()
+
+        # Agent correlations table
+        click.echo("Agent Correlations (conviction_delta vs forward returns):")
+        click.echo(f"  {'Agent':<14} {'N':<6} {'Corr 5d':<10} {'Corr 20d':<10} {'Corr 60d':<10}")
+        click.echo("  " + "-" * 56)
+
+        for r in results:
+            corrs = r["correlations"]
+            c5 = f"{corrs.get('5d', 0):+.2f}" if corrs.get('5d') is not None else "N/A"
+            c20 = f"{corrs.get('20d', 0):+.2f}" if corrs.get('20d') is not None else "N/A"
+            c60 = f"{corrs.get('60d', 0):+.2f}" if corrs.get('60d') is not None else "N/A"
+            click.echo(f"  {r['agent']:<14} {r['signals']:<6} {c5:<10} {c20:<10} {c60:<10}")
+
+        click.echo()
+
+        # Agent hit rates table
+        click.echo("Agent Hit Rates (% signals where delta sign matches return sign):")
+        click.echo(f"  {'Agent':<14} {'Hit 5d':<10} {'Hit 20d':<10} {'Hit 60d':<10}")
+        click.echo("  " + "-" * 46)
+
+        for r in results:
+            hits = r["hit_rates"]
+            h5 = f"{hits.get('5d', 0)*100:.0f}%" if hits.get('5d') is not None else "N/A"
+            h20 = f"{hits.get('20d', 0)*100:.0f}%" if hits.get('20d') is not None else "N/A"
+            h60 = f"{hits.get('60d', 0)*100:.0f}%" if hits.get('60d') is not None else "N/A"
+            click.echo(f"  {r['agent']:<14} {h5:<10} {h20:<10} {h60:<10}")
+
+        if dimension_results:
+            click.echo()
+            click.echo("Dimension Correlations:")
+            click.echo(f"  {'Dimension':<14} {'N':<6} {'Corr 5d':<10} {'Corr 20d':<10} {'Corr 60d':<10}")
+            click.echo("  " + "-" * 56)
+
+            for r in dimension_results:
+                corrs = r["correlations"]
+                c5 = f"{corrs.get('5d', 0):+.2f}" if corrs.get('5d') is not None else "N/A"
+                c20 = f"{corrs.get('20d', 0):+.2f}" if corrs.get('20d') is not None else "N/A"
+                c60 = f"{corrs.get('60d', 0):+.2f}" if corrs.get('60d') is not None else "N/A"
+                click.echo(f"  {r['dimension']:<14} {r['signals']:<6} {c5:<10} {c20:<10} {c60:<10}")
+
+
 @backtest.command("delete")
 @click.argument("backtest_id")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
