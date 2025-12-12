@@ -49,6 +49,7 @@ class AgentResult:
     conviction_delta: float  # How much to adjust thesis conviction
     summary: str  # Human-readable summary
     dimension_scores: dict[str, float] = field(default_factory=dict)  # Per-dimension conviction deltas
+    metadata: dict = field(default_factory=dict)  # Additional info (signal mode, etc.)
 
     def __post_init__(self):
         """Clamp conviction delta to prevent extreme values."""

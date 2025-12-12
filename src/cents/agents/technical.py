@@ -1,8 +1,14 @@
-"""Technical agent - analyzes price action and momentum."""
+"""Technical agent - analyzes price action and momentum.
+
+Supports adaptive signal mode that automatically detects whether momentum
+or contrarian signals work better for each symbol based on backtest history.
+"""
 
 from datetime import date
+import sqlite3
 
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
+from cents.agents.signal_mode import SignalMode, get_signal_mode, apply_signal_mode
 from cents.data import PriceDataProvider, get_price_provider
 from cents.models import EvidenceType, Thesis, ThesisDimension
 
@@ -41,19 +47,32 @@ def _safe_get(values: list, idx: int, default=None):
 
 
 class TechnicalAgent(BaseAgent):
-    """Agent that analyzes technical indicators and price action."""
+    """Agent that analyzes technical indicators and price action.
+
+    Supports adaptive signal mode that automatically detects whether momentum
+    or contrarian signals work better for each symbol based on backtest history.
+    """
 
     name = "technical"
 
-    def __init__(self, price_provider: PriceDataProvider | None = None):
+    def __init__(
+        self,
+        price_provider: PriceDataProvider | None = None,
+        adaptive_mode: bool = True,
+        conn: sqlite3.Connection | None = None,
+    ):
         """
         Initialize technical agent.
 
         Args:
             price_provider: Price data provider (defaults to Alpaca)
+            adaptive_mode: Enable adaptive signal mode (default: True)
+            conn: Optional DB connection for signal history lookup
         """
         super().__init__()
         self._provider = price_provider
+        self._adaptive_mode = adaptive_mode
+        self._conn = conn
 
     @property
     def provider(self) -> PriceDataProvider:
@@ -255,15 +274,57 @@ class TechnicalAgent(BaseAgent):
             )
         )
 
+        # Apply adaptive signal mode if enabled and not in backtest mode (as_of)
+        signal_mode = SignalMode.MOMENTUM
+        mode_metadata: dict = {}
+
+        if self._adaptive_mode and as_of is None:
+            # Only use adaptive mode for live research, not backtesting
+            try:
+                signal_mode, mode_metadata = get_signal_mode(
+                    symbol=symbol,
+                    agent_name=self.name,
+                    conn=self._conn,
+                )
+            except Exception:
+                # If signal mode lookup fails, default to momentum
+                pass
+
+            if signal_mode != SignalMode.MOMENTUM:
+                # Transform the conviction delta
+                original_delta = conviction_delta
+                conviction_delta = apply_signal_mode(conviction_delta, signal_mode)
+
+                # Also transform dimension scores
+                for dim in dimension_scores:
+                    dimension_scores[dim] = apply_signal_mode(
+                        dimension_scores[dim], signal_mode
+                    )
+
+                # Add mode info to summary
+                mode_label = signal_mode.value
+                if mode_metadata.get("hit_rate") is not None:
+                    mode_label += f" ({mode_metadata['hit_rate']:.0%} hist)"
+                summaries.append(f"[{mode_label}]")
+
         # Build summary
         if summaries:
             summary = f"{symbol}: " + "; ".join(summaries)
         else:
             summary = f"{symbol}: No significant technical signals"
 
+        # Include signal mode in metadata for transparency
+        result_metadata = {
+            "signal_mode": signal_mode.value,
+            "adaptive_enabled": self._adaptive_mode,
+        }
+        if mode_metadata:
+            result_metadata["mode_details"] = mode_metadata
+
         return AgentResult(
             evidence=evidence,
             conviction_delta=conviction_delta,
             summary=summary,
             dimension_scores=dimension_scores,
+            metadata=result_metadata,
         )

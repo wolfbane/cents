@@ -708,6 +708,50 @@ class BacktestRepository:
         ).fetchall()
         return [self._row_to_signal(row) for row in rows]
 
+    def get_signal_history(
+        self,
+        symbol: str,
+        agent_name: str,
+        limit: int = 50,
+        horizon: str = "20d",
+    ) -> list[BacktestSignal]:
+        """Get recent signals for a symbol/agent with forward returns.
+
+        Used by adaptive mode to determine if momentum or contrarian works better.
+        Only returns signals that have forward_returns data for the specified horizon.
+
+        Args:
+            symbol: Stock symbol
+            agent_name: Agent name (e.g., "technical")
+            limit: Max signals to return
+            horizon: Forward return horizon to filter by (e.g., "5d", "20d", "60d")
+
+        Returns:
+            List of BacktestSignal with forward returns, newest first
+        """
+        # Join with backtests to filter by symbol
+        rows = self.conn.execute(
+            """
+            SELECT bs.* FROM backtest_signals bs
+            JOIN backtests b ON bs.backtest_id = b.id
+            WHERE b.symbol = ? AND bs.agent_name = ?
+            ORDER BY bs.date DESC
+            LIMIT ?
+            """,
+            (symbol.upper(), agent_name, limit * 2),  # fetch extra, filter in Python
+        ).fetchall()
+
+        signals = []
+        for row in rows:
+            signal = self._row_to_signal(row)
+            # Only include signals with the requested forward return horizon
+            if horizon in signal.forward_returns:
+                signals.append(signal)
+                if len(signals) >= limit:
+                    break
+
+        return signals
+
     def list(self, symbol: str | None = None) -> list[Backtest]:
         """List backtests, optionally filtered by symbol."""
         if symbol:
