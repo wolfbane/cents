@@ -1,5 +1,7 @@
 """Fundamentals agent - analyzes company financials."""
 
+from datetime import date
+
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.data import FundamentalsDataProvider, FundamentalsData
 from cents.models import EvidenceType, Thesis, ThesisDimension, Valuation
@@ -133,7 +135,9 @@ class FundamentalsAgent(BaseAgent):
             return (norm * SECTOR_DE_LOW_MULT, norm * SECTOR_DE_HIGH_MULT)
         return (DEFAULT_DE_LOW, DEFAULT_DE_HIGH)
 
-    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
+    ) -> AgentResult:
         """Research fundamental data for a symbol."""
         evidence = []
         conviction_delta = 0.0
@@ -141,7 +145,9 @@ class FundamentalsAgent(BaseAgent):
         summaries = []
 
         try:
-            data = self._with_retries(lambda: self.provider.get_fundamentals(symbol))
+            data = self._with_retries(
+                lambda: self.provider.get_fundamentals(symbol, as_of=as_of)
+            )
         except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)
 

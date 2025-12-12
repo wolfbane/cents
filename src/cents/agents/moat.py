@@ -1,6 +1,7 @@
 """Moat agent - analyzes competitive advantage durability."""
 
 import statistics
+from datetime import date
 
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.models import EvidenceType, Thesis, ThesisDimension
@@ -52,7 +53,9 @@ class MoatAgent(BaseAgent):
             self._provider = _get_fundamentals_provider()
         return self._provider
 
-    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
+    ) -> AgentResult:
         """Research moat characteristics for a symbol."""
         evidence = []
         conviction_delta = 0.0
@@ -62,11 +65,11 @@ class MoatAgent(BaseAgent):
         try:
             # Fetch 5 years of historical ratios
             ratios = self._with_retries(
-                lambda: self.provider.get_historical_ratios(symbol, years=5)
+                lambda: self.provider.get_historical_ratios(symbol, years=5, as_of=as_of)
             )
             # Also get current fundamentals for sector info
             fundamentals = self._with_retries(
-                lambda: self.provider.get_fundamentals(symbol)
+                lambda: self.provider.get_fundamentals(symbol, as_of=as_of)
             )
         except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)

@@ -242,7 +242,9 @@ class FMPFundamentalsProvider:
             return "sell"
         return rating_lower.replace(" ", "_")
 
-    def get_historical_ratios(self, symbol: str, years: int = 5) -> list[dict]:
+    def get_historical_ratios(
+        self, symbol: str, years: int = 5, as_of: date | None = None
+    ) -> list[dict]:
         """Fetch historical annual ratios for moat analysis.
 
         Returns list of dicts with: date, grossProfitMargin, operatingProfitMargin,
@@ -251,28 +253,35 @@ class FMPFundamentalsProvider:
         Args:
             symbol: Ticker symbol
             years: Number of years of history (default 5)
+            as_of: Only include data up to this date (for backtesting)
 
         Returns:
             List of annual ratio records, most recent first
         """
         # Fetch historical ratios (annual)
         ratios_data = self._fetch_json(
-            "ratios", symbol=symbol, period="annual", limit=years
+            "ratios", symbol=symbol, period="annual", limit=years + 2
         )
         ratios_list = ratios_data if ratios_data else []
 
         # Fetch historical key metrics for ROIC
         metrics_data = self._fetch_json(
-            "key-metrics", symbol=symbol, period="annual", limit=years
+            "key-metrics", symbol=symbol, period="annual", limit=years + 2
         )
         metrics_list = metrics_data if metrics_data else []
+
+        # Filter by as_of date if provided
+        if as_of:
+            as_of_str = as_of.isoformat()
+            ratios_list = [r for r in ratios_list if r.get("date", "") <= as_of_str]
+            metrics_list = [m for m in metrics_list if m.get("date", "") <= as_of_str]
 
         # Build lookup of metrics by date
         metrics_by_date = {m.get("date"): m for m in metrics_list}
 
         # Merge ratios with ROIC/ROE from key-metrics
         result = []
-        for ratio in ratios_list:
+        for ratio in ratios_list[:years]:
             record_date = ratio.get("date")
             metrics = metrics_by_date.get(record_date, {})
 
@@ -288,12 +297,15 @@ class FMPFundamentalsProvider:
 
         return result
 
-    def get_insider_trades(self, symbol: str, limit: int = 100) -> list[dict]:
+    def get_insider_trades(
+        self, symbol: str, limit: int = 100, as_of: date | None = None
+    ) -> list[dict]:
         """Fetch insider trading transactions for a symbol.
 
         Args:
             symbol: Ticker symbol
             limit: Maximum number of transactions to fetch (default 100)
+            as_of: Only include trades up to this date (for backtesting)
 
         Returns:
             List of insider trade records with fields:
@@ -308,7 +320,14 @@ class FMPFundamentalsProvider:
         data = self._fetch_json(
             "insider-trading/search", symbol=symbol, limit=limit
         )
-        return data if data else []
+        trades = data if data else []
+
+        # Filter by as_of date if provided
+        if as_of:
+            as_of_str = as_of.isoformat()
+            trades = [t for t in trades if t.get("transactionDate", "") <= as_of_str]
+
+        return trades
 
 
 @functools.lru_cache(maxsize=1)

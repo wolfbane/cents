@@ -1,6 +1,7 @@
 """Macro agent - analyzes economic environment."""
 
 import re
+from datetime import date
 from urllib.request import urlopen
 from urllib.error import URLError
 import json
@@ -53,7 +54,9 @@ class MacroAgent(BaseAgent):
         settings = get_settings()
         self.api_key = settings.fred_api_key
 
-    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
+    ) -> AgentResult:
         """Research macro environment (symbol-agnostic)."""
         evidence = []
         conviction_delta = 0.0
@@ -69,7 +72,9 @@ class MacroAgent(BaseAgent):
         # Fetch FRED data
         for series_id, name in self.INDICATORS.items():
             try:
-                value, date = self._with_retries(lambda s=series_id: self._fetch_fred_series(s))
+                value, obs_date = self._with_retries(
+                    lambda s=series_id: self._fetch_fred_series(s, as_of=as_of)
+                )
                 if value is None:
                     continue
 
@@ -82,7 +87,7 @@ class MacroAgent(BaseAgent):
                 evidence.append(
                     self.create_evidence(
                         thesis_id=thesis_id,
-                        content=f"{name}: {value:.2f} (as of {date})",
+                        content=f"{name}: {value:.2f} (as of {obs_date})",
                         source=f"FRED:{series_id}",
                         evidence_type=ev_type,
                         confidence=0.7,
@@ -116,13 +121,22 @@ class MacroAgent(BaseAgent):
             dimension_scores=dimension_scores,
         )
 
-    def _fetch_fred_series(self, series_id: str) -> tuple[float | None, str | None]:
-        """Fetch latest value from FRED API."""
+    def _fetch_fred_series(
+        self, series_id: str, as_of: date | None = None
+    ) -> tuple[float | None, str | None]:
+        """Fetch latest value from FRED API.
+
+        Args:
+            series_id: FRED series ID
+            as_of: Optional date for historical data (returns observation <= as_of)
+        """
         url = (
             f"https://api.stlouisfed.org/fred/series/observations"
             f"?series_id={series_id}&api_key={self.api_key}"
             f"&file_type=json&sort_order=desc&limit=1"
         )
+        if as_of:
+            url += f"&observation_end={as_of.isoformat()}"
         try:
             with urlopen(url, timeout=10) as response:
                 data = json.loads(response.read())

@@ -3,6 +3,7 @@
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import date
 import time
 from typing import Callable, TypeVar
 from urllib.error import URLError
@@ -102,13 +103,16 @@ class BaseAgent(ABC):
         raise RuntimeError("Retry helper exited without executing")
 
     @abstractmethod
-    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
+    ) -> AgentResult:
         """
         Perform research on a symbol.
 
         Args:
             symbol: Stock ticker symbol
             thesis: Optional thesis to evaluate against
+            as_of: Optional date for historical analysis (backtesting)
 
         Returns:
             AgentResult with evidence and conviction adjustment

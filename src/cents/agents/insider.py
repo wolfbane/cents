@@ -1,7 +1,7 @@
 """Insider trading agent - analyzes SEC Form 4 filings for informative signals."""
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.models import EvidenceType, Thesis, ThesisDimension
@@ -75,7 +75,9 @@ class InsiderAgent(BaseAgent):
             self._provider = _get_fundamentals_provider()
         return self._provider
 
-    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
+    ) -> AgentResult:
         """Research insider trading activity for a symbol."""
         evidence = []
         conviction_delta = 0.0
@@ -84,7 +86,7 @@ class InsiderAgent(BaseAgent):
 
         try:
             trades = self._with_retries(
-                lambda: self.provider.get_insider_trades(symbol, limit=100)
+                lambda: self.provider.get_insider_trades(symbol, limit=100, as_of=as_of)
             )
         except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)

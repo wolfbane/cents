@@ -1,6 +1,6 @@
 """Orchestrator agent - runs and synthesizes all agents."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from cents.agents.base import BaseAgent, AgentResult
 from cents.agents.fundamentals import FundamentalsAgent
@@ -84,7 +84,9 @@ class OrchestratorAgent(BaseAgent):
         avg_weighted = weighted_sum / len(result.evidence)
         return result.conviction_delta * avg_weighted
 
-    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
+    ) -> AgentResult:
         """Run all agents and synthesize results."""
         thesis_id = thesis.id if thesis else None
 
@@ -95,7 +97,7 @@ class OrchestratorAgent(BaseAgent):
 
         # Run each agent
         for agent in self.agents:
-            result = agent.research(symbol, thesis)
+            result = agent.research(symbol, thesis, as_of=as_of)
             agent_results[agent.name] = result
             all_evidence.extend(result.evidence)
 

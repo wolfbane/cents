@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import date, datetime
 
 import click
 
@@ -33,6 +34,13 @@ logger = logging.getLogger(__name__)
 )
 @click.option("--quiet", is_flag=True, help="Suppress verbose logs for scripting")
 @click.option("--suggest-thesis", is_flag=True, help="Generate thesis suggestion from research")
+@click.option(
+    "--as-of",
+    "as_of_str",
+    type=str,
+    default=None,
+    help="Historical date for backtesting (YYYY-MM-DD format)",
+)
 def research(
     symbol: str,
     thesis_id: str | None,
@@ -41,12 +49,24 @@ def research(
     output: str | None,
     quiet: bool,
     suggest_thesis: bool,
+    as_of_str: str | None,
 ):
     """Run research agents on a symbol."""
     symbol = validate_symbol(symbol)
     if output is None:
         output = get_settings_lazy().default_output
     verbose = output == "text" and not quiet
+
+    # Parse as_of date if provided
+    as_of: date | None = None
+    if as_of_str:
+        try:
+            as_of = datetime.strptime(as_of_str, "%Y-%m-%d").date()
+            if verbose:
+                click.echo(f"Historical analysis as of: {as_of}\n")
+        except ValueError:
+            click.echo(f"Invalid date format: {as_of_str}. Use YYYY-MM-DD.", err=True)
+            raise SystemExit(1)
 
     # Get thesis if specified
     thesis = None
@@ -67,17 +87,18 @@ def research(
     else:
         agents_to_run = {"orchestrator": AGENTS["orchestrator"]}
 
-    # Fetch current price
+    # Fetch current/historical price
     price: float | None = None
     try:
         from cents.data.alpaca import get_price_provider
         provider = get_price_provider()
-        price = provider.get_latest_price(symbol.upper())
+        price = provider.get_latest_price(symbol.upper(), as_of=as_of)
     except Exception as e:
         logger.debug("Could not fetch price: %s", e)
 
     if verbose and price:
-        click.echo(f"Current price: ${price:.2f}\n")
+        price_label = f"Price as of {as_of}" if as_of else "Current price"
+        click.echo(f"{price_label}: ${price:.2f}\n")
 
     all_evidence = []
     agent_outputs = []
@@ -85,7 +106,7 @@ def research(
 
     for name, agent_class in agents_to_run.items():
         agent = agent_class()
-        result = agent.research(symbol.upper(), thesis)
+        result = agent.research(symbol.upper(), thesis, as_of=as_of)
 
         if verbose:
             click.echo(f"--- {name.upper()} ---")
@@ -161,6 +182,7 @@ def research(
         payload = {
             "symbol": symbol.upper(),
             "price": price,
+            "as_of": as_of.isoformat() if as_of else None,
             "thesis_id": thesis.id if thesis else None,
             "total_conviction_delta": total_conviction_delta,
             "agents": agent_outputs,

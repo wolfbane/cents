@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import date
 from urllib.request import urlopen, Request
 from urllib.parse import quote
 
@@ -65,9 +66,19 @@ class SentimentAgent(BaseAgent):
             logger.warning("anthropic package not installed")
             return None
 
-    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
+    ) -> AgentResult:
         """Analyze news sentiment for a symbol."""
         thesis_id = thesis.id if thesis else None
+
+        # NewsAPI doesn't support historical news - skip for backtesting
+        if as_of:
+            return AgentResult(
+                evidence=[],
+                conviction_delta=0,
+                summary=f"{symbol}: Sentiment skipped (historical mode as of {as_of})",
+            )
 
         if not self.news_api_key:
             return self._research_without_api(symbol, thesis_id)

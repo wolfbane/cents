@@ -1,5 +1,7 @@
 """Technical agent - analyzes price action and momentum."""
 
+from datetime import date
+
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
 from cents.data import PriceDataProvider, get_price_provider
 from cents.models import EvidenceType, Thesis, ThesisDimension
@@ -60,7 +62,9 @@ class TechnicalAgent(BaseAgent):
             self._provider = get_price_provider()
         return self._provider
 
-    def research(self, symbol: str, thesis: Thesis | None = None) -> AgentResult:
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
+    ) -> AgentResult:
         """Research technical indicators for a symbol."""
         evidence = []
         conviction_delta = 0.0
@@ -69,7 +73,9 @@ class TechnicalAgent(BaseAgent):
         thesis_id = thesis.id if thesis else None
 
         try:
-            history = self._with_retries(lambda: self.provider.get_history(symbol, days=365))
+            history = self._with_retries(
+                lambda: self.provider.get_history(symbol, days=365, as_of=as_of)
+            )
             if not history.bars:
                 return AgentResult(
                     evidence=[],
