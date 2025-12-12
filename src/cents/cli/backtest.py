@@ -563,6 +563,111 @@ def analyze_backtest(backtest_id: str | None, symbol: str | None, analyze_all: b
                 click.echo(f"  {r['dimension']:<14} {r['signals']:<6} {c5:<10} {c20:<10} {c60:<10}")
 
 
+@backtest.command("report")
+@click.argument("backtest_id")
+@click.option(
+    "--output",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    help="Output format"
+)
+def report_backtest(backtest_id: str, output: str):
+    """Generate detailed backtest report with best/worst signals."""
+    repo = BacktestRepository()
+    bt = repo.get(backtest_id)
+
+    if bt is None:
+        click.echo(f"Backtest {backtest_id} not found.", err=True)
+        raise SystemExit(1)
+
+    signals = repo.get_signals(backtest_id)
+    if not signals:
+        click.echo("No signals found.", err=True)
+        raise SystemExit(1)
+
+    # Calculate signal scores (delta * 20d return for direction alignment)
+    scored_signals = []
+    for s in signals:
+        ret_20d = s.forward_returns.get("20d")
+        if ret_20d is not None:
+            # Score = how well delta predicted return direction
+            # Positive score = correct direction, negative = wrong direction
+            score = s.conviction_delta * ret_20d * 100  # Scale for readability
+            scored_signals.append({
+                "date": s.date,
+                "agent": s.agent_name,
+                "delta": s.conviction_delta,
+                "return_20d": ret_20d,
+                "score": score,
+            })
+
+    if not scored_signals:
+        click.echo("No signals with forward returns found.", err=True)
+        raise SystemExit(1)
+
+    # Sort by score
+    sorted_signals = sorted(scored_signals, key=lambda x: x["score"], reverse=True)
+    best_signals = sorted_signals[:5]
+    worst_signals = sorted_signals[-5:][::-1]  # Reverse to show worst first
+
+    # Calculate cumulative accuracy over time
+    chronological = sorted(scored_signals, key=lambda x: x["date"])
+    cumulative = []
+    running_hits = 0
+    for i, s in enumerate(chronological):
+        is_hit = (s["delta"] > 0 and s["return_20d"] > 0) or (s["delta"] < 0 and s["return_20d"] < 0)
+        if is_hit:
+            running_hits += 1
+        cumulative.append({
+            "date": s["date"],
+            "accuracy": running_hits / (i + 1),
+            "hits": running_hits,
+            "total": i + 1,
+        })
+
+    if output == "json":
+        click.echo(json.dumps({
+            "backtest_id": bt.id,
+            "symbol": bt.symbol,
+            "period": f"{bt.start_date} to {bt.end_date}",
+            "total_signals": len(scored_signals),
+            "best_signals": best_signals,
+            "worst_signals": worst_signals,
+            "cumulative_accuracy": [
+                {"date": c["date"].isoformat(), "accuracy": c["accuracy"]}
+                for c in cumulative
+            ],
+        }, indent=2, default=str))
+    else:
+        click.echo(f"Backtest Report: {bt.id}")
+        click.echo(f"Symbol: {bt.symbol} | Period: {bt.start_date} to {bt.end_date}")
+        click.echo(f"Total signals with returns: {len(scored_signals)}")
+        click.echo()
+
+        click.echo("Best Signals (delta aligned with returns):")
+        click.echo(f"  {'Date':<12} {'Agent':<14} {'Delta':<8} {'20d Ret':<10} {'Score'}")
+        click.echo("  " + "-" * 55)
+        for s in best_signals:
+            click.echo(f"  {s['date']} {s['agent']:<14} {s['delta']:+5.1f}   {s['return_20d']*100:+6.1f}%    {s['score']:+.1f}")
+
+        click.echo()
+        click.echo("Worst Signals (delta opposite to returns):")
+        click.echo(f"  {'Date':<12} {'Agent':<14} {'Delta':<8} {'20d Ret':<10} {'Score'}")
+        click.echo("  " + "-" * 55)
+        for s in worst_signals:
+            click.echo(f"  {s['date']} {s['agent']:<14} {s['delta']:+5.1f}   {s['return_20d']*100:+6.1f}%    {s['score']:+.1f}")
+
+        click.echo()
+        click.echo("Accuracy Over Time:")
+        # Show a few checkpoints
+        checkpoints = [0, len(cumulative)//4, len(cumulative)//2, 3*len(cumulative)//4, len(cumulative)-1]
+        checkpoints = sorted(set(c for c in checkpoints if 0 <= c < len(cumulative)))
+        for i in checkpoints:
+            c = cumulative[i]
+            bar = "█" * int(c["accuracy"] * 20) + "░" * (20 - int(c["accuracy"] * 20))
+            click.echo(f"  {c['date']} [{bar}] {c['accuracy']*100:.0f}% ({c['hits']}/{c['total']})")
+
+
 @backtest.command("delete")
 @click.argument("backtest_id")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
