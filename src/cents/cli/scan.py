@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 @click.option("--expiry-days", type=int, default=7, help="Days before expiry to alert")
 @click.option("--batch-suggest", is_flag=True, help="Generate thesis suggestions for all symbols")
 @click.option("--apply", "apply_changes", is_flag=True, help="Save evidence and update thesis conviction")
-def scan(threshold: float | None, webhook: str | None, output: str | None, quiet: bool, expiry_days: int, batch_suggest: bool, apply_changes: bool):
+@click.option("--recommend", "run_recommend", is_flag=True, help="Run recommend after scan completes")
+def scan(threshold: float | None, webhook: str | None, output: str | None, quiet: bool, expiry_days: int, batch_suggest: bool, apply_changes: bool, run_recommend: bool):
     """Scan watchlist and generate alerts for significant changes."""
     settings = get_settings_lazy()
     if threshold is None:
@@ -237,3 +238,21 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
 
     if batch_suggest and not quiet:
         click.echo("\nUse --output=json to get full thesis suggestions for each symbol.")
+
+    # Chain to recommend if requested
+    if run_recommend:
+        click.echo("\n" + "=" * 50)
+        click.echo("RECOMMENDATIONS")
+        click.echo("=" * 50 + "\n")
+        from .recommend import get_recommendations, Action
+        recommendations = get_recommendations()
+        actionable = [r for r in recommendations if r.action != Action.HOLD]
+
+        if not actionable:
+            click.echo("No actionable recommendations.")
+        else:
+            for r in actionable:
+                price_str = f"${r.current_price:.2f}" if r.current_price else "N/A"
+                action_str = r.action.value.upper().ljust(6)
+                priority_marker = "[!] " if r.priority == 1 else ""
+                click.echo(f"  {priority_marker}{action_str} {r.symbol.ljust(6)} {price_str.rjust(10)}  {r.reason}")
