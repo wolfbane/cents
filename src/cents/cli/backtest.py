@@ -88,8 +88,62 @@ def backtest():
     pass
 
 
+def _run_single_backtest(
+    symbol: str,
+    start_date: date,
+    end_date: date,
+    interval: str,
+    selected_agents: dict,
+    provider,
+    verbose: bool = True,
+) -> tuple[str, int, list[str]]:
+    """Run backtest for a single symbol. Returns (backtest_id, signal_count, errors)."""
+    repo = BacktestRepository()
+    bt = Backtest(symbol=symbol, start_date=start_date, end_date=end_date)
+    repo.create(bt)
+
+    eval_dates = _generate_dates(start_date, end_date, interval)
+    signal_count = 0
+    errors = []
+
+    for i, eval_date in enumerate(eval_dates):
+        if verbose:
+            click.echo(f"  [{i+1}/{len(eval_dates)}] {eval_date}...", nl=False)
+
+        date_signals = 0
+        for agent_name, agent_class in selected_agents.items():
+            try:
+                agent = agent_class()
+                result = agent.research(symbol, thesis=None, as_of=eval_date)
+                forward_returns = _calculate_forward_returns(symbol, eval_date, provider)
+
+                signal = BacktestSignal(
+                    backtest_id=bt.id,
+                    date=eval_date,
+                    agent_name=agent_name,
+                    conviction_delta=result.conviction_delta,
+                    dimension_scores=result.dimension_scores,
+                    forward_returns=forward_returns,
+                )
+                repo.add_signal(signal)
+                signal_count += 1
+                date_signals += 1
+            except Exception as e:
+                errors.append(f"{eval_date} {agent_name}: {e}")
+                logger.debug("Agent error: %s %s: %s", eval_date, agent_name, e)
+
+        if verbose:
+            click.echo(f" {date_signals} signals")
+
+    return bt.id, signal_count, errors
+
+
 @backtest.command("run")
-@click.argument("symbol")
+@click.argument("symbol", required=False)
+@click.option(
+    "--symbols", "symbols_str", default=None,
+    help="Comma-separated list of symbols (alternative to positional arg)"
+)
 @click.option(
     "--start", "-s", "start_str", required=True,
     help="Start date (YYYY-MM-DD)"
@@ -116,18 +170,28 @@ def backtest():
     help="Output format"
 )
 def run_backtest(
-    symbol: str,
+    symbol: str | None,
+    symbols_str: str | None,
     start_str: str,
     end_str: str | None,
     interval: str,
     agent_names: str | None,
     output: str,
 ):
-    """Run a backtest for a symbol over a date range.
+    """Run a backtest for one or more symbols over a date range.
 
-    Example: cents backtest run NVDA --start 2023-01-01 --end 2024-01-01
+    Examples:
+      cents backtest run NVDA --start 2023-01-01 --end 2024-01-01
+      cents backtest run --symbols AAPL,MSFT,NVDA --start 2023-01-01
     """
-    symbol = validate_symbol(symbol)
+    # Parse symbols
+    if symbols_str:
+        symbols = [validate_symbol(s.strip()) for s in symbols_str.split(",")]
+    elif symbol:
+        symbols = [validate_symbol(symbol)]
+    else:
+        click.echo("Specify a symbol or use --symbols.", err=True)
+        raise SystemExit(1)
 
     # Parse dates
     try:
@@ -170,73 +234,62 @@ def run_backtest(
         click.echo(f"Could not initialize price provider: {e}", err=True)
         raise SystemExit(1)
 
-    # Create backtest record
-    repo = BacktestRepository()
-    bt = Backtest(symbol=symbol, start_date=start_date, end_date=end_date)
-    repo.create(bt)
+    # Run backtests for each symbol
+    results = []
+    total_signals = 0
+    total_errors = 0
 
-    if output == "text":
-        click.echo(f"Backtest {bt.id}: {symbol} from {start_date} to {end_date}")
-        click.echo(f"Interval: {interval}, Agents: {', '.join(selected_agents.keys())}")
-        click.echo()
-
-    # Generate evaluation dates
-    eval_dates = _generate_dates(start_date, end_date, interval)
-
-    if output == "text":
-        click.echo(f"Running {len(eval_dates)} evaluations...")
-
-    signal_count = 0
-    errors = []
-
-    for i, eval_date in enumerate(eval_dates):
+    for sym in symbols:
         if output == "text":
-            click.echo(f"  [{i+1}/{len(eval_dates)}] {eval_date}...", nl=False)
+            click.echo(f"=== {sym} ===")
+            click.echo(f"Period: {start_date} to {end_date}, Interval: {interval}")
+            click.echo(f"Agents: {', '.join(selected_agents.keys())}")
+            click.echo()
 
-        date_signals = 0
-        for agent_name, agent_class in selected_agents.items():
-            try:
-                agent = agent_class()
-                result = agent.research(symbol, thesis=None, as_of=eval_date)
+        bt_id, signal_count, errors = _run_single_backtest(
+            symbol=sym,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval,
+            selected_agents=selected_agents,
+            provider=provider,
+            verbose=(output == "text"),
+        )
 
-                # Calculate forward returns
-                forward_returns = _calculate_forward_returns(symbol, eval_date, provider)
-
-                # Store signal
-                signal = BacktestSignal(
-                    backtest_id=bt.id,
-                    date=eval_date,
-                    agent_name=agent_name,
-                    conviction_delta=result.conviction_delta,
-                    dimension_scores=result.dimension_scores,
-                    forward_returns=forward_returns,
-                )
-                repo.add_signal(signal)
-                signal_count += 1
-                date_signals += 1
-
-            except Exception as e:
-                errors.append(f"{eval_date} {agent_name}: {e}")
-                logger.debug("Agent error: %s %s: %s", eval_date, agent_name, e)
+        results.append({
+            "backtest_id": bt_id,
+            "symbol": sym,
+            "signal_count": signal_count,
+            "error_count": len(errors),
+        })
+        total_signals += signal_count
+        total_errors += len(errors)
 
         if output == "text":
-            click.echo(f" {date_signals} signals")
+            click.echo()
+            click.echo(f"Completed: {signal_count} signals recorded")
+            if errors:
+                click.echo(f"Errors: {len(errors)}")
+            click.echo()
 
+    # Summary
     if output == "text":
-        click.echo()
-        click.echo(f"Completed: {signal_count} signals recorded")
-        if errors:
-            click.echo(f"Errors: {len(errors)}")
-        click.echo(f"\nView results: cents backtest show {bt.id}")
+        if len(symbols) > 1:
+            click.echo("=" * 40)
+            click.echo(f"Total: {len(symbols)} symbols, {total_signals} signals")
+            if total_errors:
+                click.echo(f"Total errors: {total_errors}")
+            click.echo(f"\nAnalyze all: cents backtest analyze --all")
+        else:
+            click.echo(f"View results: cents backtest show {results[0]['backtest_id']}")
     else:
         click.echo(json.dumps({
-            "backtest_id": bt.id,
-            "symbol": symbol,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "interval": interval,
-            "signal_count": signal_count,
-            "error_count": len(errors),
+            "backtests": results,
+            "total_signals": total_signals,
+            "total_errors": total_errors,
         }, indent=2))
 
 
