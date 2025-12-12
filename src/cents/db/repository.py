@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 from cents.models import (
     Alert,
     AlertType,
+    Backtest,
+    BacktestSignal,
     Evidence,
     EvidenceType,
     ThesisDimension,
@@ -662,4 +664,117 @@ class AlertRepository:
             data=data,
             read=bool(row["read"]),
             created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+
+class BacktestRepository:
+    """CRUD operations for backtests and signals."""
+
+    def __init__(self, conn: sqlite3.Connection | None = None):
+        self.conn = conn or get_connection()
+
+    def create(self, backtest: Backtest) -> Backtest:
+        """Create a new backtest."""
+        self.conn.execute(
+            """
+            INSERT INTO backtests (id, symbol, start_date, end_date, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                backtest.id,
+                backtest.symbol.upper(),
+                backtest.start_date.isoformat(),
+                backtest.end_date.isoformat(),
+                backtest.created_at.isoformat(),
+            ),
+        )
+        self.conn.commit()
+        return backtest
+
+    def get(self, backtest_id: str) -> Backtest | None:
+        """Get backtest by ID."""
+        row = self.conn.execute(
+            "SELECT * FROM backtests WHERE id = ?", (backtest_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_backtest(row)
+
+    def get_signals(self, backtest_id: str) -> list[BacktestSignal]:
+        """Get all signals for a backtest."""
+        rows = self.conn.execute(
+            "SELECT * FROM backtest_signals WHERE backtest_id = ? ORDER BY date ASC",
+            (backtest_id,),
+        ).fetchall()
+        return [self._row_to_signal(row) for row in rows]
+
+    def list(self, symbol: str | None = None) -> list[Backtest]:
+        """List backtests, optionally filtered by symbol."""
+        if symbol:
+            rows = self.conn.execute(
+                "SELECT * FROM backtests WHERE symbol = ? ORDER BY created_at DESC",
+                (symbol.upper(),),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM backtests ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._row_to_backtest(row) for row in rows]
+
+    def delete(self, backtest_id: str) -> bool:
+        """Delete a backtest by ID (cascades to signals)."""
+        cursor = self.conn.execute("DELETE FROM backtests WHERE id = ?", (backtest_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def add_signal(self, signal: BacktestSignal) -> BacktestSignal:
+        """Add a signal to a backtest."""
+        self.conn.execute(
+            """
+            INSERT INTO backtest_signals (id, backtest_id, date, agent_name, conviction_delta, dimension_scores, forward_returns)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                signal.id,
+                signal.backtest_id,
+                signal.date.isoformat(),
+                signal.agent_name,
+                signal.conviction_delta,
+                json.dumps(signal.dimension_scores),
+                json.dumps(signal.forward_returns),
+            ),
+        )
+        self.conn.commit()
+        return signal
+
+    def _row_to_backtest(self, row: sqlite3.Row) -> Backtest:
+        return Backtest(
+            id=row["id"],
+            symbol=row["symbol"],
+            start_date=date.fromisoformat(row["start_date"]),
+            end_date=date.fromisoformat(row["end_date"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def _row_to_signal(self, row: sqlite3.Row) -> BacktestSignal:
+        try:
+            dimension_scores = json.loads(row["dimension_scores"])
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse dimension_scores JSON for signal %s", row["id"])
+            dimension_scores = {}
+
+        try:
+            forward_returns = json.loads(row["forward_returns"])
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse forward_returns JSON for signal %s", row["id"])
+            forward_returns = {}
+
+        return BacktestSignal(
+            id=row["id"],
+            backtest_id=row["backtest_id"],
+            date=date.fromisoformat(row["date"]),
+            agent_name=row["agent_name"],
+            conviction_delta=row["conviction_delta"],
+            dimension_scores=dimension_scores,
+            forward_returns=forward_returns,
         )

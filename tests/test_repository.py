@@ -2,6 +2,8 @@
 
 import pytest
 
+from datetime import date
+
 from cents.db import (
     ThesisRepository,
     PositionRepository,
@@ -9,6 +11,7 @@ from cents.db import (
     EvidenceRepository,
     WatchlistRepository,
     AlertRepository,
+    BacktestRepository,
 )
 from cents.models import (
     Thesis,
@@ -23,6 +26,8 @@ from cents.models import (
     WatchlistItem,
     Alert,
     AlertType,
+    Backtest,
+    BacktestSignal,
 )
 
 
@@ -335,3 +340,120 @@ class TestAlertRepository:
         count = repo.mark_all_read()
         assert count == 2
         assert repo.list_unread() == []
+
+
+class TestBacktestRepository:
+    """Tests for BacktestRepository."""
+
+    def test_create_and_get(self, db_conn):
+        """Create and retrieve a backtest."""
+        repo = BacktestRepository(db_conn)
+        backtest = Backtest(
+            symbol="AAPL",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 6, 30),
+        )
+        repo.create(backtest)
+
+        retrieved = repo.get(backtest.id)
+        assert retrieved is not None
+        assert retrieved.symbol == "AAPL"
+        assert retrieved.start_date == date(2024, 1, 1)
+        assert retrieved.end_date == date(2024, 6, 30)
+
+    def test_get_nonexistent(self, db_conn):
+        """Get returns None for missing backtest."""
+        repo = BacktestRepository(db_conn)
+        assert repo.get("nonexistent") is None
+
+    def test_list_all(self, db_conn):
+        """List all backtests."""
+        repo = BacktestRepository(db_conn)
+        repo.create(Backtest(symbol="AAPL", start_date=date(2024, 1, 1), end_date=date(2024, 6, 30)))
+        repo.create(Backtest(symbol="GOOG", start_date=date(2024, 1, 1), end_date=date(2024, 6, 30)))
+
+        backtests = repo.list()
+        assert len(backtests) == 2
+
+    def test_list_by_symbol(self, db_conn):
+        """List backtests filtered by symbol."""
+        repo = BacktestRepository(db_conn)
+        repo.create(Backtest(symbol="AAPL", start_date=date(2024, 1, 1), end_date=date(2024, 6, 30)))
+        repo.create(Backtest(symbol="GOOG", start_date=date(2024, 1, 1), end_date=date(2024, 6, 30)))
+
+        aapl_backtests = repo.list(symbol="AAPL")
+        assert len(aapl_backtests) == 1
+        assert aapl_backtests[0].symbol == "AAPL"
+
+    def test_symbol_normalized_to_uppercase(self, db_conn):
+        """Symbols are stored uppercase."""
+        repo = BacktestRepository(db_conn)
+        repo.create(Backtest(symbol="aapl", start_date=date(2024, 1, 1), end_date=date(2024, 6, 30)))
+
+        backtests = repo.list(symbol="AAPL")
+        assert len(backtests) == 1
+
+    def test_delete(self, db_conn):
+        """Delete a backtest."""
+        repo = BacktestRepository(db_conn)
+        backtest = Backtest(symbol="AAPL", start_date=date(2024, 1, 1), end_date=date(2024, 6, 30))
+        repo.create(backtest)
+
+        assert repo.delete(backtest.id) is True
+        assert repo.get(backtest.id) is None
+
+    def test_delete_nonexistent(self, db_conn):
+        """Delete returns False for missing backtest."""
+        repo = BacktestRepository(db_conn)
+        assert repo.delete("nonexistent") is False
+
+    def test_add_signal_and_get_signals(self, db_conn):
+        """Add and retrieve signals for a backtest."""
+        repo = BacktestRepository(db_conn)
+        backtest = Backtest(symbol="AAPL", start_date=date(2024, 1, 1), end_date=date(2024, 6, 30))
+        repo.create(backtest)
+
+        signal1 = BacktestSignal(
+            backtest_id=backtest.id,
+            date=date(2024, 1, 15),
+            agent_name="fundamentals",
+            conviction_delta=5.0,
+            dimension_scores={"valuation": 3.0, "quality": 2.0},
+            forward_returns={"1d": 0.01, "5d": 0.03},
+        )
+        signal2 = BacktestSignal(
+            backtest_id=backtest.id,
+            date=date(2024, 2, 15),
+            agent_name="technical",
+            conviction_delta=-2.0,
+            dimension_scores={"technical": -2.0},
+            forward_returns={"1d": -0.005},
+        )
+        repo.add_signal(signal1)
+        repo.add_signal(signal2)
+
+        signals = repo.get_signals(backtest.id)
+        assert len(signals) == 2
+        # Signals ordered by date ASC
+        assert signals[0].agent_name == "fundamentals"
+        assert signals[0].conviction_delta == 5.0
+        assert signals[0].dimension_scores == {"valuation": 3.0, "quality": 2.0}
+        assert signals[0].forward_returns == {"1d": 0.01, "5d": 0.03}
+        assert signals[1].agent_name == "technical"
+
+    def test_signals_cascade_delete(self, db_conn):
+        """Signals are deleted when backtest is deleted."""
+        repo = BacktestRepository(db_conn)
+        backtest = Backtest(symbol="AAPL", start_date=date(2024, 1, 1), end_date=date(2024, 6, 30))
+        repo.create(backtest)
+        repo.add_signal(BacktestSignal(
+            backtest_id=backtest.id,
+            date=date(2024, 1, 15),
+            agent_name="test",
+            conviction_delta=1.0,
+        ))
+
+        repo.delete(backtest.id)
+        # Signal should be gone too
+        signals = repo.get_signals(backtest.id)
+        assert len(signals) == 0

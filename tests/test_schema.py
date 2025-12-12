@@ -83,6 +83,8 @@ class TestInitDb:
             "idx_evidence_thesis_timestamp",
             "idx_watchlist_symbol",
             "idx_alerts_read",
+            "idx_backtests_symbol",
+            "idx_backtest_signals_backtest",
         }
         assert expected_indexes == indexes
         conn.close()

@@ -6,6 +6,7 @@ from cents.models.position import Position, PositionSide, PositionStatus
 from cents.models.outcome import Outcome, ThesisAccuracy
 from cents.models.watchlist import WatchlistItem
 from cents.models.alert import Alert, AlertType
+from cents.models.backtest import Backtest, BacktestSignal
 
 __all__ = [
     "Thesis",
@@ -24,4 +25,6 @@ __all__ = [
     "WatchlistItem",
     "Alert",
     "AlertType",
+    "Backtest",
+    "BacktestSignal",
 ]

@@ -97,12 +97,33 @@ CREATE TABLE IF NOT EXISTS alerts (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS backtests (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS backtest_signals (
+    id TEXT PRIMARY KEY,
+    backtest_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    conviction_delta REAL NOT NULL,
+    dimension_scores TEXT DEFAULT '{}',
+    forward_returns TEXT DEFAULT '{}',
+    FOREIGN KEY (backtest_id) REFERENCES backtests(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_theses_status ON theses(status);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_evidence_thesis ON evidence(thesis_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_thesis_timestamp ON evidence(thesis_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol);
 CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
+CREATE INDEX IF NOT EXISTS idx_backtests_symbol ON backtests(symbol);
+CREATE INDEX IF NOT EXISTS idx_backtest_signals_backtest ON backtest_signals(backtest_id);
 """
 
 

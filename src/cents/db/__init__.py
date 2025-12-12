@@ -8,6 +8,7 @@ from cents.db.repository import (
     OutcomeRepository,
     WatchlistRepository,
     AlertRepository,
+    BacktestRepository,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "OutcomeRepository",
     "WatchlistRepository",
     "AlertRepository",
+    "BacktestRepository",
 ]
