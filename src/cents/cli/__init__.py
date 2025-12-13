@@ -28,6 +28,7 @@ from .evidence import evidence
 from .dataset import dataset
 from .recommend import recommend
 from .backtest import backtest
+from .status import status
 
 # Re-export shared utilities for backwards compatibility with tests
 from ._shared import (
@@ -62,6 +63,7 @@ cli.add_command(evidence)
 cli.add_command(dataset)
 cli.add_command(recommend)
 cli.add_command(backtest)
+cli.add_command(status)
 
 
 def main():
