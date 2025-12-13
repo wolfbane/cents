@@ -19,28 +19,65 @@ FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 
 
 class RateLimiter:
-    """Simple thread-safe rate limiter using minimum interval between requests."""
+    """Cross-process rate limiter using file-based coordination.
 
-    def __init__(self, requests_per_second: float = 5.0):
+    Uses a lock file to coordinate rate limiting across multiple processes.
+    Falls back to in-process limiting if file locking fails.
+    """
+
+    def __init__(self, requests_per_second: float = 5.0, lock_dir: str | None = None):
         """
         Initialize rate limiter.
 
         Args:
             requests_per_second: Maximum requests per second (default 5.0)
+            lock_dir: Directory for lock file (default: ~/.cents)
         """
         self._min_interval = 1.0 / requests_per_second if requests_per_second > 0 else 0
-        self._last_request: float = 0.0
         self._lock = threading.Lock()
+
+        # Set up cross-process lock file
+        from pathlib import Path
+        lock_path = Path(lock_dir) if lock_dir else Path.home() / ".cents"
+        lock_path.mkdir(parents=True, exist_ok=True)
+        self._lock_file = lock_path / ".fmp_rate_limit"
 
     def wait(self) -> None:
         """Wait if necessary to respect the rate limit."""
-        with self._lock:
-            now = time.monotonic()
-            elapsed = now - self._last_request
-            if elapsed < self._min_interval:
-                sleep_time = self._min_interval - elapsed
-                time.sleep(sleep_time)
-            self._last_request = time.monotonic()
+        if self._min_interval <= 0:
+            return
+
+        import fcntl
+
+        with self._lock:  # Thread safety within process
+            try:
+                # Open or create lock file
+                with open(self._lock_file, "a+") as f:
+                    # Acquire exclusive lock (blocks until available)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    try:
+                        # Read last request time
+                        f.seek(0)
+                        content = f.read().strip()
+                        last_request = float(content) if content else 0.0
+
+                        # Calculate wait time using wall clock (shared across processes)
+                        now = time.time()
+                        elapsed = now - last_request
+                        if elapsed < self._min_interval:
+                            time.sleep(self._min_interval - elapsed)
+
+                        # Write new timestamp
+                        f.seek(0)
+                        f.truncate()
+                        f.write(str(time.time()))
+                        f.flush()
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except (OSError, ValueError) as e:
+                # Fall back to simple sleep if file ops fail
+                logger.debug("Rate limit file error, using fallback: %s", e)
+                time.sleep(self._min_interval)
 
 
 def _sanitize_url(url: str) -> str:

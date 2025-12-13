@@ -118,17 +118,22 @@ class TestFundamentalsData:
 class TestRateLimiter:
     """Tests for RateLimiter."""
 
-    def test_first_request_no_wait(self):
+    @pytest.fixture
+    def temp_lock_dir(self, tmp_path):
+        """Provide a temp directory for rate limiter lock files."""
+        return str(tmp_path)
+
+    def test_first_request_no_wait(self, temp_lock_dir):
         """First request should not wait."""
-        limiter = RateLimiter(requests_per_second=10.0)
+        limiter = RateLimiter(requests_per_second=10.0, lock_dir=temp_lock_dir)
         start = time.monotonic()
         limiter.wait()
         elapsed = time.monotonic() - start
-        assert elapsed < 0.05  # Should be nearly instant
+        assert elapsed < 0.1  # Should be nearly instant
 
-    def test_respects_rate_limit(self):
+    def test_respects_rate_limit(self, temp_lock_dir):
         """Consecutive requests should be spaced correctly."""
-        limiter = RateLimiter(requests_per_second=20.0)  # 50ms between requests
+        limiter = RateLimiter(requests_per_second=20.0, lock_dir=temp_lock_dir)  # 50ms between requests
         limiter.wait()  # First request
         start = time.monotonic()
         limiter.wait()  # Second request should wait
@@ -136,24 +141,37 @@ class TestRateLimiter:
         # Should wait at least ~50ms (allow some tolerance)
         assert elapsed >= 0.04
 
-    def test_no_wait_after_interval_passed(self):
+    def test_no_wait_after_interval_passed(self, temp_lock_dir):
         """No wait needed if enough time has passed."""
-        limiter = RateLimiter(requests_per_second=100.0)  # 10ms interval
+        limiter = RateLimiter(requests_per_second=100.0, lock_dir=temp_lock_dir)  # 10ms interval
         limiter.wait()
         time.sleep(0.02)  # Wait longer than interval
         start = time.monotonic()
         limiter.wait()
         elapsed = time.monotonic() - start
-        assert elapsed < 0.01  # Should be nearly instant
+        assert elapsed < 0.02  # Should be nearly instant
 
-    def test_zero_rate_no_limiting(self):
+    def test_zero_rate_no_limiting(self, temp_lock_dir):
         """Zero or negative rate disables limiting."""
-        limiter = RateLimiter(requests_per_second=0)
+        limiter = RateLimiter(requests_per_second=0, lock_dir=temp_lock_dir)
         start = time.monotonic()
         for _ in range(5):
             limiter.wait()
         elapsed = time.monotonic() - start
         assert elapsed < 0.05  # All should be instant
+
+    def test_cross_process_coordination(self, temp_lock_dir):
+        """Multiple limiter instances share rate limit via file."""
+        # Two limiters pointing at same lock file
+        limiter1 = RateLimiter(requests_per_second=20.0, lock_dir=temp_lock_dir)
+        limiter2 = RateLimiter(requests_per_second=20.0, lock_dir=temp_lock_dir)
+
+        limiter1.wait()  # First request
+        start = time.monotonic()
+        limiter2.wait()  # Second limiter should also wait
+        elapsed = time.monotonic() - start
+        # Should wait ~50ms even though it's a different instance
+        assert elapsed >= 0.04
 
 
 class TestFMPFundamentalsProvider:
