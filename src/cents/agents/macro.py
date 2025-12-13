@@ -92,7 +92,7 @@ class MacroAgent(BaseAgent):
                         evidence_type=ev_type,
                         confidence=0.7,
                         dimension=ThesisDimension.MACRO,
-                        metadata={"series": series_id, "value": value, "date": date},
+                        metadata={"series": series_id, "value": value, "date": obs_date},
                     )
                 )
             except RECOVERABLE_EXCEPTIONS as e:
