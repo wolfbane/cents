@@ -3,6 +3,8 @@
 import functools
 import json
 import logging
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import date
@@ -14,6 +16,31 @@ from cents.exceptions import ConfigurationError, DataFetchError
 logger = logging.getLogger(__name__)
 
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
+
+
+class RateLimiter:
+    """Simple thread-safe rate limiter using minimum interval between requests."""
+
+    def __init__(self, requests_per_second: float = 5.0):
+        """
+        Initialize rate limiter.
+
+        Args:
+            requests_per_second: Maximum requests per second (default 5.0)
+        """
+        self._min_interval = 1.0 / requests_per_second if requests_per_second > 0 else 0
+        self._last_request: float = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        """Wait if necessary to respect the rate limit."""
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_request
+            if elapsed < self._min_interval:
+                sleep_time = self._min_interval - elapsed
+                time.sleep(sleep_time)
+            self._last_request = time.monotonic()
 
 
 def _sanitize_url(url: str) -> str:
@@ -35,6 +62,7 @@ class FMPFundamentalsProvider:
         settings = get_settings()
         self._api_key = api_key or settings.fmp_api_key
         self._timeout = settings.default_api_timeout
+        self._rate_limiter = RateLimiter(settings.fmp_requests_per_second)
 
         if not self._api_key:
             raise ConfigurationError(
@@ -48,6 +76,7 @@ class FMPFundamentalsProvider:
         Returns None on network/API errors, logs warnings for debugging.
         Callers should handle None gracefully (e.g., return empty dict for missing data).
         """
+        self._rate_limiter.wait()
         params["apikey"] = self._api_key
         query = "&".join(f"{k}={v}" for k, v in params.items())
         url = f"{FMP_BASE_URL}/{endpoint}?{query}"

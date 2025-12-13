@@ -30,6 +30,7 @@ class Settings:
     default_output: str = "text"
     fetch_forward_estimates: bool = False  # Enable forward P/E via FMP analyst-estimates
     default_api_timeout: int = 10  # API request timeout in seconds
+    fmp_requests_per_second: float = 5.0  # FMP API rate limit (requests per second)
 
 
 def _load_config_file(config_path: Path) -> dict:
@@ -87,6 +88,15 @@ def get_settings(config_path: str | None = None) -> Settings:
     except (TypeError, ValueError):
         timeout_value = 10
 
+    # Parse FMP rate limit as float
+    fmp_rps_raw = _get("fmp_requests_per_second", "FMP_REQUESTS_PER_SECOND", 5.0)
+    try:
+        fmp_rps_value = float(fmp_rps_raw)
+        if fmp_rps_value <= 0:
+            fmp_rps_value = 5.0
+    except (TypeError, ValueError):
+        fmp_rps_value = 5.0
+
     return Settings(
         news_api_key=_get("news_api_key", "NEWS_API_KEY", None),
         fred_api_key=_get("fred_api_key", "FRED_API_KEY", None),
@@ -99,5 +109,6 @@ def get_settings(config_path: str | None = None) -> Settings:
         default_output=default_output,
         fetch_forward_estimates=fetch_forward,
         default_api_timeout=timeout_value,
+        fmp_requests_per_second=fmp_rps_value,
     )
 

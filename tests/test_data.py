@@ -1,5 +1,6 @@
 """Tests for data providers."""
 
+import time
 from datetime import date, datetime
 from unittest.mock import patch, MagicMock
 
@@ -10,7 +11,7 @@ from cents.data.providers import (
     PriceHistory,
     FundamentalsData,
 )
-from cents.data.fmp import FMPFundamentalsProvider
+from cents.data.fmp import FMPFundamentalsProvider, RateLimiter
 from cents.data.alpaca import AlpacaPriceProvider, ALPACA_DATA_AVAILABLE
 
 
@@ -114,41 +115,83 @@ class TestFundamentalsData:
         assert data.raw == {}
 
 
+class TestRateLimiter:
+    """Tests for RateLimiter."""
+
+    def test_first_request_no_wait(self):
+        """First request should not wait."""
+        limiter = RateLimiter(requests_per_second=10.0)
+        start = time.monotonic()
+        limiter.wait()
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.05  # Should be nearly instant
+
+    def test_respects_rate_limit(self):
+        """Consecutive requests should be spaced correctly."""
+        limiter = RateLimiter(requests_per_second=20.0)  # 50ms between requests
+        limiter.wait()  # First request
+        start = time.monotonic()
+        limiter.wait()  # Second request should wait
+        elapsed = time.monotonic() - start
+        # Should wait at least ~50ms (allow some tolerance)
+        assert elapsed >= 0.04
+
+    def test_no_wait_after_interval_passed(self):
+        """No wait needed if enough time has passed."""
+        limiter = RateLimiter(requests_per_second=100.0)  # 10ms interval
+        limiter.wait()
+        time.sleep(0.02)  # Wait longer than interval
+        start = time.monotonic()
+        limiter.wait()
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.01  # Should be nearly instant
+
+    def test_zero_rate_no_limiting(self):
+        """Zero or negative rate disables limiting."""
+        limiter = RateLimiter(requests_per_second=0)
+        start = time.monotonic()
+        for _ in range(5):
+            limiter.wait()
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.05  # All should be instant
+
+
 class TestFMPFundamentalsProvider:
     """Tests for FMP fundamentals provider."""
 
-    @patch("cents.data.fmp.get_settings")
-    def test_init_missing_api_key(self, mock_settings):
+    @pytest.fixture
+    def mock_fmp_settings(self):
+        """Common mock settings for FMP provider tests."""
+        with patch("cents.data.fmp.get_settings") as mock_settings:
+            mock_settings.return_value.fmp_api_key = "test_key"
+            mock_settings.return_value.default_api_timeout = 10
+            mock_settings.return_value.fmp_requests_per_second = 5.0
+            mock_settings.return_value.fetch_forward_estimates = False
+            yield mock_settings
+
+    def test_init_missing_api_key(self, mock_fmp_settings):
         """Raises ConfigurationError when API key missing."""
         from cents.exceptions import ConfigurationError
-        mock_settings.return_value.fmp_api_key = None
+        mock_fmp_settings.return_value.fmp_api_key = None
 
         with pytest.raises(ConfigurationError, match="FMP API key required"):
             FMPFundamentalsProvider()
 
-    @patch("cents.data.fmp.get_settings")
-    def test_init_with_api_key(self, mock_settings):
+    def test_init_with_api_key(self, mock_fmp_settings):
         """Initialize with API key from settings."""
-        mock_settings.return_value.fmp_api_key = "test_key"
-
         provider = FMPFundamentalsProvider()
         assert provider._api_key == "test_key"
 
-    @patch("cents.data.fmp.get_settings")
-    def test_init_with_explicit_api_key(self, mock_settings):
+    def test_init_with_explicit_api_key(self, mock_fmp_settings):
         """Initialize with explicit API key."""
-        mock_settings.return_value.fmp_api_key = "from_settings"
+        mock_fmp_settings.return_value.fmp_api_key = "from_settings"
 
         provider = FMPFundamentalsProvider(api_key="explicit_key")
         assert provider._api_key == "explicit_key"
 
     @patch("cents.data.fmp.urllib.request.urlopen")
-    @patch("cents.data.fmp.get_settings")
-    def test_get_fundamentals_success(self, mock_settings, mock_urlopen):
+    def test_get_fundamentals_success(self, mock_urlopen, mock_fmp_settings):
         """Successfully fetch fundamentals."""
-        mock_settings.return_value.fmp_api_key = "test_key"
-        mock_settings.return_value.fetch_forward_estimates = False
-
         # Mock responses for each endpoint (stable API field names)
         responses = [
             [{"companyName": "Apple Inc."}],  # profile
@@ -177,11 +220,8 @@ class TestFMPFundamentalsProvider:
         assert data.return_on_equity == 0.35
 
     @patch("cents.data.fmp.urllib.request.urlopen")
-    @patch("cents.data.fmp.get_settings")
-    def test_get_fundamentals_empty_response(self, mock_settings, mock_urlopen):
+    def test_get_fundamentals_empty_response(self, mock_urlopen, mock_fmp_settings):
         """Handle empty API response."""
-        mock_settings.return_value.fmp_api_key = "test_key"
-
         def mock_response(*args, **kwargs):
             response = MagicMock()
             response.read.return_value = b"[]"
@@ -199,12 +239,10 @@ class TestFMPFundamentalsProvider:
         assert data.pe_ratio is None
 
     @patch("cents.data.fmp.urllib.request.urlopen")
-    @patch("cents.data.fmp.get_settings")
-    def test_get_fundamentals_api_error(self, mock_settings, mock_urlopen):
+    def test_get_fundamentals_api_error(self, mock_urlopen, mock_fmp_settings):
         """Handle API error gracefully."""
         import urllib.error
 
-        mock_settings.return_value.fmp_api_key = "test_key"
         mock_urlopen.side_effect = urllib.error.URLError("Connection failed")
 
         provider = FMPFundamentalsProvider()
@@ -214,55 +252,42 @@ class TestFMPFundamentalsProvider:
         assert data.symbol == "AAPL"
         assert data.name is None
 
-    def test_map_rating_strong_buy(self):
+    def test_map_rating_strong_buy(self, mock_fmp_settings):
         """Map strong buy rating."""
-        with patch("cents.data.fmp.get_settings") as mock_settings:
-            mock_settings.return_value.fmp_api_key = "test_key"
-            provider = FMPFundamentalsProvider()
+        provider = FMPFundamentalsProvider()
 
-            assert provider._map_rating("Strong Buy") == "strong_buy"
-            assert provider._map_rating("STRONG BUY") == "strong_buy"
+        assert provider._map_rating("Strong Buy") == "strong_buy"
+        assert provider._map_rating("STRONG BUY") == "strong_buy"
 
-    def test_map_rating_buy(self):
+    def test_map_rating_buy(self, mock_fmp_settings):
         """Map buy rating."""
-        with patch("cents.data.fmp.get_settings") as mock_settings:
-            mock_settings.return_value.fmp_api_key = "test_key"
-            provider = FMPFundamentalsProvider()
+        provider = FMPFundamentalsProvider()
 
-            assert provider._map_rating("Buy") == "buy"
+        assert provider._map_rating("Buy") == "buy"
 
-    def test_map_rating_hold(self):
+    def test_map_rating_hold(self, mock_fmp_settings):
         """Map hold rating."""
-        with patch("cents.data.fmp.get_settings") as mock_settings:
-            mock_settings.return_value.fmp_api_key = "test_key"
-            provider = FMPFundamentalsProvider()
+        provider = FMPFundamentalsProvider()
 
-            assert provider._map_rating("Hold") == "hold"
-            assert provider._map_rating("Neutral") == "hold"
+        assert provider._map_rating("Hold") == "hold"
+        assert provider._map_rating("Neutral") == "hold"
 
-    def test_map_rating_sell(self):
+    def test_map_rating_sell(self, mock_fmp_settings):
         """Map sell ratings."""
-        with patch("cents.data.fmp.get_settings") as mock_settings:
-            mock_settings.return_value.fmp_api_key = "test_key"
-            provider = FMPFundamentalsProvider()
+        provider = FMPFundamentalsProvider()
 
-            assert provider._map_rating("Sell") == "sell"
-            assert provider._map_rating("Strong Sell") == "strong_sell"
+        assert provider._map_rating("Sell") == "sell"
+        assert provider._map_rating("Strong Sell") == "strong_sell"
 
-    def test_map_rating_none(self):
+    def test_map_rating_none(self, mock_fmp_settings):
         """Map None rating."""
-        with patch("cents.data.fmp.get_settings") as mock_settings:
-            mock_settings.return_value.fmp_api_key = "test_key"
-            provider = FMPFundamentalsProvider()
+        provider = FMPFundamentalsProvider()
 
-            assert provider._map_rating(None) is None
+        assert provider._map_rating(None) is None
 
     @patch("cents.data.fmp.urllib.request.urlopen")
-    @patch("cents.data.fmp.get_settings")
-    def test_get_fundamentals_with_as_of(self, mock_settings, mock_urlopen):
+    def test_get_fundamentals_with_as_of(self, mock_urlopen, mock_fmp_settings):
         """Get historical fundamentals with as_of date."""
-        mock_settings.return_value.fmp_api_key = "test_key"
-
         # Mock responses for historical queries
         responses = [
             [{"companyName": "Apple Inc."}],  # profile
@@ -299,10 +324,8 @@ class TestFMPFundamentalsProvider:
         assert data.profit_margin == 0.25
         assert data.raw["as_of"] == "2024-04-15"
 
-    @patch("cents.data.fmp.get_settings")
-    def test_find_quarter_data(self, mock_settings):
+    def test_find_quarter_data(self, mock_fmp_settings):
         """Test quarter data lookup."""
-        mock_settings.return_value.fmp_api_key = "test_key"
         provider = FMPFundamentalsProvider()
 
         data = [
@@ -324,10 +347,8 @@ class TestFMPFundamentalsProvider:
         result = provider._find_quarter_data(data, date(2023, 1, 1))
         assert result == {}
 
-    @patch("cents.data.fmp.get_settings")
-    def test_find_quarter_data_empty(self, mock_settings):
+    def test_find_quarter_data_empty(self, mock_fmp_settings):
         """Test quarter data lookup with empty data."""
-        mock_settings.return_value.fmp_api_key = "test_key"
         provider = FMPFundamentalsProvider()
 
         result = provider._find_quarter_data(None, date(2024, 5, 1))
