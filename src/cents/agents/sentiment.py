@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from datetime import date
 from urllib.request import urlopen, Request
 from urllib.parse import quote
@@ -15,6 +16,43 @@ logger = logging.getLogger(__name__)
 
 # Module-level cache for LLM article scores (keyed by URL)
 _article_score_cache: dict[str, dict] = {}
+
+
+def _extract_score_from_llm_response(text: str) -> tuple[float, str] | None:
+    """Extract score and reasoning from LLM response, handling malformed JSON.
+
+    Returns (score, reasoning) tuple or None if extraction fails.
+    """
+    # Try standard JSON extraction first
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start >= 0 and end > start:
+        json_str = text[start:end]
+        try:
+            result = json.loads(json_str)
+            return float(result.get("score", 0)), result.get("reasoning", "")
+        except json.JSONDecodeError:
+            # Try fixing common JSON issues
+            # Remove trailing commas before }
+            fixed = re.sub(r',\s*}', '}', json_str)
+            # Remove trailing commas before ]
+            fixed = re.sub(r',\s*]', ']', fixed)
+            try:
+                result = json.loads(fixed)
+                return float(result.get("score", 0)), result.get("reasoning", "")
+            except json.JSONDecodeError:
+                pass
+
+    # Fallback: extract score with regex
+    score_match = re.search(r'"?score"?\s*:\s*(-?[\d.]+)', text)
+    if score_match:
+        score = float(score_match.group(1))
+        # Try to get reasoning too
+        reasoning_match = re.search(r'"?reasoning"?\s*:\s*"([^"]*)"', text)
+        reasoning = reasoning_match.group(1) if reasoning_match else ""
+        return score, reasoning
+
+    return None
 
 
 class SentimentAgent(BaseAgent):
@@ -276,13 +314,10 @@ Score meaning: -1 = very bearish for thesis, 0 = neutral, +1 = very bullish for 
             )
             text = response.content[0].text.strip()
 
-            # Parse JSON from response (may have text before/after)
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                result = json.loads(text[start:end])
-                score = float(result.get("score", 0))
-                reasoning = result.get("reasoning", "")
+            # Parse score from response (handles malformed JSON)
+            extracted = _extract_score_from_llm_response(text)
+            if extracted:
+                score, reasoning = extracted
 
                 # Clamp score to [-1, 1]
                 score = max(-1.0, min(1.0, score))
@@ -314,8 +349,11 @@ Score meaning: -1 = very bearish for thesis, 0 = neutral, +1 = very bullish for 
 
                 return ev_type, score, confidence, metadata
 
+            # Could not extract score from response
+            logger.debug("Could not extract score from LLM response: %s", text[:100])
+
         except Exception as e:
-            logger.warning(f"LLM scoring failed: {e}")
+            logger.debug("LLM scoring error: %s", e)
 
         # Fallback to keyword scoring
         return self._score_article(article)

@@ -10,10 +10,12 @@ from cents.serialization import serialize
 from ._shared import validate_symbol
 
 
-@click.group()
-def evidence():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def evidence(ctx):
     """Manage research evidence."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(evidence_list)
 
 
 @evidence.command("list")

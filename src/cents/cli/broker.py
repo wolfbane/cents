@@ -13,10 +13,12 @@ from ._shared import validate_symbol
 logger = logging.getLogger(__name__)
 
 
-@click.group()
-def broker():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def broker(ctx):
     """Alpaca broker integration."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(broker_list)
 
 
 @broker.command("status")
@@ -46,8 +48,8 @@ def broker_status():
         raise SystemExit(1)
 
 
-@broker.command("positions")
-def broker_positions():
+@broker.command("list")
+def broker_list():
     """List positions from broker."""
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 

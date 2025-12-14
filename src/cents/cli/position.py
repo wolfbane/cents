@@ -11,10 +11,12 @@ from cents.serialization import serialize
 from ._shared import validate_symbol, get_settings_lazy
 
 
-@click.group()
-def position():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def position(ctx):
     """Manage positions."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(position_list)
 
 
 @position.command("open")

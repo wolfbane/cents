@@ -5,10 +5,12 @@ import click
 from cents.db import AlertRepository
 
 
-@click.group()
-def alert():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def alert(ctx):
     """Manage alerts."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(alert_list)
 
 
 @alert.command("list")

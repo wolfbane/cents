@@ -6,8 +6,66 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cents.agents import SentimentAgent
-from cents.agents.sentiment import clear_sentiment_cache, _article_score_cache
+from cents.agents.sentiment import (
+    clear_sentiment_cache,
+    _article_score_cache,
+    _extract_score_from_llm_response,
+)
 from cents.models import Thesis, EvidenceType
+
+
+class TestExtractScoreFromLLMResponse:
+    """Tests for robust JSON extraction from LLM responses."""
+
+    def test_valid_json(self):
+        """Extracts score from valid JSON."""
+        text = '{"score": 0.5, "reasoning": "Test reason"}'
+        result = _extract_score_from_llm_response(text)
+        assert result == (0.5, "Test reason")
+
+    def test_json_with_surrounding_text(self):
+        """Extracts JSON embedded in surrounding text."""
+        text = 'Here is my analysis: {"score": -0.3, "reasoning": "Bearish signal"} Hope that helps!'
+        result = _extract_score_from_llm_response(text)
+        assert result == (-0.3, "Bearish signal")
+
+    def test_trailing_comma_in_json(self):
+        """Handles trailing comma before closing brace."""
+        text = '{"score": 0.8, "reasoning": "Strong bullish",}'
+        result = _extract_score_from_llm_response(text)
+        assert result == (0.8, "Strong bullish")
+
+    def test_regex_fallback_no_json_braces(self):
+        """Falls back to regex when no valid JSON structure."""
+        text = 'The score is score: 0.6 with reasoning: "Positive outlook"'
+        result = _extract_score_from_llm_response(text)
+        assert result is not None
+        assert result[0] == 0.6
+
+    def test_regex_fallback_malformed_json(self):
+        """Falls back to regex when JSON is severely malformed."""
+        text = '{"score": 0.7, reasoning: unquoted string}'
+        result = _extract_score_from_llm_response(text)
+        assert result is not None
+        assert result[0] == 0.7
+
+    def test_negative_score(self):
+        """Handles negative scores correctly."""
+        text = '{"score": -0.9, "reasoning": "Very bearish"}'
+        result = _extract_score_from_llm_response(text)
+        assert result == (-0.9, "Very bearish")
+
+    def test_no_score_returns_none(self):
+        """Returns None when no score can be extracted."""
+        text = "I cannot analyze this article without more context."
+        result = _extract_score_from_llm_response(text)
+        assert result is None
+
+    def test_missing_reasoning(self):
+        """Handles missing reasoning field."""
+        text = '{"score": 0.4}'
+        result = _extract_score_from_llm_response(text)
+        assert result == (0.4, "")
 
 
 class MockAnthropicResponse:

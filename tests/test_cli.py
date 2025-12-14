@@ -708,9 +708,9 @@ class TestBrokerCLIErrors:
         assert "pip install cents[broker]" in result.output
 
     @patch("cents.broker.ALPACA_AVAILABLE", False)
-    def test_broker_positions_alpaca_not_installed(self, runner):
-        """Broker positions fails when Alpaca not installed."""
-        result = runner.invoke(cli, ["broker", "positions"])
+    def test_broker_list_alpaca_not_installed(self, runner):
+        """Broker list fails when Alpaca not installed."""
+        result = runner.invoke(cli, ["broker", "list"])
         assert result.exit_code == 1
         assert "Alpaca not installed" in result.output
 
@@ -767,13 +767,13 @@ class TestBrokerCLIErrors:
         assert "Connection failed" in result.output
 
     @patch("cents.broker.AlpacaClient")
-    def test_broker_positions_api_error(self, mock_client_class, runner):
-        """Broker positions handles API errors."""
+    def test_broker_list_api_error(self, mock_client_class, runner):
+        """Broker list handles API errors."""
         from cents.exceptions import APIError
         mock_client = mock_client_class.return_value
         mock_client.get_positions.side_effect = APIError("Network error")
 
-        result = runner.invoke(cli, ["broker", "positions"])
+        result = runner.invoke(cli, ["broker", "list"])
         assert result.exit_code == 1
         assert "API error" in result.output
 

@@ -8,10 +8,12 @@ from cents.models import WatchlistItem
 from ._shared import validate_symbol
 
 
-@click.group()
-def watch():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def watch(ctx):
     """Manage watchlist."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(watch_list)
 
 
 @watch.command("add")

@@ -6,10 +6,12 @@ from cents.db import PositionRepository, OutcomeRepository
 from cents.models import Outcome, PositionStatus, ThesisAccuracy
 
 
-@click.group()
-def outcome():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def outcome(ctx):
     """Track outcomes."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(outcome_list)
 
 
 @outcome.command("record")

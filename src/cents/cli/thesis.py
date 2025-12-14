@@ -19,10 +19,12 @@ from cents.serialization import serialize
 from ._shared import validate_symbol, generate_thesis_suggestion, get_settings_lazy
 
 
-@click.group()
-def thesis():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def thesis(ctx):
     """Manage investment theses."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(thesis_list)
 
 
 @thesis.command("create")

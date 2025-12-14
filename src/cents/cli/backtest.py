@@ -82,10 +82,12 @@ def _calculate_forward_returns(
     return returns
 
 
-@click.group("backtest")
-def backtest():
+@click.group("backtest", invoke_without_command=True)
+@click.pass_context
+def backtest(ctx):
     """Run and analyze agent backtests."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(list_backtests)
 
 
 def _run_single_backtest(
