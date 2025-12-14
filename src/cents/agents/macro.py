@@ -1,7 +1,7 @@
-"""Macro agent - analyzes economic environment."""
+"""Macro agent - analyzes economic environment using rate of change signals."""
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from urllib.request import urlopen
 from urllib.error import URLError
 import json
@@ -13,21 +13,21 @@ from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 logger = logging.getLogger(__name__)
 
-# Fed Funds Rate thresholds (percentage)
-FED_RATE_HIGH = 5.0    # Above 5% = restrictive (bearish for equities)
-FED_RATE_LOW = 2.0     # Below 2% = accommodative (bullish)
+# Rate of change thresholds (percentage points over lookback period)
+FED_RATE_CUT_THRESHOLD = -0.25    # Rate cut of 25bp+ = bullish
+FED_RATE_HIKE_THRESHOLD = 0.25   # Rate hike of 25bp+ = bearish
 
-# Yield curve thresholds (10Y-2Y spread in percentage points)
-YIELD_CURVE_INVERTED = 0.0   # Below 0 = inverted (recession signal)
-YIELD_CURVE_STEEP = 1.0      # Above 1% = steep (healthy)
+# Unemployment change thresholds
+UNEMPLOYMENT_RISING_THRESHOLD = 0.3   # Rising 0.3%+ = bearish
+UNEMPLOYMENT_FALLING_THRESHOLD = -0.2  # Falling 0.2%+ = bullish
+UNEMPLOYMENT_LOW = 4.5                 # Below 4.5% = healthy labor market
 
-# Unemployment rate thresholds (percentage)
-UNEMPLOYMENT_HIGH = 6.0      # Above 6% = weak economy
-UNEMPLOYMENT_LOW = 4.0       # Below 4% = strong labor market
+# Yield curve - only flag extreme inversions (reduced weight)
+YIELD_CURVE_DEEPLY_INVERTED = -0.5  # Below -0.5% = recession warning
 
-# VIX thresholds (index points)
-VIX_HIGH = 30    # Above 30 = high fear/volatility
-VIX_LOW = 15     # Below 15 = complacency
+# VIX thresholds
+VIX_SPIKE_THRESHOLD = 25      # Above 25 = elevated fear
+VIX_COMPLACENT = 13           # Below 13 = complacency
 
 
 def _sanitize_url(url: str) -> str:
@@ -36,7 +36,7 @@ def _sanitize_url(url: str) -> str:
 
 
 class MacroAgent(BaseAgent):
-    """Agent that analyzes macroeconomic indicators."""
+    """Agent that analyzes macroeconomic indicators using rate of change."""
 
     name = "macro"
 
@@ -45,9 +45,11 @@ class MacroAgent(BaseAgent):
         "DFF": "Fed Funds Rate",
         "T10Y2Y": "10Y-2Y Spread (Yield Curve)",
         "UNRATE": "Unemployment Rate",
-        "CPIAUCSL": "CPI (Inflation)",
         "VIXCLS": "VIX (Volatility Index)",
     }
+
+    # Lookback period for rate of change (in days)
+    LOOKBACK_DAYS = 90
 
     def __init__(self):
         super().__init__()
@@ -57,7 +59,7 @@ class MacroAgent(BaseAgent):
     def research(
         self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
     ) -> AgentResult:
-        """Research macro environment (symbol-agnostic)."""
+        """Research macro environment using rate of change signals."""
         evidence = []
         conviction_delta = 0.0
         dimension_scores: dict[str, float] = {}
@@ -66,41 +68,63 @@ class MacroAgent(BaseAgent):
         thesis_id = thesis.id if thesis else None
 
         if not self.api_key:
-            # Provide general macro context without FRED
             return self._research_without_fred(thesis_id, summaries)
 
-        # Fetch FRED data
+        # Fetch current and historical data for each indicator
         for series_id, name in self.INDICATORS.items():
             try:
-                value, obs_date = self._with_retries(
+                current, current_date = self._with_retries(
                     lambda s=series_id: self._fetch_fred_series(s, as_of=as_of)
                 )
-                if value is None:
+                if current is None:
                     continue
 
-                ev_type, delta, note = self._interpret_indicator(series_id, value)
+                # Fetch historical value for rate of change
+                lookback_date = (as_of or date.today()) - timedelta(days=self.LOOKBACK_DAYS)
+                historical, hist_date = self._with_retries(
+                    lambda s=series_id: self._fetch_fred_series(s, as_of=lookback_date)
+                )
+
+                # Calculate change
+                change = (current - historical) if historical is not None else None
+
+                ev_type, delta, note, metadata = self._interpret_with_change(
+                    series_id, current, change
+                )
                 conviction_delta += delta
                 dimension_scores["macro"] = dimension_scores.get("macro", 0) + delta
                 if note:
                     summaries.append(note)
 
+                # Build evidence content
+                if change is not None:
+                    change_str = f"{change:+.2f}" if series_id != "VIXCLS" else f"{change:+.1f}"
+                    content = f"{name}: {current:.2f} ({change_str} over 3mo)"
+                else:
+                    content = f"{name}: {current:.2f}"
+
                 evidence.append(
                     self.create_evidence(
                         thesis_id=thesis_id,
-                        content=f"{name}: {value:.2f} (as of {obs_date})",
+                        content=content,
                         source=f"FRED:{series_id}",
                         evidence_type=ev_type,
                         confidence=0.7,
                         dimension=ThesisDimension.MACRO,
-                        metadata={"series": series_id, "value": value, "date": obs_date},
+                        metadata={
+                            "series": series_id,
+                            "value": current,
+                            "date": current_date,
+                            "change_3mo": change,
+                            **metadata,
+                        },
                     )
                 )
             except RECOVERABLE_EXCEPTIONS as e:
                 evidence.append(
                     self.create_evidence(
                         thesis_id=thesis_id,
-                        content=(
-                            f"FRED fetch failed for {series_id} after retries: {e}"),
+                        content=f"FRED fetch failed for {series_id}: {e}",
                         source=f"FRED:{series_id}",
                         evidence_type=EvidenceType.NEUTRAL,
                         confidence=0.0,
@@ -112,7 +136,7 @@ class MacroAgent(BaseAgent):
         if summaries:
             summary = "Macro: " + "; ".join(summaries)
         else:
-            summary = "Macro: No significant signals"
+            summary = "Macro: Neutral environment"
 
         return AgentResult(
             evidence=evidence,
@@ -124,12 +148,7 @@ class MacroAgent(BaseAgent):
     def _fetch_fred_series(
         self, series_id: str, as_of: date | None = None
     ) -> tuple[float | None, str | None]:
-        """Fetch latest value from FRED API.
-
-        Args:
-            series_id: FRED series ID
-            as_of: Optional date for historical data (returns observation <= as_of)
-        """
+        """Fetch latest value from FRED API."""
         url = (
             f"https://api.stlouisfed.org/fred/series/observations"
             f"?series_id={series_id}&api_key={self.api_key}"
@@ -149,39 +168,78 @@ class MacroAgent(BaseAgent):
             logger.debug("Failed URL: %s", _sanitize_url(url))
             raise
 
-    def _interpret_indicator(
-        self, series_id: str, value: float
-    ) -> tuple[EvidenceType, float, str | None]:
-        """Interpret indicator value for equity investing."""
-        if series_id == "DFF":  # Fed Funds Rate
-            if value > FED_RATE_HIGH:
-                return EvidenceType.CONTRADICTING, -3, f"High rates ({value:.2f}%)"
-            elif value < FED_RATE_LOW:
-                return EvidenceType.SUPPORTING, 3, f"Low rates ({value:.2f}%)"
-            return EvidenceType.NEUTRAL, 0, None
+    def _interpret_with_change(
+        self, series_id: str, value: float, change: float | None
+    ) -> tuple[EvidenceType, float, str | None, dict]:
+        """Interpret indicator using rate of change, not just absolute level.
 
-        elif series_id == "T10Y2Y":  # Yield curve
-            if value < YIELD_CURVE_INVERTED:
-                return EvidenceType.CONTRADICTING, -5, "Inverted yield curve"
-            elif value > YIELD_CURVE_STEEP:
-                return EvidenceType.SUPPORTING, 2, "Steep yield curve"
-            return EvidenceType.NEUTRAL, 0, None
+        Returns: (evidence_type, delta, summary_note, metadata)
+        """
+        metadata = {}
 
-        elif series_id == "UNRATE":  # Unemployment
-            if value > UNEMPLOYMENT_HIGH:
-                return EvidenceType.CONTRADICTING, -2, f"High unemployment ({value:.1f}%)"
-            elif value < UNEMPLOYMENT_LOW:
-                return EvidenceType.SUPPORTING, 2, f"Low unemployment ({value:.1f}%)"
-            return EvidenceType.NEUTRAL, 0, None
+        if series_id == "DFF":  # Fed Funds Rate - focus on direction
+            if change is not None:
+                if change <= FED_RATE_CUT_THRESHOLD:
+                    # Fed cutting rates = bullish for equities
+                    metadata["signal"] = "rate_cut"
+                    return EvidenceType.SUPPORTING, 4, f"Fed cutting rates ({change:+.2f}%)", metadata
+                elif change >= FED_RATE_HIKE_THRESHOLD:
+                    # Fed hiking rates = bearish
+                    metadata["signal"] = "rate_hike"
+                    return EvidenceType.CONTRADICTING, -3, f"Fed hiking rates ({change:+.2f}%)", metadata
+            # Rates stable = neutral (already priced in)
+            metadata["signal"] = "stable"
+            return EvidenceType.NEUTRAL, 0, None, metadata
 
-        elif series_id == "VIXCLS":  # VIX
-            if value > VIX_HIGH:
-                return EvidenceType.CONTRADICTING, -3, f"High VIX ({value:.0f})"
-            elif value < VIX_LOW:
-                return EvidenceType.SUPPORTING, 2, f"Low VIX ({value:.0f})"
-            return EvidenceType.NEUTRAL, 0, None
+        elif series_id == "T10Y2Y":  # Yield curve - reduced weight, only flag deep inversion
+            if value < YIELD_CURVE_DEEPLY_INVERTED:
+                # Deep inversion = recession warning (but lower weight)
+                metadata["signal"] = "deep_inversion"
+                return EvidenceType.CONTRADICTING, -2, f"Deeply inverted curve ({value:.2f}%)", metadata
+            elif change is not None and change > 0.3:
+                # Curve steepening = improving outlook
+                metadata["signal"] = "steepening"
+                return EvidenceType.SUPPORTING, 2, "Yield curve steepening", metadata
+            metadata["signal"] = "neutral"
+            return EvidenceType.NEUTRAL, 0, None, metadata
 
-        return EvidenceType.NEUTRAL, 0, None
+        elif series_id == "UNRATE":  # Unemployment - both level and direction matter
+            if change is not None:
+                if change >= UNEMPLOYMENT_RISING_THRESHOLD:
+                    # Rising unemployment = weakening economy = bearish
+                    metadata["signal"] = "rising"
+                    return EvidenceType.CONTRADICTING, -4, f"Rising unemployment ({change:+.1f}%)", metadata
+                elif change <= UNEMPLOYMENT_FALLING_THRESHOLD:
+                    # Falling unemployment = strengthening economy = bullish
+                    metadata["signal"] = "falling"
+                    return EvidenceType.SUPPORTING, 3, f"Falling unemployment ({change:+.1f}%)", metadata
+
+            # Level check: low unemployment = healthy economy
+            if value < UNEMPLOYMENT_LOW:
+                metadata["signal"] = "low_stable"
+                return EvidenceType.SUPPORTING, 2, f"Low unemployment ({value:.1f}%)", metadata
+            metadata["signal"] = "neutral"
+            return EvidenceType.NEUTRAL, 0, None, metadata
+
+        elif series_id == "VIXCLS":  # VIX - focus on direction and extremes
+            if change is not None:
+                if value > VIX_SPIKE_THRESHOLD and change < -5:
+                    # VIX was high but falling = fear receding = bullish
+                    metadata["signal"] = "fear_receding"
+                    return EvidenceType.SUPPORTING, 3, f"Fear receding (VIX {value:.0f}, falling)", metadata
+                elif value < VIX_COMPLACENT and change > 3:
+                    # VIX was low but rising = complacency ending = warning
+                    metadata["signal"] = "complacency_ending"
+                    return EvidenceType.CONTRADICTING, -2, f"VIX rising from lows ({value:.0f})", metadata
+
+            if value > 30:
+                # Extreme fear - often contrarian bullish
+                metadata["signal"] = "extreme_fear"
+                return EvidenceType.NEUTRAL, 1, f"Elevated VIX ({value:.0f})", metadata
+            metadata["signal"] = "neutral"
+            return EvidenceType.NEUTRAL, 0, None, metadata
+
+        return EvidenceType.NEUTRAL, 0, None, {}
 
     def _research_without_fred(
         self, thesis_id: str, summaries: list

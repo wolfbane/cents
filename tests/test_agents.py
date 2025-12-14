@@ -297,76 +297,135 @@ class TestMacroAgent:
         # Missing API key should be neutral, not contradicting (it's not counter-evidence)
         assert result.evidence[0].type == EvidenceType.NEUTRAL
 
-    def test_research_high_rates_bearish(self):
-        """High fed funds rate is bearish."""
+    def test_research_rate_hike_bearish(self):
+        """Fed hiking rates is bearish."""
         agent = MacroAgent()
 
-        # Directly test interpretation logic for high rates
-        ev_type, delta, note = agent._interpret_indicator("DFF", 5.5)
+        # Test interpretation logic - rate hike of 0.5% over 3 months
+        ev_type, delta, note, metadata = agent._interpret_with_change("DFF", 5.5, change=0.5)
 
         assert ev_type == EvidenceType.CONTRADICTING
         assert delta < 0
-        assert "High rates" in note
+        assert "hiking" in note
+        assert metadata["signal"] == "rate_hike"
+
+    def test_research_rate_cut_bullish(self):
+        """Fed cutting rates is bullish."""
+        agent = MacroAgent()
+
+        # Test interpretation logic - rate cut of 0.5% over 3 months
+        ev_type, delta, note, metadata = agent._interpret_with_change("DFF", 5.0, change=-0.5)
+
+        assert ev_type == EvidenceType.SUPPORTING
+        assert delta > 0
+        assert "cutting" in note
+        assert metadata["signal"] == "rate_cut"
+
+    def test_research_stable_rates_neutral(self):
+        """Stable rates (already priced in) is neutral."""
+        agent = MacroAgent()
+
+        # Test interpretation logic - rates unchanged
+        ev_type, delta, note, metadata = agent._interpret_with_change("DFF", 5.5, change=0.0)
+
+        assert ev_type == EvidenceType.NEUTRAL
+        assert delta == 0
+        assert metadata["signal"] == "stable"
 
     @patch("cents.agents.macro.urlopen")
     @patch("cents.agents.macro.get_settings")
-    def test_research_low_rates_bullish(self, mock_settings, mock_urlopen):
-        """Low fed funds rate is bullish."""
+    def test_research_rate_cutting_bullish(self, mock_settings, mock_urlopen):
+        """Fed cutting rates produces bullish signal."""
         mock_settings.return_value.fred_api_key = "test_key"
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps({
-            "observations": [{"value": "1.5", "date": "2024-01-01"}]
-        }).encode()
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
+
+        # Mock responses: current value 4.5%, historical value 5.0% = rate cut
+        def mock_urlopen_handler(url, timeout=None):
+            mock_response = MagicMock()
+            if "observation_end" in url:
+                # Historical value (3 months ago)
+                mock_response.read.return_value = json.dumps({
+                    "observations": [{"value": "5.0", "date": "2023-10-01"}]
+                }).encode()
+            else:
+                # Current value
+                mock_response.read.return_value = json.dumps({
+                    "observations": [{"value": "4.5", "date": "2024-01-01"}]
+                }).encode()
+            mock_response.__enter__ = lambda s: s
+            mock_response.__exit__ = MagicMock(return_value=False)
+            return mock_response
+
+        mock_urlopen.side_effect = mock_urlopen_handler
 
         agent = MacroAgent()
         result = agent.research("TEST")
 
+        # Rate cut should produce bullish signal
         assert result.conviction_delta > 0
 
-    def test_interpret_inverted_yield_curve(self):
-        """Inverted yield curve is very bearish."""
+    def test_interpret_deeply_inverted_yield_curve(self):
+        """Deeply inverted yield curve is bearish (but reduced weight)."""
         agent = MacroAgent()
-        ev_type, delta, note = agent._interpret_indicator("T10Y2Y", -0.5)
+        ev_type, delta, note, metadata = agent._interpret_with_change("T10Y2Y", -0.6, change=0.0)
 
         assert ev_type == EvidenceType.CONTRADICTING
         assert delta < 0
-        assert "Inverted" in note
+        assert "inverted" in note.lower()
+        assert metadata["signal"] == "deep_inversion"
 
-    def test_interpret_high_unemployment(self):
-        """High unemployment is bearish."""
+    def test_interpret_steepening_yield_curve(self):
+        """Yield curve steepening is bullish."""
         agent = MacroAgent()
-        ev_type, delta, note = agent._interpret_indicator("UNRATE", 7.0)
-
-        assert ev_type == EvidenceType.CONTRADICTING
-        assert delta < 0
-
-    def test_interpret_low_unemployment(self):
-        """Low unemployment is bullish."""
-        agent = MacroAgent()
-        ev_type, delta, note = agent._interpret_indicator("UNRATE", 3.5)
+        ev_type, delta, note, metadata = agent._interpret_with_change("T10Y2Y", 0.5, change=0.5)
 
         assert ev_type == EvidenceType.SUPPORTING
         assert delta > 0
+        assert metadata["signal"] == "steepening"
 
-    def test_interpret_high_vix(self):
-        """High VIX is bearish."""
+    def test_interpret_rising_unemployment(self):
+        """Rising unemployment is bearish."""
         agent = MacroAgent()
-        ev_type, delta, note = agent._interpret_indicator("VIXCLS", 35.0)
+        ev_type, delta, note, metadata = agent._interpret_with_change("UNRATE", 5.0, change=0.5)
 
         assert ev_type == EvidenceType.CONTRADICTING
         assert delta < 0
-        assert "High VIX" in note
+        assert metadata["signal"] == "rising"
 
-    def test_interpret_low_vix(self):
-        """Low VIX is bullish."""
+    def test_interpret_low_stable_unemployment(self):
+        """Low stable unemployment is bullish."""
         agent = MacroAgent()
-        ev_type, delta, note = agent._interpret_indicator("VIXCLS", 12.0)
+        ev_type, delta, note, metadata = agent._interpret_with_change("UNRATE", 3.5, change=0.0)
 
         assert ev_type == EvidenceType.SUPPORTING
         assert delta > 0
+        assert metadata["signal"] == "low_stable"
+
+    def test_interpret_falling_unemployment(self):
+        """Falling unemployment is bullish."""
+        agent = MacroAgent()
+        ev_type, delta, note, metadata = agent._interpret_with_change("UNRATE", 4.0, change=-0.3)
+
+        assert ev_type == EvidenceType.SUPPORTING
+        assert delta > 0
+        assert metadata["signal"] == "falling"
+
+    def test_interpret_fear_receding(self):
+        """VIX falling from high levels is bullish."""
+        agent = MacroAgent()
+        ev_type, delta, note, metadata = agent._interpret_with_change("VIXCLS", 28.0, change=-8.0)
+
+        assert ev_type == EvidenceType.SUPPORTING
+        assert delta > 0
+        assert metadata["signal"] == "fear_receding"
+
+    def test_interpret_complacency_ending(self):
+        """VIX rising from low levels is bearish."""
+        agent = MacroAgent()
+        ev_type, delta, note, metadata = agent._interpret_with_change("VIXCLS", 12.0, change=4.0)
+
+        assert ev_type == EvidenceType.CONTRADICTING
+        assert delta < 0
+        assert metadata["signal"] == "complacency_ending"
 
 
 class TestSentimentAgent:
