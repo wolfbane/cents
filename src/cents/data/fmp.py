@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from datetime import date
 
+from cents.cache import cached_request
 from cents.config import get_settings
 from cents.data.providers import FundamentalsData, FundamentalsDataProvider
 from cents.exceptions import ConfigurationError, DataFetchError
@@ -42,30 +43,45 @@ class FMPFundamentalsProvider:
                 "or fmp_api_key in ~/.cents/config.toml"
             )
 
-    def _fetch_json(self, endpoint: str, **params) -> dict | list | None:
+    def _fetch_json(
+        self, endpoint: str, use_cache: bool = False, **params
+    ) -> dict | list | None:
         """Fetch JSON from FMP API.
 
         Returns None on network/API errors, logs warnings for debugging.
         Callers should handle None gracefully (e.g., return empty dict for missing data).
+
+        Args:
+            endpoint: API endpoint
+            use_cache: If True, use caching for this request (for historical data)
+            **params: Query parameters
         """
-        params["apikey"] = self._api_key
-        query = "&".join(f"{k}={v}" for k, v in params.items())
-        url = f"{FMP_BASE_URL}/{endpoint}?{query}"
-        try:
-            with urllib.request.urlopen(url, timeout=self._timeout) as response:
-                data = json.loads(response.read().decode())
-                # FMP returns error messages as {"Error Message": "..."} on some endpoints
-                if isinstance(data, dict) and "Error Message" in data:
-                    logger.warning("FMP API error for %s: %s", endpoint, data["Error Message"])
-                    return None
-                return data
-        except urllib.error.URLError as e:
-            logger.warning("FMP API request failed for %s: %s", endpoint, e)
-            logger.debug("Failed URL: %s", _sanitize_url(url))
-            return None
-        except json.JSONDecodeError as e:
-            logger.warning("FMP API returned invalid JSON for %s: %s", endpoint, e)
-            return None
+        # Build cache params (exclude apikey)
+        cache_params = {"endpoint": endpoint, **params}
+
+        def do_fetch():
+            params["apikey"] = self._api_key
+            query = "&".join(f"{k}={v}" for k, v in params.items())
+            url = f"{FMP_BASE_URL}/{endpoint}?{query}"
+            try:
+                with urllib.request.urlopen(url, timeout=self._timeout) as response:
+                    data = json.loads(response.read().decode())
+                    # FMP returns error messages as {"Error Message": "..."} on some endpoints
+                    if isinstance(data, dict) and "Error Message" in data:
+                        logger.warning("FMP API error for %s: %s", endpoint, data["Error Message"])
+                        return None
+                    return data
+            except urllib.error.URLError as e:
+                logger.warning("FMP API request failed for %s: %s", endpoint, e)
+                logger.debug("Failed URL: %s", _sanitize_url(url))
+                return None
+            except json.JSONDecodeError as e:
+                logger.warning("FMP API returned invalid JSON for %s: %s", endpoint, e)
+                return None
+
+        if use_cache:
+            return cached_request("fmp", endpoint, cache_params, do_fetch)
+        return do_fetch()
 
     def _fetch_analyst_estimates(self, symbol: str) -> dict | None:
         """Fetch analyst earnings estimates for forward P/E calculation.
@@ -168,16 +184,20 @@ class FMPFundamentalsProvider:
         self, symbol: str, as_of: date
     ) -> FundamentalsData:
         """Get fundamentals as of a historical date using quarterly data."""
-        # Fetch company profile (static info)
-        profile_data = self._fetch_json("profile", symbol=symbol)
+        # Fetch company profile (static info) - cache since it rarely changes
+        profile_data = self._fetch_json("profile", symbol=symbol, use_cache=True)
         profile = profile_data[0] if profile_data and len(profile_data) > 0 else {}
 
-        # Fetch historical quarterly ratios
-        ratios_data = self._fetch_json("ratios", symbol=symbol, period="quarter", limit=40)
+        # Fetch historical quarterly ratios - cache since historical data is immutable
+        ratios_data = self._fetch_json(
+            "ratios", symbol=symbol, period="quarter", limit=40, use_cache=True
+        )
         ratios = self._find_quarter_data(ratios_data, as_of)
 
-        # Fetch historical quarterly key metrics
-        metrics_data = self._fetch_json("key-metrics", symbol=symbol, period="quarter", limit=40)
+        # Fetch historical quarterly key metrics - cache
+        metrics_data = self._fetch_json(
+            "key-metrics", symbol=symbol, period="quarter", limit=40, use_cache=True
+        )
         metrics = self._find_quarter_data(metrics_data, as_of)
 
         return FundamentalsData(
@@ -258,15 +278,15 @@ class FMPFundamentalsProvider:
         Returns:
             List of annual ratio records, most recent first
         """
-        # Fetch historical ratios (annual)
+        # Fetch historical ratios (annual) - cache since historical data is immutable
         ratios_data = self._fetch_json(
-            "ratios", symbol=symbol, period="annual", limit=years + 2
+            "ratios", symbol=symbol, period="annual", limit=years + 2, use_cache=True
         )
         ratios_list = ratios_data if ratios_data else []
 
-        # Fetch historical key metrics for ROIC
+        # Fetch historical key metrics for ROIC - cache
         metrics_data = self._fetch_json(
-            "key-metrics", symbol=symbol, period="annual", limit=years + 2
+            "key-metrics", symbol=symbol, period="annual", limit=years + 2, use_cache=True
         )
         metrics_list = metrics_data if metrics_data else []
 
@@ -317,8 +337,9 @@ class FMPFundamentalsProvider:
             - price: Transaction price (0 for non-market trades)
             - acquisitionOrDisposition: A=acquire, D=dispose
         """
+        # Cache insider trades since historical trades don't change
         data = self._fetch_json(
-            "insider-trading/search", symbol=symbol, limit=limit
+            "insider-trading/search", symbol=symbol, limit=limit, use_cache=True
         )
         trades = data if data else []
 

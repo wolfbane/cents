@@ -85,6 +85,7 @@ class TestInitDb:
             "idx_alerts_read",
             "idx_backtests_symbol",
             "idx_backtest_signals_backtest",
+            "idx_api_cache_lookup",
         }
         assert expected_indexes == indexes
         conn.close()

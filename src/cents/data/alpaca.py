@@ -4,6 +4,7 @@ import functools
 import logging
 from datetime import date, datetime, timedelta
 
+from cents.cache import cached_request
 from cents.config import get_settings
 from cents.data.providers import PriceBar, PriceHistory, PriceDataProvider
 from cents.exceptions import ConfigurationError
@@ -65,35 +66,63 @@ class AlpacaPriceProvider:
         Returns:
             PriceHistory with daily OHLCV bars
         """
-        if as_of:
-            end = datetime.combine(as_of, datetime.max.time())
+        # Cache key params
+        cache_params = {
+            "symbol": symbol,
+            "days": days,
+            "as_of": as_of.isoformat() if as_of else "latest",
+        }
+
+        def do_fetch():
+            if as_of:
+                end = datetime.combine(as_of, datetime.max.time())
+            else:
+                end = datetime.now()
+            start = end - timedelta(days=days)
+
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+            )
+
+            bars_response = self._client.get_stock_bars(request)
+
+            # Convert Alpaca bars to JSON-serializable format for caching
+            bars_data = []
+            if symbol in bars_response.data:
+                for bar in bars_response.data[symbol]:
+                    bars_data.append({
+                        "timestamp": bar.timestamp.isoformat(),
+                        "open": float(bar.open),
+                        "high": float(bar.high),
+                        "low": float(bar.low),
+                        "close": float(bar.close),
+                        "volume": int(bar.volume),
+                    })
+            return bars_data
+
+        # Only cache historical data (when as_of is in the past)
+        use_cache = as_of is not None and as_of < date.today()
+
+        if use_cache:
+            bars_data = cached_request("alpaca", "bars", cache_params, do_fetch)
         else:
-            end = datetime.now()
-        start = end - timedelta(days=days)
+            bars_data = do_fetch()
 
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=start,
-            end=end,
-        )
-
-        bars_response = self._client.get_stock_bars(request)
-
-        # Convert Alpaca bars to our format
-        bars = []
-        if symbol in bars_response.data:
-            for bar in bars_response.data[symbol]:
-                bars.append(
-                    PriceBar(
-                        timestamp=bar.timestamp,
-                        open=float(bar.open),
-                        high=float(bar.high),
-                        low=float(bar.low),
-                        close=float(bar.close),
-                        volume=int(bar.volume),
-                    )
-                )
+        # Convert cached data back to PriceBar objects
+        bars = [
+            PriceBar(
+                timestamp=datetime.fromisoformat(b["timestamp"]),
+                open=b["open"],
+                high=b["high"],
+                low=b["low"],
+                close=b["close"],
+                volume=b["volume"],
+            )
+            for b in (bars_data or [])
+        ]
 
         return PriceHistory(symbol=symbol, bars=bars)
 

@@ -124,6 +124,18 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol);
 CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 CREATE INDEX IF NOT EXISTS idx_backtests_symbol ON backtests(symbol);
 CREATE INDEX IF NOT EXISTS idx_backtest_signals_backtest ON backtest_signals(backtest_id);
+
+CREATE TABLE IF NOT EXISTS api_cache (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    cache_key TEXT NOT NULL,
+    response_data TEXT NOT NULL,
+    cached_at TEXT NOT NULL,
+    UNIQUE(provider, endpoint, cache_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_cache_lookup ON api_cache(provider, endpoint, cache_key);
 """
 
 

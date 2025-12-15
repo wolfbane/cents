@@ -8,6 +8,7 @@ import json
 import logging
 
 from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
+from cents.cache import cached_request
 from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
@@ -148,25 +149,45 @@ class MacroAgent(BaseAgent):
     def _fetch_fred_series(
         self, series_id: str, as_of: date | None = None
     ) -> tuple[float | None, str | None]:
-        """Fetch latest value from FRED API."""
-        url = (
-            f"https://api.stlouisfed.org/fred/series/observations"
-            f"?series_id={series_id}&api_key={self.api_key}"
-            f"&file_type=json&sort_order=desc&limit=1"
-        )
-        if as_of:
-            url += f"&observation_end={as_of.isoformat()}"
-        try:
-            with urlopen(url, timeout=10) as response:
-                data = json.loads(response.read())
-                obs = data.get("observations", [])
-                if obs and obs[0].get("value") != ".":
-                    return float(obs[0]["value"]), obs[0]["date"]
-            return None, None
-        except URLError as e:
-            logger.warning("FRED API request failed for %s: %s", series_id, e)
-            logger.debug("Failed URL: %s", _sanitize_url(url))
-            raise
+        """Fetch latest value from FRED API with caching for historical data."""
+        # Build cache key params
+        cache_params = {
+            "series_id": series_id,
+            "as_of": as_of.isoformat() if as_of else "latest",
+        }
+
+        def do_fetch():
+            url = (
+                f"https://api.stlouisfed.org/fred/series/observations"
+                f"?series_id={series_id}&api_key={self.api_key}"
+                f"&file_type=json&sort_order=desc&limit=1"
+            )
+            if as_of:
+                url += f"&observation_end={as_of.isoformat()}"
+            try:
+                with urlopen(url, timeout=10) as response:
+                    data = json.loads(response.read())
+                    obs = data.get("observations", [])
+                    if obs and obs[0].get("value") != ".":
+                        # Return tuple as list for JSON serialization
+                        return [float(obs[0]["value"]), obs[0]["date"]]
+                return None
+            except URLError as e:
+                logger.warning("FRED API request failed for %s: %s", series_id, e)
+                logger.debug("Failed URL: %s", _sanitize_url(url))
+                raise
+
+        # Only cache historical data (when as_of is in the past)
+        use_cache = as_of is not None and as_of < date.today()
+
+        if use_cache:
+            result = cached_request("fred", "observations", cache_params, do_fetch)
+        else:
+            result = do_fetch()
+
+        if result:
+            return result[0], result[1]
+        return None, None
 
     def _interpret_with_change(
         self, series_id: str, value: float, change: float | None
