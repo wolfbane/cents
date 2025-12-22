@@ -9,6 +9,7 @@ from cents.agents.macro import MacroAgent
 from cents.agents.sentiment import SentimentAgent
 from cents.agents.moat import MoatAgent
 from cents.agents.insider import InsiderAgent
+from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 # Evidence TTL by dimension (days) - older evidence is weighted less
@@ -55,14 +56,17 @@ class OrchestratorAgent(BaseAgent):
 
     def __init__(self):
         super().__init__()
+        settings = get_settings()
         self.agents = [
             FundamentalsAgent(),
             TechnicalAgent(),
             MacroAgent(),
             SentimentAgent(),
-            MoatAgent(),
-            InsiderAgent(),
         ]
+
+        # Only include FMP-dependent agents when API key is configured to avoid startup failures
+        if settings.fmp_api_key:
+            self.agents.extend([MoatAgent(), InsiderAgent()])
 
     def _weighted_conviction(self, result: AgentResult) -> float:
         """Weight conviction delta by evidence confidence and age.

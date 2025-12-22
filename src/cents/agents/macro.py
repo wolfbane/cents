@@ -14,21 +14,136 @@ from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 logger = logging.getLogger(__name__)
 
-# Rate of change thresholds (percentage points over lookback period)
-FED_RATE_CUT_THRESHOLD = -0.25    # Rate cut of 25bp+ = bullish
-FED_RATE_HIKE_THRESHOLD = 0.25   # Rate hike of 25bp+ = bearish
-
-# Unemployment change thresholds
-UNEMPLOYMENT_RISING_THRESHOLD = 0.3   # Rising 0.3%+ = bearish
-UNEMPLOYMENT_FALLING_THRESHOLD = -0.2  # Falling 0.2%+ = bullish
-UNEMPLOYMENT_LOW = 4.5                 # Below 4.5% = healthy labor market
-
-# Yield curve - only flag extreme inversions (reduced weight)
-YIELD_CURVE_DEEPLY_INVERTED = -0.5  # Below -0.5% = recession warning
-
-# VIX thresholds
-VIX_SPIKE_THRESHOLD = 25      # Above 25 = elevated fear
-VIX_COMPLACENT = 13           # Below 13 = complacency
+MACRO_SIGNAL_CONFIG = {
+    "DFF": {
+        "thresholds": {
+            "cut": -0.25,   # Rate cut of 25bp+ = bullish
+            "hike": 0.25,   # Rate hike of 25bp+ = bearish
+        },
+        "rules": [
+            {
+                "signal": "rate_cut",
+                "condition": lambda value, change, t: change is not None and change <= t["cut"],
+                "evidence": EvidenceType.SUPPORTING,
+                "delta": 4,
+                "note": lambda value, change: f"Fed cutting rates ({change:+.2f}%)",
+            },
+            {
+                "signal": "rate_hike",
+                "condition": lambda value, change, t: change is not None and change >= t["hike"],
+                "evidence": EvidenceType.CONTRADICTING,
+                "delta": -3,
+                "note": lambda value, change: f"Fed hiking rates ({change:+.2f}%)",
+            },
+        ],
+        "fallback": {
+            "signal": "stable",
+            "evidence": EvidenceType.NEUTRAL,
+            "delta": 0,
+            "note": None,
+        },
+    },
+    "T10Y2Y": {
+        "thresholds": {
+            "deep_inversion": -0.5,  # Below -0.5% = recession warning
+            "steepening": 0.3,
+        },
+        "rules": [
+            {
+                "signal": "deep_inversion",
+                "condition": lambda value, change, t: value < t["deep_inversion"],
+                "evidence": EvidenceType.CONTRADICTING,
+                "delta": -2,
+                "note": lambda value, change: f"Deeply inverted curve ({value:.2f}%)",
+            },
+            {
+                "signal": "steepening",
+                "condition": lambda value, change, t: change is not None and change > t["steepening"],
+                "evidence": EvidenceType.SUPPORTING,
+                "delta": 2,
+                "note": lambda value, change: "Yield curve steepening",
+            },
+        ],
+        "fallback": {
+            "signal": "neutral",
+            "evidence": EvidenceType.NEUTRAL,
+            "delta": 0,
+            "note": None,
+        },
+    },
+    "UNRATE": {
+        "thresholds": {
+            "rising": 0.3,   # Rising 0.3%+ = bearish
+            "falling": -0.2,  # Falling 0.2%+ = bullish
+            "low": 4.5,       # Below 4.5% = healthy labor market
+        },
+        "rules": [
+            {
+                "signal": "rising",
+                "condition": lambda value, change, t: change is not None and change >= t["rising"],
+                "evidence": EvidenceType.CONTRADICTING,
+                "delta": -4,
+                "note": lambda value, change: f"Rising unemployment ({change:+.1f}%)",
+            },
+            {
+                "signal": "falling",
+                "condition": lambda value, change, t: change is not None and change <= t["falling"],
+                "evidence": EvidenceType.SUPPORTING,
+                "delta": 3,
+                "note": lambda value, change: f"Falling unemployment ({change:+.1f}%)",
+            },
+            {
+                "signal": "low_stable",
+                "condition": lambda value, change, t: value < t["low"],
+                "evidence": EvidenceType.SUPPORTING,
+                "delta": 2,
+                "note": lambda value, change: f"Low unemployment ({value:.1f}%)",
+            },
+        ],
+        "fallback": {
+            "signal": "neutral",
+            "evidence": EvidenceType.NEUTRAL,
+            "delta": 0,
+            "note": None,
+        },
+    },
+    "VIXCLS": {
+        "thresholds": {
+            "spike": 25,      # Above 25 = elevated fear
+            "complacent": 13, # Below 13 = complacency
+            "extreme": 30,
+        },
+        "rules": [
+            {
+                "signal": "fear_receding",
+                "condition": lambda value, change, t: change is not None and value > t["spike"] and change < -5,
+                "evidence": EvidenceType.SUPPORTING,
+                "delta": 3,
+                "note": lambda value, change: f"Fear receding (VIX {value:.0f}, falling)",
+            },
+            {
+                "signal": "complacency_ending",
+                "condition": lambda value, change, t: change is not None and value < t["complacent"] and change > 3,
+                "evidence": EvidenceType.CONTRADICTING,
+                "delta": -2,
+                "note": lambda value, change: f"VIX rising from lows ({value:.0f})",
+            },
+            {
+                "signal": "extreme_fear",
+                "condition": lambda value, change, t: value > t["extreme"],
+                "evidence": EvidenceType.NEUTRAL,
+                "delta": 1,
+                "note": lambda value, change: f"Elevated VIX ({value:.0f})",
+            },
+        ],
+        "fallback": {
+            "signal": "neutral",
+            "evidence": EvidenceType.NEUTRAL,
+            "delta": 0,
+            "note": None,
+        },
+    },
+}
 
 
 def _sanitize_url(url: str) -> str:
@@ -196,71 +311,20 @@ class MacroAgent(BaseAgent):
 
         Returns: (evidence_type, delta, summary_note, metadata)
         """
-        metadata = {}
+        config = MACRO_SIGNAL_CONFIG.get(series_id)
+        if not config:
+            return EvidenceType.NEUTRAL, 0, None, {}
 
-        if series_id == "DFF":  # Fed Funds Rate - focus on direction
-            if change is not None:
-                if change <= FED_RATE_CUT_THRESHOLD:
-                    # Fed cutting rates = bullish for equities
-                    metadata["signal"] = "rate_cut"
-                    return EvidenceType.SUPPORTING, 4, f"Fed cutting rates ({change:+.2f}%)", metadata
-                elif change >= FED_RATE_HIKE_THRESHOLD:
-                    # Fed hiking rates = bearish
-                    metadata["signal"] = "rate_hike"
-                    return EvidenceType.CONTRADICTING, -3, f"Fed hiking rates ({change:+.2f}%)", metadata
-            # Rates stable = neutral (already priced in)
-            metadata["signal"] = "stable"
-            return EvidenceType.NEUTRAL, 0, None, metadata
+        thresholds = config["thresholds"]
+        for rule in config["rules"]:
+            if rule["condition"](value, change, thresholds):
+                metadata = {"signal": rule["signal"]}
+                note = rule["note"](value, change)
+                return rule["evidence"], rule["delta"], note, metadata
 
-        elif series_id == "T10Y2Y":  # Yield curve - reduced weight, only flag deep inversion
-            if value < YIELD_CURVE_DEEPLY_INVERTED:
-                # Deep inversion = recession warning (but lower weight)
-                metadata["signal"] = "deep_inversion"
-                return EvidenceType.CONTRADICTING, -2, f"Deeply inverted curve ({value:.2f}%)", metadata
-            elif change is not None and change > 0.3:
-                # Curve steepening = improving outlook
-                metadata["signal"] = "steepening"
-                return EvidenceType.SUPPORTING, 2, "Yield curve steepening", metadata
-            metadata["signal"] = "neutral"
-            return EvidenceType.NEUTRAL, 0, None, metadata
-
-        elif series_id == "UNRATE":  # Unemployment - both level and direction matter
-            if change is not None:
-                if change >= UNEMPLOYMENT_RISING_THRESHOLD:
-                    # Rising unemployment = weakening economy = bearish
-                    metadata["signal"] = "rising"
-                    return EvidenceType.CONTRADICTING, -4, f"Rising unemployment ({change:+.1f}%)", metadata
-                elif change <= UNEMPLOYMENT_FALLING_THRESHOLD:
-                    # Falling unemployment = strengthening economy = bullish
-                    metadata["signal"] = "falling"
-                    return EvidenceType.SUPPORTING, 3, f"Falling unemployment ({change:+.1f}%)", metadata
-
-            # Level check: low unemployment = healthy economy
-            if value < UNEMPLOYMENT_LOW:
-                metadata["signal"] = "low_stable"
-                return EvidenceType.SUPPORTING, 2, f"Low unemployment ({value:.1f}%)", metadata
-            metadata["signal"] = "neutral"
-            return EvidenceType.NEUTRAL, 0, None, metadata
-
-        elif series_id == "VIXCLS":  # VIX - focus on direction and extremes
-            if change is not None:
-                if value > VIX_SPIKE_THRESHOLD and change < -5:
-                    # VIX was high but falling = fear receding = bullish
-                    metadata["signal"] = "fear_receding"
-                    return EvidenceType.SUPPORTING, 3, f"Fear receding (VIX {value:.0f}, falling)", metadata
-                elif value < VIX_COMPLACENT and change > 3:
-                    # VIX was low but rising = complacency ending = warning
-                    metadata["signal"] = "complacency_ending"
-                    return EvidenceType.CONTRADICTING, -2, f"VIX rising from lows ({value:.0f})", metadata
-
-            if value > 30:
-                # Extreme fear - often contrarian bullish
-                metadata["signal"] = "extreme_fear"
-                return EvidenceType.NEUTRAL, 1, f"Elevated VIX ({value:.0f})", metadata
-            metadata["signal"] = "neutral"
-            return EvidenceType.NEUTRAL, 0, None, metadata
-
-        return EvidenceType.NEUTRAL, 0, None, {}
+        fallback = config["fallback"]
+        metadata = {"signal": fallback["signal"]}
+        return fallback["evidence"], fallback["delta"], fallback["note"], metadata
 
     def _research_without_fred(
         self, thesis_id: str, summaries: list
