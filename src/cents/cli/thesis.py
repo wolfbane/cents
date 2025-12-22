@@ -16,15 +16,20 @@ from cents.models import (
 )
 
 from cents.serialization import serialize
-from ._shared import validate_symbol, generate_thesis_suggestion, get_settings_lazy
+from ._shared import (
+    default_subcommand,
+    exit_with_error,
+    generate_thesis_suggestion,
+    get_settings_lazy,
+    resolve_output_format,
+    respond_with_output,
+    validate_symbol,
+)
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
+@default_subcommand("list")
 def thesis(ctx):
     """Manage investment theses."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(thesis_list)
 
 
 @thesis.command("create")
@@ -110,8 +115,7 @@ def thesis_create(
         try:
             horizon_dt = dt.strptime(horizon_end, "%Y-%m-%d")
         except ValueError:
-            click.echo("Invalid date format. Use YYYY-MM-DD.", err=True)
-            raise SystemExit(1)
+            exit_with_error("Invalid date format. Use YYYY-MM-DD.")
 
     # Set initial conviction from research if available
     initial_conviction = 50.0
@@ -154,8 +158,7 @@ def thesis_create(
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
 def thesis_list(status: str | None, symbol: str | None, output: str | None):
     """List theses."""
-    if output is None:
-        output = get_settings_lazy().default_output
+    output = resolve_output_format(output)
 
     repo = ThesisRepository()
     status_filter = ThesisStatus(status) if status else None
@@ -166,10 +169,16 @@ def thesis_list(status: str | None, symbol: str | None, output: str | None):
         symbol_upper = symbol.upper()
         theses = [t for t in theses if t.symbol and t.symbol.upper() == symbol_upper]
 
-    if output == "json":
-        click.echo(json.dumps([serialize(t) for t in theses], indent=2))
-        return
+    respond_with_output(
+        output,
+        [serialize(t) for t in theses],
+        lambda: _print_theses(theses),
+        quiet=False,
+    )
 
+
+def _print_theses(theses: list[Thesis]) -> None:
+    """Text printer for thesis list results."""
     if not theses:
         click.echo("No theses found.")
         return
@@ -188,8 +197,7 @@ def thesis_show(thesis_id: str):
     t = repo.get(thesis_id)
 
     if t is None:
-        click.echo(f"Thesis {thesis_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Thesis {thesis_id} not found.")
 
     click.echo(f"ID:         {t.id}")
     click.echo(f"Title:      {t.title}")
@@ -257,8 +265,7 @@ def thesis_update(
     t = repo.get(thesis_id)
 
     if t is None:
-        click.echo(f"Thesis {thesis_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Thesis {thesis_id} not found.")
 
     if conviction is not None:
         t.conviction = max(0.0, min(100.0, conviction))
@@ -279,8 +286,7 @@ def thesis_update(
             try:
                 t.horizon_end = dt.strptime(horizon_end, "%Y-%m-%d")
             except ValueError:
-                click.echo("Invalid date format. Use YYYY-MM-DD.", err=True)
-                raise SystemExit(1)
+                exit_with_error("Invalid date format. Use YYYY-MM-DD.")
         else:
             t.horizon_end = None
     if risks is not None:
@@ -309,12 +315,10 @@ def thesis_close(thesis_id: str, outcome: str | None, notes: str | None):
     t = repo.get(thesis_id)
 
     if t is None:
-        click.echo(f"Thesis {thesis_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Thesis {thesis_id} not found.")
 
     if t.status == ThesisStatus.CLOSED:
-        click.echo(f"Thesis {thesis_id} is already closed.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Thesis {thesis_id} is already closed.")
 
     outcome_enum = ThesisOutcome(outcome) if outcome else None
     t.close(outcome_enum)

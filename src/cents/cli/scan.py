@@ -12,7 +12,7 @@ from cents.models import Alert, AlertType, ThesisStatus
 from cents.notify import notify
 
 from cents.serialization import serialize
-from ._shared import get_settings_lazy, generate_thesis_suggestion
+from ._shared import generate_thesis_suggestion, get_settings_lazy, resolve_output_format, respond_with_output
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,7 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
     settings = get_settings_lazy()
     if threshold is None:
         threshold = settings.default_scan_threshold
-    if output is None:
-        output = settings.default_output
+    output = resolve_output_format(output)
     verbose = output == "text" and not quiet
 
     watch_repo = WatchlistRepository()
@@ -53,10 +52,13 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
 
     items = watch_repo.list()
     if not items:
-        if output == "json":
-            click.echo(json.dumps([], indent=2))
-        else:
-            click.echo("Watchlist is empty. Add symbols with: cents watch add <SYMBOL>")
+        respond_with_output(
+            output,
+            [],
+            lambda: click.echo("Watchlist is empty. Add symbols with: cents watch add <SYMBOL>"),
+            quiet=quiet,
+            quiet_message="",
+        )
         return
 
     if verbose:
@@ -228,10 +230,17 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
 
         scan_results.append(scan_result)
 
-    if output == "json":
-        click.echo(json.dumps(scan_results, indent=2))
-        return
+    respond_with_output(
+        output,
+        scan_results,
+        lambda: _print_scan_summary(
+            alerts_generated, quiet, batch_suggest, run_recommend
+        ),
+    )
 
+
+def _print_scan_summary(alerts_generated: int, quiet: bool, batch_suggest: bool, run_recommend: bool) -> None:
+    """Render scan results summary in text mode."""
     click.echo(f"Scan complete. Generated {alerts_generated} alerts.")
     if alerts_generated > 0 and not quiet:
         click.echo("View alerts with: cents alert list")

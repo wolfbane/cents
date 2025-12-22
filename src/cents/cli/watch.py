@@ -5,15 +5,12 @@ import click
 from cents.db import WatchlistRepository
 from cents.models import WatchlistItem
 
-from ._shared import validate_symbol
+from ._shared import default_subcommand, exit_with_error, validate_symbol
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
+@default_subcommand("list")
 def watch(ctx):
     """Manage watchlist."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(watch_list)
 
 
 @watch.command("add")
@@ -73,8 +70,7 @@ def watch_remove(symbol: str):
     if repo.remove(symbol):
         click.echo(f"Removed {symbol} from watchlist")
     else:
-        click.echo(f"{symbol} not found in watchlist.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"{symbol} not found in watchlist.")
 
 
 @watch.command("list")

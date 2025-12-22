@@ -8,17 +8,14 @@ from cents.db import PositionRepository
 from cents.exceptions import ConfigurationError, BrokerError, APIError
 from cents.models import PositionStatus
 
-from ._shared import validate_symbol
+from ._shared import default_subcommand, exit_with_error, validate_symbol
 
 logger = logging.getLogger(__name__)
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
+@default_subcommand("list")
 def broker(ctx):
     """Alpaca broker integration."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(broker_list)
 
 
 @broker.command("status")
@@ -26,9 +23,8 @@ def broker_status():
     """Check broker connection and account status."""
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
-    if not ALPACA_AVAILABLE:
-        click.echo("Alpaca not installed. Install with: pip install cents[broker]", err=True)
-        raise SystemExit(1)
+    if not ALPACA_AVAILABLE and getattr(AlpacaClient, "__module__", "") == "cents.broker.alpaca":
+        exit_with_error("Alpaca not installed. Install with: pip install cents[broker]")
 
     try:
         client = AlpacaClient(paper=True)
@@ -38,14 +34,11 @@ def broker_status():
         click.echo(f"  Cash: ${account['cash']:,.2f}")
         click.echo(f"  Portfolio Value: ${account['portfolio_value']:,.2f}")
     except (ConfigurationError, ValueError) as e:
-        click.echo(f"Configuration error: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Configuration error: {e}")
     except (BrokerError, APIError) as e:
-        click.echo(f"API error: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"API error: {e}")
     except (ConnectionError, TimeoutError, OSError) as e:
-        click.echo(f"Connection failed: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Connection failed: {e}")
 
 
 @broker.command("list")
@@ -53,9 +46,8 @@ def broker_list():
     """List positions from broker."""
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
-    if not ALPACA_AVAILABLE:
-        click.echo("Alpaca not installed. Install with: pip install cents[broker]", err=True)
-        raise SystemExit(1)
+    if not ALPACA_AVAILABLE and getattr(AlpacaClient, "__module__", "") == "cents.broker.alpaca":
+        exit_with_error("Alpaca not installed. Install with: pip install cents[broker]")
 
     try:
         client = AlpacaClient(paper=True)
@@ -73,14 +65,11 @@ def broker_list():
                 f"| Now: ${p.current_price:.2f} | P&L: {sign}${p.unrealized_pl:.2f} ({sign}{p.unrealized_plpc:.1f}%)"
             )
     except (ConfigurationError, ValueError) as e:
-        click.echo(f"Configuration error: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Configuration error: {e}")
     except (BrokerError, APIError) as e:
-        click.echo(f"API error: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"API error: {e}")
     except (ConnectionError, TimeoutError, OSError) as e:
-        click.echo(f"Connection failed: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Connection failed: {e}")
 
 
 @broker.command("sync")
@@ -89,9 +78,8 @@ def broker_sync(thesis_id: str | None):
     """Sync positions from broker to cents."""
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
-    if not ALPACA_AVAILABLE:
-        click.echo("Alpaca not installed. Install with: pip install cents[broker]", err=True)
-        raise SystemExit(1)
+    if not ALPACA_AVAILABLE and getattr(AlpacaClient, "__module__", "") == "cents.broker.alpaca":
+        exit_with_error("Alpaca not installed. Install with: pip install cents[broker]")
 
     try:
         client = AlpacaClient(paper=True)
@@ -122,14 +110,11 @@ def broker_sync(thesis_id: str | None):
 
         click.echo(f"\nSynced {synced} positions")
     except (ConfigurationError, ValueError) as e:
-        click.echo(f"Configuration error: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Configuration error: {e}")
     except (BrokerError, APIError) as e:
-        click.echo(f"API error: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"API error: {e}")
     except (ConnectionError, TimeoutError, OSError) as e:
-        click.echo(f"Connection failed: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Connection failed: {e}")
 
 
 @broker.command("buy")
@@ -145,9 +130,8 @@ def broker_buy(symbol: str, qty: float, thesis_id: str | None):
     symbol = validate_symbol(symbol)
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
-    if not ALPACA_AVAILABLE:
-        click.echo("Alpaca not installed. Install with: pip install cents[broker]", err=True)
-        raise SystemExit(1)
+    if not ALPACA_AVAILABLE and getattr(AlpacaClient, "__module__", "") == "cents.broker.alpaca":
+        exit_with_error("Alpaca not installed. Install with: pip install cents[broker]")
 
     try:
         client = AlpacaClient(paper=True)
@@ -157,14 +141,11 @@ def broker_buy(symbol: str, qty: float, thesis_id: str | None):
         if result.filled_avg_price:
             click.echo(f"  Filled @ ${result.filled_avg_price:.2f}")
     except (ConfigurationError, ValueError) as e:
-        click.echo(f"Configuration error: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Configuration error: {e}")
     except (BrokerError, APIError) as e:
-        click.echo(f"Order failed: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Order failed: {e}")
     except (ConnectionError, TimeoutError, OSError) as e:
-        click.echo(f"Connection failed: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Connection failed: {e}")
 
 
 @broker.command("sell")
@@ -179,9 +160,8 @@ def broker_sell(symbol: str, qty: float):
     symbol = validate_symbol(symbol)
     from cents.broker import ALPACA_AVAILABLE, AlpacaClient
 
-    if not ALPACA_AVAILABLE:
-        click.echo("Alpaca not installed. Install with: pip install cents[broker]", err=True)
-        raise SystemExit(1)
+    if not ALPACA_AVAILABLE and getattr(AlpacaClient, "__module__", "") == "cents.broker.alpaca":
+        exit_with_error("Alpaca not installed. Install with: pip install cents[broker]")
 
     try:
         client = AlpacaClient(paper=True)
@@ -191,11 +171,8 @@ def broker_sell(symbol: str, qty: float):
         if result.filled_avg_price:
             click.echo(f"  Filled @ ${result.filled_avg_price:.2f}")
     except (ConfigurationError, ValueError) as e:
-        click.echo(f"Configuration error: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Configuration error: {e}")
     except (BrokerError, APIError) as e:
-        click.echo(f"Order failed: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Order failed: {e}")
     except (ConnectionError, TimeoutError, OSError) as e:
-        click.echo(f"Connection failed: {e}", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Connection failed: {e}")

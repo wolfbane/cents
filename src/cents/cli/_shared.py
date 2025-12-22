@@ -1,7 +1,9 @@
 """Shared utilities for CLI commands."""
 
+import json
 import re
-from typing import Any, TypedDict
+from functools import wraps
+from typing import Any, Callable, NoReturn, TypedDict
 
 import click
 
@@ -23,6 +25,67 @@ class ThesisSuggestion(TypedDict):
 def get_settings_lazy():
     """Lazy-load settings to avoid import-time configuration errors."""
     return get_settings()
+
+
+def resolve_output_format(output: str | None) -> str:
+    """Resolve output format with config fallback."""
+
+    if output is None:
+        return get_settings_lazy().default_output
+    return output
+
+
+def echo_json(payload: Any) -> None:
+    """Pretty-print JSON payload consistently."""
+
+    click.echo(json.dumps(payload, indent=2))
+
+
+def exit_with_error(message: str) -> NoReturn:
+    """Emit a standardized error message and exit."""
+
+    click.echo(message, err=True)
+    raise SystemExit(1)
+
+
+def respond_with_output(
+    output: str,
+    json_payload: Any,
+    text_printer: Callable[[], None],
+    *,
+    quiet: bool = False,
+    quiet_message: str | None = None,
+) -> None:
+    """Respond in JSON or text form, honoring quiet flags."""
+
+    if output == "json":
+        echo_json(json_payload)
+        return
+
+    if quiet and quiet_message is not None:
+        click.echo(quiet_message)
+        return
+
+    text_printer()
+
+
+def default_subcommand(default_command: str):
+    """Decorator to make click groups fall back to a default subcommand."""
+
+    def decorator(func: Callable):
+        @click.group(name=func.__name__, invoke_without_command=True)
+        @click.pass_context
+        @wraps(func)
+        def wrapper(ctx: click.Context, *args, **kwargs):
+            if ctx.invoked_subcommand is None:
+                default = ctx.command.get_command(ctx, default_command)
+                if default is not None:
+                    return ctx.invoke(default)
+            return func(ctx, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def validate_symbol(symbol: str) -> str:

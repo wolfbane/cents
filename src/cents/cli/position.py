@@ -8,15 +8,18 @@ from cents.db import PositionRepository, ThesisRepository
 from cents.models import Position, PositionSide, PositionStatus
 
 from cents.serialization import serialize
-from ._shared import validate_symbol, get_settings_lazy
+from ._shared import (
+    default_subcommand,
+    exit_with_error,
+    resolve_output_format,
+    respond_with_output,
+    validate_symbol,
+)
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
+@default_subcommand("list")
 def position(ctx):
     """Manage positions."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(position_list)
 
 
 @position.command("open")
@@ -66,12 +69,10 @@ def position_close(position_id: str, price: float):
     p = repo.get(position_id)
 
     if p is None:
-        click.echo(f"Position {position_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Position {position_id} not found.")
 
     if p.status == PositionStatus.CLOSED:
-        click.echo(f"Position {position_id} is already closed.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Position {position_id} is already closed.")
 
     p.close(price)
     repo.update(p)
@@ -94,17 +95,21 @@ def position_close(position_id: str, price: float):
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
 def position_list(status: str | None, output: str | None):
     """List positions."""
-    if output is None:
-        output = get_settings_lazy().default_output
+    output = resolve_output_format(output)
 
     repo = PositionRepository()
     status_filter = PositionStatus(status) if status else None
     positions = repo.list(status=status_filter)
 
-    if output == "json":
-        click.echo(json.dumps([serialize(p) for p in positions], indent=2))
-        return
+    respond_with_output(
+        output,
+        [serialize(p) for p in positions],
+        lambda: _print_positions(positions),
+    )
 
+
+def _print_positions(positions: list[Position]) -> None:
+    """Render positions in text format."""
     if not positions:
         click.echo("No positions found.")
         return
@@ -129,8 +134,7 @@ def position_show(position_id: str):
     p = repo.get(position_id)
 
     if p is None:
-        click.echo(f"Position {position_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Position {position_id} not found.")
 
     click.echo(f"ID:          {p.id}")
     click.echo(f"Symbol:      {p.symbol}")
@@ -161,13 +165,11 @@ def position_link(position_id: str, thesis: str):
 
     p = pos_repo.get(position_id)
     if p is None:
-        click.echo(f"Position {position_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Position {position_id} not found.")
 
     t = thesis_repo.get(thesis)
     if t is None:
-        click.echo(f"Thesis {thesis} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Thesis {thesis} not found.")
 
     p.thesis_id = thesis
     pos_repo.update(p)
@@ -203,9 +205,7 @@ def position_value(symbol: str | None):
     try:
         provider = get_price_provider()
     except ConfigurationError as e:
-        click.echo(f"Error: {e}", err=True)
-        click.echo("Set ALPACA_API_KEY and ALPACA_SECRET_KEY for live prices.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Error: {e}\nSet ALPACA_API_KEY and ALPACA_SECRET_KEY for live prices.")
 
     # Fetch prices for all unique symbols
     symbols = list(set(p.symbol for p in positions))

@@ -10,9 +10,10 @@ from cents.datasets import (
     set_active_dataset,
 )
 
+from ._shared import default_subcommand, exit_with_error
 
-@click.group(invoke_without_command=True)
-@click.pass_context
+
+@default_subcommand("list")
 def portfolio(ctx):
     """Manage portfolios (separate database files).
 
@@ -20,8 +21,6 @@ def portfolio(ctx):
     or users. Use 'cents portfolio add' to register a database file,
     then 'cents portfolio use' to switch between them.
     """
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(list_cmd)
 
 
 @portfolio.command("add")
@@ -39,7 +38,7 @@ def add_cmd(name: str, path: str):
         resolved = add_dataset(name, path)
         click.echo(f"Added portfolio '{name}' -> {resolved}")
     except ValueError as e:
-        raise click.ClickException(str(e))
+        exit_with_error(str(e))
 
 
 @portfolio.command("use")
@@ -55,7 +54,7 @@ def use_cmd(name: str):
         set_active_dataset(name)
         click.echo(f"Switched to portfolio '{name}'")
     except ValueError as e:
-        raise click.ClickException(str(e))
+        exit_with_error(str(e))
 
 
 @portfolio.command("list")
@@ -83,7 +82,7 @@ def remove_cmd(name: str):
         remove_dataset(name)
         click.echo(f"Removed portfolio '{name}'")
     except ValueError as e:
-        raise click.ClickException(str(e))
+        exit_with_error(str(e))
 
 
 @portfolio.command("current")
