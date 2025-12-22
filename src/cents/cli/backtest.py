@@ -1,8 +1,7 @@
 """Backtest CLI commands."""
 
-import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import click
 
@@ -10,7 +9,15 @@ from cents.agents import AGENTS
 from cents.db import BacktestRepository
 from cents.models import Backtest, BacktestSignal
 
-from ._shared import validate_symbol
+from ._shared import (
+    calculate_correlation,
+    calculate_hit_rate,
+    parse_agents,
+    parse_date_range,
+    parse_symbols,
+    render_output,
+    validate_symbol,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -186,47 +193,9 @@ def run_backtest(
       cents backtest run NVDA --start 2023-01-01 --end 2024-01-01
       cents backtest run --symbols AAPL,MSFT,NVDA --start 2023-01-01
     """
-    # Parse symbols
-    if symbols_str:
-        symbols = [validate_symbol(s.strip()) for s in symbols_str.split(",")]
-    elif symbol:
-        symbols = [validate_symbol(symbol)]
-    else:
-        click.echo("Specify a symbol or use --symbols.", err=True)
-        raise SystemExit(1)
-
-    # Parse dates
-    try:
-        start_date = datetime.strptime(start_str, "%Y-%m-%d").date()
-    except ValueError:
-        click.echo(f"Invalid start date: {start_str}. Use YYYY-MM-DD.", err=True)
-        raise SystemExit(1)
-
-    # Default end: 60 days ago (need forward returns)
-    if end_str:
-        try:
-            end_date = datetime.strptime(end_str, "%Y-%m-%d").date()
-        except ValueError:
-            click.echo(f"Invalid end date: {end_str}. Use YYYY-MM-DD.", err=True)
-            raise SystemExit(1)
-    else:
-        end_date = date.today() - timedelta(days=60)
-
-    if start_date >= end_date:
-        click.echo("Start date must be before end date.", err=True)
-        raise SystemExit(1)
-
-    # Parse agents
-    if agent_names:
-        selected_agents = {}
-        for name in agent_names.split(","):
-            name = name.strip()
-            if name not in BACKTEST_AGENTS:
-                click.echo(f"Unknown agent: {name}. Available: {', '.join(BACKTEST_AGENTS.keys())}", err=True)
-                raise SystemExit(1)
-            selected_agents[name] = BACKTEST_AGENTS[name]
-    else:
-        selected_agents = BACKTEST_AGENTS
+    symbols = parse_symbols(symbol, symbols_str)
+    start_date, end_date = parse_date_range(start_str, end_str)
+    selected_agents = parse_agents(agent_names, BACKTEST_AGENTS)
 
     # Initialize price provider
     try:
@@ -274,8 +243,7 @@ def run_backtest(
                 click.echo(f"Errors: {len(errors)}")
             click.echo()
 
-    # Summary
-    if output == "text":
+    def _render_text():
         if len(symbols) > 1:
             click.echo("=" * 40)
             click.echo(f"Total: {len(symbols)} symbols, {total_signals} signals")
@@ -284,15 +252,19 @@ def run_backtest(
             click.echo(f"\nAnalyze all: cents backtest analyze --all")
         else:
             click.echo(f"View results: cents backtest show {results[0]['backtest_id']}")
-    else:
-        click.echo(json.dumps({
+
+    render_output(
+        output,
+        _render_text,
+        {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "interval": interval,
             "backtests": results,
             "total_signals": total_signals,
             "total_errors": total_errors,
-        }, indent=2))
+        },
+    )
 
 
 @backtest.command("list")
@@ -308,18 +280,18 @@ def list_backtests(symbol: str | None, output: str):
     repo = BacktestRepository()
     backtests = repo.list(symbol=symbol.upper() if symbol else None)
 
-    if output == "json":
-        click.echo(json.dumps([
-            {
-                "id": bt.id,
-                "symbol": bt.symbol,
-                "start_date": bt.start_date.isoformat(),
-                "end_date": bt.end_date.isoformat(),
-                "created_at": bt.created_at.isoformat(),
-            }
-            for bt in backtests
-        ], indent=2))
-    else:
+    data = [
+        {
+            "id": bt.id,
+            "symbol": bt.symbol,
+            "start_date": bt.start_date.isoformat(),
+            "end_date": bt.end_date.isoformat(),
+            "created_at": bt.created_at.isoformat(),
+        }
+        for bt in backtests
+    ]
+
+    def _render_text():
         if not backtests:
             click.echo("No backtests found.")
             return
@@ -328,6 +300,8 @@ def list_backtests(symbol: str | None, output: str):
         click.echo("-" * 60)
         for bt in backtests:
             click.echo(f"{bt.id:<10} {bt.symbol:<8} {bt.start_date} {bt.end_date} {bt.created_at.strftime('%Y-%m-%d')}")
+
+    render_output(output, _render_text, data)
 
 
 @backtest.command("show")
@@ -349,25 +323,25 @@ def show_backtest(backtest_id: str, output: str):
 
     signals = repo.get_signals(backtest_id)
 
-    if output == "json":
-        click.echo(json.dumps({
-            "id": bt.id,
-            "symbol": bt.symbol,
-            "start_date": bt.start_date.isoformat(),
-            "end_date": bt.end_date.isoformat(),
-            "created_at": bt.created_at.isoformat(),
-            "signals": [
-                {
-                    "date": s.date.isoformat(),
-                    "agent_name": s.agent_name,
-                    "conviction_delta": s.conviction_delta,
-                    "dimension_scores": s.dimension_scores,
-                    "forward_returns": s.forward_returns,
-                }
-                for s in signals
-            ],
-        }, indent=2))
-    else:
+    data = {
+        "id": bt.id,
+        "symbol": bt.symbol,
+        "start_date": bt.start_date.isoformat(),
+        "end_date": bt.end_date.isoformat(),
+        "created_at": bt.created_at.isoformat(),
+        "signals": [
+            {
+                "date": s.date.isoformat(),
+                "agent_name": s.agent_name,
+                "conviction_delta": s.conviction_delta,
+                "dimension_scores": s.dimension_scores,
+                "forward_returns": s.forward_returns,
+            }
+            for s in signals
+        ],
+    }
+
+    def _render_text():
         click.echo(f"Backtest {bt.id}")
         click.echo(f"  Symbol: {bt.symbol}")
         click.echo(f"  Period: {bt.start_date} to {bt.end_date}")
@@ -394,48 +368,13 @@ def show_backtest(backtest_id: str, output: str):
                 avg_delta = sum(deltas) / len(deltas) if deltas else 0
 
                 # Simple correlation calculation
-                corr_str = "N/A"
-                if len(returns_20d) >= 3:
-                    deltas_with_ret = [d[0] for d in data if "20d" in d[1]]
-                    if deltas_with_ret:
-                        mean_d = sum(deltas_with_ret) / len(deltas_with_ret)
-                        mean_r = sum(returns_20d) / len(returns_20d)
-
-                        num = sum((d - mean_d) * (r - mean_r) for d, r in zip(deltas_with_ret, returns_20d))
-                        den_d = sum((d - mean_d) ** 2 for d in deltas_with_ret) ** 0.5
-                        den_r = sum((r - mean_r) ** 2 for r in returns_20d) ** 0.5
-
-                        if den_d > 0 and den_r > 0:
-                            corr = num / (den_d * den_r)
-                            corr_str = f"{corr:+.2f}"
+                deltas_with_ret = [d[0] for d in data if "20d" in d[1]]
+                corr = calculate_correlation(deltas_with_ret, returns_20d)
+                corr_str = f"{corr:+.2f}" if corr is not None else "N/A"
 
                 click.echo(f"  {agent_name:<14} {len(data):<8} {avg_delta:+.2f}      {corr_str}")
 
-
-def _calculate_correlation(x: list[float], y: list[float]) -> float | None:
-    """Calculate Pearson correlation between two lists."""
-    if len(x) < 3 or len(x) != len(y):
-        return None
-
-    mean_x = sum(x) / len(x)
-    mean_y = sum(y) / len(y)
-
-    num = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
-    den_x = sum((xi - mean_x) ** 2 for xi in x) ** 0.5
-    den_y = sum((yi - mean_y) ** 2 for yi in y) ** 0.5
-
-    if den_x > 0 and den_y > 0:
-        return num / (den_x * den_y)
-    return None
-
-
-def _calculate_hit_rate(deltas: list[float], returns: list[float]) -> float | None:
-    """Calculate hit rate: % of times delta sign matches return sign."""
-    if not deltas or len(deltas) != len(returns):
-        return None
-
-    hits = sum(1 for d, r in zip(deltas, returns) if (d > 0 and r > 0) or (d < 0 and r < 0))
-    return hits / len(deltas)
+    render_output(output, _render_text, data)
 
 
 @backtest.command("analyze")
@@ -522,8 +461,8 @@ def analyze_backtest(backtest_id: str | None, symbol: str | None, analyze_all: b
                 h_deltas = [p[0] for p in pairs]
                 h_returns = [p[1] for p in pairs]
 
-                corr = _calculate_correlation(h_deltas, h_returns)
-                hit = _calculate_hit_rate(h_deltas, h_returns)
+                corr = calculate_correlation(h_deltas, h_returns)
+                hit = calculate_hit_rate(h_deltas, h_returns)
 
                 agent_result["correlations"][horizon] = corr
                 agent_result["hit_rates"][horizon] = hit
@@ -557,22 +496,22 @@ def analyze_backtest(backtest_id: str | None, symbol: str | None, analyze_all: b
                 h_scores = [p[0] for p in pairs]
                 h_returns = [p[1] for p in pairs]
 
-                corr = _calculate_correlation(h_scores, h_returns)
-                hit = _calculate_hit_rate(h_scores, h_returns)
+                corr = calculate_correlation(h_scores, h_returns)
+                hit = calculate_hit_rate(h_scores, h_returns)
 
                 dim_result["correlations"][horizon] = corr
                 dim_result["hit_rates"][horizon] = hit
 
         dimension_results.append(dim_result)
 
-    if output == "json":
-        click.echo(json.dumps({
-            "backtests": len(backtests),
-            "total_signals": len(all_signals),
-            "agents": results,
-            "dimensions": dimension_results,
-        }, indent=2))
-    else:
+    data = {
+        "backtests": len(backtests),
+        "total_signals": len(all_signals),
+        "agents": results,
+        "dimensions": dimension_results,
+    }
+
+    def _render_text():
         symbols = list(set(bt.symbol for bt in backtests))
         click.echo(f"Analysis: {len(backtests)} backtest(s), {len(all_signals)} signals")
         click.echo(f"Symbols: {', '.join(symbols)}")
@@ -616,6 +555,8 @@ def analyze_backtest(backtest_id: str | None, symbol: str | None, analyze_all: b
                 c20 = f"{corrs.get('20d', 0):+.2f}" if corrs.get('20d') is not None else "N/A"
                 c60 = f"{corrs.get('60d', 0):+.2f}" if corrs.get('60d') is not None else "N/A"
                 click.echo(f"  {r['dimension']:<14} {r['signals']:<6} {c5:<10} {c20:<10} {c60:<10}")
+
+    render_output(output, _render_text, data)
 
 
 @backtest.command("report")
@@ -680,20 +621,20 @@ def report_backtest(backtest_id: str, output: str):
             "total": i + 1,
         })
 
-    if output == "json":
-        click.echo(json.dumps({
-            "backtest_id": bt.id,
-            "symbol": bt.symbol,
-            "period": f"{bt.start_date} to {bt.end_date}",
-            "total_signals": len(scored_signals),
-            "best_signals": best_signals,
-            "worst_signals": worst_signals,
-            "cumulative_accuracy": [
-                {"date": c["date"].isoformat(), "accuracy": c["accuracy"]}
-                for c in cumulative
-            ],
-        }, indent=2, default=str))
-    else:
+    data = {
+        "backtest_id": bt.id,
+        "symbol": bt.symbol,
+        "period": f"{bt.start_date} to {bt.end_date}",
+        "total_signals": len(scored_signals),
+        "best_signals": best_signals,
+        "worst_signals": worst_signals,
+        "cumulative_accuracy": [
+            {"date": c["date"].isoformat(), "accuracy": c["accuracy"]}
+            for c in cumulative
+        ],
+    }
+
+    def _render_text():
         click.echo(f"Backtest Report: {bt.id}")
         click.echo(f"Symbol: {bt.symbol} | Period: {bt.start_date} to {bt.end_date}")
         click.echo(f"Total signals with returns: {len(scored_signals)}")
@@ -721,6 +662,8 @@ def report_backtest(backtest_id: str, output: str):
             c = cumulative[i]
             bar = "█" * int(c["accuracy"] * 20) + "░" * (20 - int(c["accuracy"] * 20))
             click.echo(f"  {c['date']} [{bar}] {c['accuracy']*100:.0f}% ({c['hits']}/{c['total']})")
+
+    render_output(output, _render_text, data)
 
 
 @backtest.command("delete")
