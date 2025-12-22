@@ -1,6 +1,5 @@
 """Recommend command - rule-based decision engine."""
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +10,7 @@ import click
 from cents.db import ThesisRepository, PositionRepository
 from cents.models import ThesisStatus, PositionStatus
 
-from ._shared import get_settings_lazy
+from ._shared import resolve_output_format, respond_with_output
 
 logger = logging.getLogger(__name__)
 
@@ -267,18 +266,21 @@ def recommend(
       6. High conviction without position → BUY
       7. Otherwise → HOLD
     """
-    settings = get_settings_lazy()
-    if output is None:
-        output = settings.default_output
+    output = resolve_output_format(output)
 
     recommendations = get_recommendations(buy_threshold, sell_threshold)
 
+    respond_with_output(
+        output,
+        [r.to_dict() for r in recommendations],
+        lambda: _print_recommendations(recommendations, actionable),
+    )
+
+
+def _print_recommendations(recommendations: list[Recommendation], actionable: bool) -> None:
+    """Render recommendations in text form."""
     if actionable:
         recommendations = [r for r in recommendations if r.action != Action.HOLD]
-
-    if output == "json":
-        click.echo(json.dumps([r.to_dict() for r in recommendations], indent=2))
-        return
 
     if not recommendations:
         click.echo("No open theses to evaluate.")

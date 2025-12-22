@@ -5,13 +5,12 @@ import click
 from cents.db import PositionRepository, OutcomeRepository
 from cents.models import Outcome, PositionStatus, ThesisAccuracy
 
+from ._shared import default_subcommand, exit_with_error
 
-@click.group(invoke_without_command=True)
-@click.pass_context
+
+@default_subcommand("list")
 def outcome(ctx):
     """Track outcomes."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(outcome_list)
 
 
 @outcome.command("record")
@@ -31,17 +30,14 @@ def outcome_record(position_id: str, accuracy: str, notes: str):
 
     p = pos_repo.get(position_id)
     if p is None:
-        click.echo(f"Position {position_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Position {position_id} not found.")
 
     if p.status != PositionStatus.CLOSED:
-        click.echo(f"Position {position_id} is not closed yet.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Position {position_id} is not closed yet.")
 
     existing = out_repo.get_for_position(position_id)
     if existing:
-        click.echo(f"Outcome already recorded for position {position_id}.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Outcome already recorded for position {position_id}.")
 
     o = Outcome(
         position_id=position_id,

@@ -7,15 +7,17 @@ import click
 from cents.db import EvidenceRepository, ThesisRepository
 from cents.serialization import serialize
 
-from ._shared import validate_symbol
+from ._shared import (
+    default_subcommand,
+    exit_with_error,
+    respond_with_output,
+    validate_symbol,
+)
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
+@default_subcommand("list")
 def evidence(ctx):
     """Manage research evidence."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(evidence_list)
 
 
 @evidence.command("list")
@@ -39,30 +41,36 @@ def evidence_list(symbol: str | None, orphans: bool, output: str):
         # No filter - show all orphans as that's the most useful default
         items = repo.list_orphans()
 
-    if output == "json":
-        click.echo(json.dumps([serialize(e) for e in items], indent=2))
-    else:
-        if not items:
-            if orphans:
-                click.echo("No orphan evidence found.")
-            elif symbol:
-                click.echo(f"No evidence found for {symbol.upper()}.")
-            else:
-                click.echo("No orphan evidence found.")
-            return
+    respond_with_output(
+        output,
+        [serialize(e) for e in items],
+        lambda: _print_evidence_items(items, symbol, orphans),
+    )
 
-        click.echo(f"Found {len(items)} evidence items:\n")
-        for e in items:
-            icon = {
-                "supporting": "+",
-                "contradicting": "-",
-                "neutral": "~",
-            }[e.type.value]
-            symbol_str = f" [{e.symbol}]" if e.symbol else ""
-            thesis_str = f" (thesis: {e.thesis_id})" if e.thesis_id else " (orphan)"
-            click.echo(f"  [{icon}] {e.id}{symbol_str}{thesis_str}")
-            click.echo(f"      {e.agent}: {e.content[:80]}...")
-            click.echo()
+
+def _print_evidence_items(items, symbol: str | None, orphans: bool) -> None:
+    """Render evidence list in text mode."""
+    if not items:
+        if orphans:
+            click.echo("No orphan evidence found.")
+        elif symbol:
+            click.echo(f"No evidence found for {symbol.upper()}.")
+        else:
+            click.echo("No orphan evidence found.")
+        return
+
+    click.echo(f"Found {len(items)} evidence items:\n")
+    for e in items:
+        icon = {
+            "supporting": "+",
+            "contradicting": "-",
+            "neutral": "~",
+        }[e.type.value]
+        symbol_str = f" [{e.symbol}]" if e.symbol else ""
+        thesis_str = f" (thesis: {e.thesis_id})" if e.thesis_id else " (orphan)"
+        click.echo(f"  [{icon}] {e.id}{symbol_str}{thesis_str}")
+        click.echo(f"      {e.agent}: {e.content[:80]}...")
+        click.echo()
 
 
 @evidence.command("link")
@@ -76,8 +84,7 @@ def evidence_link(symbol: str, thesis_id: str):
     thesis_repo = ThesisRepository()
     thesis = thesis_repo.get(thesis_id)
     if thesis is None:
-        click.echo(f"Thesis {thesis_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Thesis {thesis_id} not found.")
 
     evidence_repo = EvidenceRepository()
     count = evidence_repo.link_symbol_to_thesis(symbol, thesis_id)
@@ -97,8 +104,7 @@ def evidence_delete(evidence_id: str):
     if repo.delete(evidence_id):
         click.echo(f"Deleted evidence {evidence_id}")
     else:
-        click.echo(f"Evidence {evidence_id} not found.", err=True)
-        raise SystemExit(1)
+        exit_with_error(f"Evidence {evidence_id} not found.")
 
 
 @evidence.command("prune")

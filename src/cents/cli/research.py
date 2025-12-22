@@ -1,6 +1,4 @@
 """Research CLI command."""
-
-import json
 import logging
 from datetime import date, datetime
 
@@ -10,7 +8,13 @@ from cents.agents import AGENTS
 from cents.db import ThesisRepository, EvidenceRepository
 
 from cents.serialization import serialize
-from ._shared import get_settings_lazy, validate_symbol, generate_thesis_suggestion
+from ._shared import (
+    echo_json,
+    exit_with_error,
+    generate_thesis_suggestion,
+    resolve_output_format,
+    validate_symbol,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +57,7 @@ def research(
 ):
     """Run research agents on a symbol."""
     symbol = validate_symbol(symbol)
-    if output is None:
-        output = get_settings_lazy().default_output
+    output = resolve_output_format(output)
     verbose = output == "text" and not quiet
 
     # Parse as_of date if provided
@@ -65,8 +68,7 @@ def research(
             if verbose:
                 click.echo(f"Historical analysis as of: {as_of}\n")
         except ValueError:
-            click.echo(f"Invalid date format: {as_of_str}. Use YYYY-MM-DD.", err=True)
-            raise SystemExit(1)
+            exit_with_error(f"Invalid date format: {as_of_str}. Use YYYY-MM-DD.")
 
     # Get thesis if specified
     thesis = None
@@ -74,8 +76,7 @@ def research(
         thesis_repo = ThesisRepository()
         thesis = thesis_repo.get(thesis_id)
         if thesis is None:
-            click.echo(f"Thesis {thesis_id} not found.", err=True)
-            raise SystemExit(1)
+            exit_with_error(f"Thesis {thesis_id} not found.")
         if verbose:
             click.echo(f"Evaluating against thesis: {thesis.title}\n")
 
@@ -191,7 +192,7 @@ def research(
         }
         if thesis_suggestion:
             payload["thesis_suggestion"] = thesis_suggestion
-        click.echo(json.dumps(payload, indent=2))
+        echo_json(payload)
     else:
         if quiet:
             click.echo(
