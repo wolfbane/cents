@@ -332,9 +332,10 @@ class TestMacroAgent:
         assert delta == 0
         assert metadata["signal"] == "stable"
 
+    @patch("cents.agents.macro.cached_request", side_effect=lambda p, e, pa, fn, **kw: fn())
     @patch("cents.agents.macro.urlopen")
     @patch("cents.agents.macro.get_settings")
-    def test_research_rate_cutting_bullish(self, mock_settings, mock_urlopen):
+    def test_research_rate_cutting_bullish(self, mock_settings, mock_urlopen, mock_cache):
         """Fed cutting rates produces bullish signal."""
         mock_settings.return_value.fred_api_key = "test_key"
 

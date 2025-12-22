@@ -501,9 +501,10 @@ class TestAlpacaPriceProvider:
         # Should use last close, not ask
         assert price == 149.50
 
+    @patch("cents.data.alpaca.cached_request", side_effect=lambda p, e, pa, fn, **kw: fn())
     @patch("cents.data.alpaca.StockHistoricalDataClient")
     @patch("cents.data.alpaca.get_settings")
-    def test_get_history_with_as_of(self, mock_settings, mock_client_class):
+    def test_get_history_with_as_of(self, mock_settings, mock_client_class, mock_cache):
         """Get historical price data with as_of date."""
         mock_settings.return_value.alpaca_api_key = "test_key"
         mock_settings.return_value.alpaca_secret_key = "test_secret"
@@ -536,9 +537,10 @@ class TestAlpacaPriceProvider:
         # End date should be based on as_of
         assert request.end.date() == date(2024, 1, 15)
 
+    @patch("cents.data.alpaca.cached_request", side_effect=lambda p, e, pa, fn, **kw: fn())
     @patch("cents.data.alpaca.StockHistoricalDataClient")
     @patch("cents.data.alpaca.get_settings")
-    def test_get_latest_price_with_as_of(self, mock_settings, mock_client_class):
+    def test_get_latest_price_with_as_of(self, mock_settings, mock_client_class, mock_cache):
         """Get historical price using as_of date."""
         mock_settings.return_value.alpaca_api_key = "test_key"
         mock_settings.return_value.alpaca_secret_key = "test_secret"
