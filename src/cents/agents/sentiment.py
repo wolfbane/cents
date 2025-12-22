@@ -18,6 +18,186 @@ logger = logging.getLogger(__name__)
 _article_score_cache: dict[str, dict] = {}
 
 
+SENTIMENT_CONFIG = {
+    "keywords": {
+        "positive": {
+            "beat",
+            "beats",
+            "exceeds",
+            "exceeded",
+            "surge",
+            "surges",
+            "rally",
+            "upgrade",
+            "upgraded",
+            "buy",
+            "bullish",
+            "growth",
+            "profit",
+            "gains",
+            "outperform",
+            "record",
+            "breakthrough",
+            "strong",
+            "positive",
+            "optimistic",
+        },
+        "negative": {
+            "miss",
+            "misses",
+            "missed",
+            "fall",
+            "falls",
+            "drop",
+            "drops",
+            "decline",
+            "downgrade",
+            "downgraded",
+            "sell",
+            "bearish",
+            "loss",
+            "losses",
+            "weak",
+            "underperform",
+            "warning",
+            "concern",
+            "risk",
+            "negative",
+            "pessimistic",
+            "lawsuit",
+            "investigation",
+            "recall",
+            "layoffs",
+            "bankruptcy",
+        },
+    },
+    "negation": {
+        "words": {
+            "not",
+            "no",
+            "never",
+            "neither",
+            "nobody",
+            "nothing",
+            "nowhere",
+            "fail",
+            "fails",
+            "failed",
+            "failing",
+            "unlikely",
+            "unable",
+            "without",
+            "lack",
+            "lacks",
+            "lacking",
+            "doubt",
+            "doubts",
+            "doubted",
+            "doubtful",
+            "hardly",
+            "barely",
+            "scarcely",
+        },
+        "window": 3,
+    },
+    "keyword_scoring": {
+        "max_magnitude": 3,
+        "confidence": 0.5,
+    },
+    "llm_scoring": {
+        "positive_threshold": 0.2,
+        "negative_threshold": -0.2,
+        "confidence_base": 0.7,
+        "confidence_scale": 0.2,
+        "scale_to_keyword": 3,
+    },
+    "aggregation": {
+        "conviction_scale": 0.5,
+        "summary_positive": "Positive news sentiment",
+        "summary_negative": "Negative news sentiment",
+        "summary_neutral": "Mixed/neutral news sentiment",
+        "positive_threshold": 3,
+        "negative_threshold": -3,
+    },
+}
+
+
+def _tokenize_text(text: str) -> list[str]:
+    """Tokenize text into alphabetic words for sentiment analysis."""
+
+    # Split on non-letters to keep tokens clean and consistent for both scoring paths
+    return [w for w in re.split(r"[^a-zA-Z]+", text.lower()) if w]
+
+
+def _is_negated_token(words: list[str], keyword_index: int, negation_config: dict) -> bool:
+    """Check if a token is negated using the configured window."""
+
+    window = negation_config["window"]
+    negators = negation_config["words"]
+
+    start = max(0, keyword_index - window)
+    for i in range(start, keyword_index):
+        if words[i] in negators:
+            return True
+
+    if keyword_index + 1 < len(words) and words[keyword_index + 1] in negators:
+        return True
+
+    return False
+
+
+def _count_sentiment_tokens(text: str, config: dict = SENTIMENT_CONFIG) -> tuple[int, int]:
+    """Count positive/negative tokens, respecting negation rules."""
+
+    words = _tokenize_text(text)
+    pos_count = 0
+    neg_count = 0
+    keyword_config = config["keywords"]
+
+    for idx, word in enumerate(words):
+        is_negated = _is_negated_token(words, idx, config["negation"])
+
+        if word in keyword_config["positive"]:
+            if is_negated:
+                neg_count += 1
+            else:
+                pos_count += 1
+        elif word in keyword_config["negative"]:
+            if is_negated:
+                pos_count += 1
+            else:
+                neg_count += 1
+
+    return pos_count, neg_count
+
+
+def _score_from_keyword_counts(
+    pos_count: int, neg_count: int, config: dict = SENTIMENT_CONFIG
+):
+    """Translate keyword counts into evidence tuple."""
+
+    max_magnitude = config["keyword_scoring"]["max_magnitude"]
+    confidence = config["keyword_scoring"]["confidence"]
+
+    if pos_count > neg_count:
+        ev_type = EvidenceType.SUPPORTING
+        score = min(pos_count - neg_count, max_magnitude)
+    elif neg_count > pos_count:
+        ev_type = EvidenceType.CONTRADICTING
+        score = -min(neg_count - pos_count, max_magnitude)
+    else:
+        ev_type = EvidenceType.NEUTRAL
+        score = 0
+
+    metadata = {
+        "positive_words": pos_count,
+        "negative_words": neg_count,
+        "scoring_method": "keyword",
+    }
+
+    return ev_type, score, confidence, metadata
+
+
 def _extract_score_from_llm_response(text: str) -> tuple[float, str] | None:
     """Extract score and reasoning from LLM response, handling malformed JSON.
 
@@ -61,27 +241,6 @@ class SentimentAgent(BaseAgent):
     name = "sentiment"
 
     # Simple keyword-based sentiment with negation detection
-    POSITIVE_WORDS = {
-        "beat", "beats", "exceeds", "exceeded", "surge", "surges", "rally",
-        "upgrade", "upgraded", "buy", "bullish", "growth", "profit", "gains",
-        "outperform", "record", "breakthrough", "strong", "positive", "optimistic",
-    }
-    NEGATIVE_WORDS = {
-        "miss", "misses", "missed", "fall", "falls", "drop", "drops", "decline",
-        "downgrade", "downgraded", "sell", "bearish", "loss", "losses", "weak",
-        "underperform", "warning", "concern", "risk", "negative", "pessimistic",
-        "lawsuit", "investigation", "recall", "layoffs", "bankruptcy",
-    }
-    # Words that negate sentiment within a 3-word window
-    NEGATION_WORDS = {
-        "not", "no", "never", "neither", "nobody", "nothing", "nowhere",
-        "fail", "fails", "failed", "failing",
-        "unlikely", "unable", "without", "lack", "lacks", "lacking",
-        "doubt", "doubts", "doubted", "doubtful",
-        "hardly", "barely", "scarcely",
-    }
-    NEGATION_WINDOW = 3  # Check this many words before the sentiment word
-
     def __init__(self, anthropic_client=None):
         super().__init__()
         settings = get_settings()
@@ -103,6 +262,10 @@ class SentimentAgent(BaseAgent):
         except ImportError:
             logger.warning("anthropic package not installed")
             return None
+
+    # Backwards-compatibility wrapper for tests that introspect internal methods
+    def _count_sentiment_words(self, text: str) -> tuple[int, int]:
+        return _count_sentiment_tokens(text)
 
     def research(
         self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
@@ -145,48 +308,6 @@ class SentimentAgent(BaseAgent):
             data = json.loads(response.read())
             return data.get("articles", [])
 
-    def _is_negated(self, words: list[str], keyword_index: int) -> bool:
-        """Check if a keyword is negated (before or immediately after)."""
-        # Check before the keyword (within window)
-        start = max(0, keyword_index - self.NEGATION_WINDOW)
-        for i in range(start, keyword_index):
-            if words[i] in self.NEGATION_WORDS:
-                return True
-
-        # Check immediately after (1 word) for patterns like "upgrade unlikely"
-        if keyword_index + 1 < len(words):
-            if words[keyword_index + 1] in self.NEGATION_WORDS:
-                return True
-
-        return False
-
-    def _count_sentiment_words(self, text: str) -> tuple[int, int]:
-        """Count positive and negative sentiment words, accounting for negation.
-
-        Returns (positive_count, negative_count) after flipping negated sentiments.
-        """
-        # Tokenize: split on non-alphanumeric, keep only words
-        words = [w for w in text.lower().replace("'", " ").split() if w.isalpha()]
-
-        pos_count = 0
-        neg_count = 0
-
-        for i, word in enumerate(words):
-            is_negated = self._is_negated(words, i)
-
-            if word in self.POSITIVE_WORDS:
-                if is_negated:
-                    neg_count += 1  # "not bullish" → negative
-                else:
-                    pos_count += 1
-            elif word in self.NEGATIVE_WORDS:
-                if is_negated:
-                    pos_count += 1  # "not bearish" → positive
-                else:
-                    neg_count += 1
-
-        return pos_count, neg_count
-
     def _score_article(self, article: dict) -> tuple[EvidenceType, int, float, dict]:
         """Score an article using keyword-based sentiment (fallback).
 
@@ -196,23 +317,8 @@ class SentimentAgent(BaseAgent):
         description = article.get("description", "") or ""
 
         text = f"{title} {description}"
-        pos_count, neg_count = self._count_sentiment_words(text)
-
-        if pos_count > neg_count:
-            ev_type = EvidenceType.SUPPORTING
-            score = min(pos_count - neg_count, 3)
-        elif neg_count > pos_count:
-            ev_type = EvidenceType.CONTRADICTING
-            score = -min(neg_count - pos_count, 3)
-        else:
-            ev_type = EvidenceType.NEUTRAL
-            score = 0
-
-        return ev_type, score, 0.5, {
-            "positive_words": pos_count,
-            "negative_words": neg_count,
-            "scoring_method": "keyword",
-        }
+        pos_count, neg_count = _count_sentiment_tokens(text)
+        return _score_from_keyword_counts(pos_count, neg_count)
 
     def _filter_relevant_articles(
         self, articles: list[dict], symbol: str, thesis: Thesis | None
@@ -322,15 +428,16 @@ Score meaning: -1 = very bearish for thesis, 0 = neutral, +1 = very bullish for 
                 # Clamp score to [-1, 1]
                 score = max(-1.0, min(1.0, score))
 
-                if score > 0.2:
+                thresholds = SENTIMENT_CONFIG["llm_scoring"]
+                if score > thresholds["positive_threshold"]:
                     ev_type = EvidenceType.SUPPORTING
-                elif score < -0.2:
+                elif score < thresholds["negative_threshold"]:
                     ev_type = EvidenceType.CONTRADICTING
                 else:
                     ev_type = EvidenceType.NEUTRAL
 
                 # Higher confidence for LLM scoring (0.7-0.9 based on score magnitude)
-                confidence = 0.7 + 0.2 * abs(score)
+                confidence = thresholds["confidence_base"] + thresholds["confidence_scale"] * abs(score)
 
                 metadata = {
                     "llm_score": score,
@@ -384,7 +491,7 @@ Score meaning: -1 = very bearish for thesis, 0 = neutral, +1 = very bullish for 
                     article, symbol, thesis
                 )
                 # Scale LLM score (-1 to 1) to match keyword scale (-3 to 3)
-                score = score * 3
+                score = score * SENTIMENT_CONFIG["llm_scoring"]["scale_to_keyword"]
             else:
                 ev_type, score, confidence, metadata = self._score_article(article)
 
@@ -403,15 +510,16 @@ Score meaning: -1 = very bearish for thesis, 0 = neutral, +1 = very bullish for 
             )
 
         # Overall sentiment
-        conviction_delta = total_score * 0.5  # Scale down
+        conviction_delta = total_score * SENTIMENT_CONFIG["aggregation"]["conviction_scale"]
         dimension_scores = {"sentiment": conviction_delta}
 
-        if total_score > 3:
-            summaries.append("Positive news sentiment")
-        elif total_score < -3:
-            summaries.append("Negative news sentiment")
+        agg_cfg = SENTIMENT_CONFIG["aggregation"]
+        if total_score > agg_cfg["positive_threshold"]:
+            summaries.append(agg_cfg["summary_positive"])
+        elif total_score < agg_cfg["negative_threshold"]:
+            summaries.append(agg_cfg["summary_negative"])
         else:
-            summaries.append("Mixed/neutral news sentiment")
+            summaries.append(agg_cfg["summary_neutral"])
 
         # Note if LLM was used
         if client:
