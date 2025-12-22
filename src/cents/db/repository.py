@@ -1,9 +1,11 @@
-"""Repository layer for CRUD operations."""
+"""Repository layer for CRUD operations with shared helpers."""
 
 import json
 import logging
 import sqlite3
+from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any, Callable, Sequence, Type
 
 logger = logging.getLogger(__name__)
 
@@ -30,294 +32,254 @@ from cents.models import (
 from cents.db.schema import get_connection
 
 
-class ThesisRepository:
-    """CRUD operations for theses."""
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _isoformat(value: date | datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+@dataclass
+class ModelField:
+    """Mapping metadata for a model attribute and database column."""
+
+    attr: str
+    column: str | None = None
+    serialize: Callable[[Any], Any] = _identity
+    deserialize: Callable[[Any], Any] = _identity
+    update: bool = True
+
+    def __post_init__(self) -> None:
+        if self.column is None:
+            self.column = self.attr
+
+
+@dataclass
+class ModelMeta:
+    """Model/table metadata used by BaseRepository helpers."""
+
+    table: str
+    model: Type[Any]
+    fields: list[ModelField]
+    default_order: str | None = None
+
+
+class BaseRepository:
+    """Common helpers for repository classes."""
 
     def __init__(self, conn: sqlite3.Connection | None = None):
         self.conn = conn or get_connection()
 
-    def create(self, thesis: Thesis) -> Thesis:
-        """Insert a new thesis."""
+    @staticmethod
+    def dumps_json(value: Any) -> str:
+        return json.dumps(value)
+
+    @staticmethod
+    def loads_json(raw: str | None, default: Any, context: str) -> Any:
+        if raw is None:
+            return default
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse %s JSON", context)
+            return default
+
+    def _row_to_model(self, meta: ModelMeta, row: sqlite3.Row):
+        kwargs = {field.attr: field.deserialize(row[field.column]) for field in meta.fields}
+        return meta.model(**kwargs)
+
+    def _insert(self, meta: ModelMeta, model: Any, *, replace: bool = False) -> Any:
+        columns = ", ".join(field.column for field in meta.fields)
+        placeholders = ", ".join(["?"] * len(meta.fields))
+        values = [field.serialize(getattr(model, field.attr)) for field in meta.fields]
+        verb = "INSERT OR REPLACE" if replace else "INSERT"
         self.conn.execute(
-            """
-            INSERT INTO theses (id, title, hypothesis, status, conviction, tags,
-                symbol, business_quality, valuation, moat, time_horizon, horizon_end, key_risks,
-                target_price, stop_price, outcome, closed_at,
-                created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                thesis.id,
-                thesis.title,
-                thesis.hypothesis,
-                thesis.status.value,
-                thesis.conviction,
-                json.dumps(thesis.tags),
-                thesis.symbol,
-                thesis.business_quality,
-                thesis.valuation.value if thesis.valuation else None,
-                thesis.moat,
-                thesis.time_horizon.value if thesis.time_horizon else None,
-                thesis.horizon_end.isoformat() if thesis.horizon_end else None,
-                json.dumps(thesis.key_risks),
-                thesis.target_price,
-                thesis.stop_price,
-                thesis.outcome.value if thesis.outcome else None,
-                thesis.closed_at.isoformat() if thesis.closed_at else None,
-                thesis.created_at.isoformat(),
-                thesis.updated_at.isoformat(),
-            ),
+            f"{verb} INTO {meta.table} ({columns}) VALUES ({placeholders})",
+            values,
         )
         self.conn.commit()
-        return thesis
+        return model
 
-    def get(self, thesis_id: str) -> Thesis | None:
-        """Get thesis by ID."""
+    def _update(self, meta: ModelMeta, model: Any, key_attr: str = "id") -> Any:
+        updatable = [field for field in meta.fields if field.update and field.attr != key_attr]
+        assignments = ", ".join(f"{field.column} = ?" for field in updatable)
+        values = [field.serialize(getattr(model, field.attr)) for field in updatable]
+        values.append(getattr(model, key_attr))
+        self.conn.execute(
+            f"UPDATE {meta.table} SET {assignments} WHERE {key_attr} = ?",
+            values,
+        )
+        self.conn.commit()
+        return model
+
+    def _get_by_id(self, meta: ModelMeta, item_id: str, key_column: str = "id"):
         row = self.conn.execute(
-            "SELECT * FROM theses WHERE id = ?", (thesis_id,)
+            f"SELECT * FROM {meta.table} WHERE {key_column} = ?",
+            (item_id,),
         ).fetchone()
         if row is None:
             return None
-        return self._row_to_thesis(row)
+        return self._row_to_model(meta, row)
+
+    def _list(
+        self,
+        meta: ModelMeta,
+        *,
+        where: str | None = None,
+        params: Sequence[Any] = (),
+        order_by: str | None = None,
+        limit: int | None = None,
+    ) -> list[Any]:
+        query = f"SELECT * FROM {meta.table}"
+        if where:
+            query += f" WHERE {where}"
+        order = order_by or meta.default_order
+        if order:
+            query += f" ORDER BY {order}"
+        if limit is not None:
+            query += " LIMIT ?"
+            params = [*params, limit]
+        rows = self.conn.execute(query, params).fetchall()
+        return [self._row_to_model(meta, row) for row in rows]
+
+    def _delete(self, meta: ModelMeta, where: str, params: Sequence[Any]) -> int:
+        cursor = self.conn.execute(
+            f"DELETE FROM {meta.table} WHERE {where}",
+            params,
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+
+class ThesisRepository(BaseRepository):
+    """CRUD operations for theses."""
+
+    _META = ModelMeta(
+        table="theses",
+        model=Thesis,
+        fields=[
+            ModelField("id"),
+            ModelField("title"),
+            ModelField("hypothesis"),
+            ModelField("status", serialize=lambda v: v.value, deserialize=ThesisStatus),
+            ModelField("conviction"),
+            ModelField("tags", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "tags")),
+            ModelField("symbol"),
+            ModelField("business_quality"),
+            ModelField("valuation", serialize=lambda v: v.value if v else None, deserialize=lambda raw: Valuation(raw) if raw else None),
+            ModelField("moat"),
+            ModelField("time_horizon", serialize=lambda v: v.value if v else None, deserialize=lambda raw: TimeHorizon(raw) if raw else None),
+            ModelField("horizon_end", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw) if raw else None),
+            ModelField("key_risks", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "key_risks")),
+            ModelField("target_price"),
+            ModelField("stop_price"),
+            ModelField("outcome", serialize=lambda v: v.value if v else None, deserialize=lambda raw: ThesisOutcome(raw) if raw else None),
+            ModelField("closed_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw) if raw else None),
+            ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
+            ModelField("updated_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+        ],
+        default_order="updated_at DESC",
+    )
+
+    def create(self, thesis: Thesis) -> Thesis:
+        """Insert a new thesis."""
+        return self._insert(self._META, thesis)
+
+    def get(self, thesis_id: str) -> Thesis | None:
+        """Get thesis by ID."""
+        return self._get_by_id(self._META, thesis_id)
 
     def list(self, status: ThesisStatus | None = None) -> list[Thesis]:
         """List theses, optionally filtered by status."""
         if status:
-            rows = self.conn.execute(
-                "SELECT * FROM theses WHERE status = ? ORDER BY updated_at DESC",
-                (status.value,),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM theses ORDER BY updated_at DESC"
-            ).fetchall()
-        return [self._row_to_thesis(row) for row in rows]
+            return self._list(self._META, where="status = ?", params=(status.value,))
+        return self._list(self._META)
 
     def update(self, thesis: Thesis) -> Thesis:
         """Update an existing thesis."""
         thesis.updated_at = datetime.now()
-        self.conn.execute(
-            """
-            UPDATE theses
-            SET title = ?, hypothesis = ?, status = ?, conviction = ?, tags = ?,
-                symbol = ?, business_quality = ?, valuation = ?, moat = ?,
-                time_horizon = ?, horizon_end = ?, key_risks = ?,
-                target_price = ?, stop_price = ?, outcome = ?, closed_at = ?,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                thesis.title,
-                thesis.hypothesis,
-                thesis.status.value,
-                thesis.conviction,
-                json.dumps(thesis.tags),
-                thesis.symbol,
-                thesis.business_quality,
-                thesis.valuation.value if thesis.valuation else None,
-                thesis.moat,
-                thesis.time_horizon.value if thesis.time_horizon else None,
-                thesis.horizon_end.isoformat() if thesis.horizon_end else None,
-                json.dumps(thesis.key_risks),
-                thesis.target_price,
-                thesis.stop_price,
-                thesis.outcome.value if thesis.outcome else None,
-                thesis.closed_at.isoformat() if thesis.closed_at else None,
-                thesis.updated_at.isoformat(),
-                thesis.id,
-            ),
-        )
-        self.conn.commit()
-        return thesis
+        return self._update(self._META, thesis)
 
     def delete(self, thesis_id: str) -> bool:
         """Delete a thesis by ID."""
-        cursor = self.conn.execute("DELETE FROM theses WHERE id = ?", (thesis_id,))
-        self.conn.commit()
-        return cursor.rowcount > 0
-
-    def _row_to_thesis(self, row: sqlite3.Row) -> Thesis:
-        try:
-            tags = json.loads(row["tags"])
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse tags JSON for thesis %s", row["id"])
-            tags = []
-
-        try:
-            key_risks = json.loads(row["key_risks"]) if row["key_risks"] else []
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse key_risks JSON for thesis %s", row["id"])
-            key_risks = []
-
-        return Thesis(
-            id=row["id"],
-            title=row["title"],
-            hypothesis=row["hypothesis"],
-            status=ThesisStatus(row["status"]),
-            conviction=row["conviction"],
-            tags=tags,
-            symbol=row["symbol"],
-            business_quality=row["business_quality"],
-            valuation=Valuation(row["valuation"]) if row["valuation"] else None,
-            moat=row["moat"],
-            time_horizon=TimeHorizon(row["time_horizon"]) if row["time_horizon"] else None,
-            horizon_end=datetime.fromisoformat(row["horizon_end"]) if row["horizon_end"] else None,
-            key_risks=key_risks,
-            target_price=row["target_price"],
-            stop_price=row["stop_price"],
-            outcome=ThesisOutcome(row["outcome"]) if row["outcome"] else None,
-            closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-        )
+        return self._delete(self._META, "id = ?", (thesis_id,)) > 0
 
 
-class PositionRepository:
+class PositionRepository(BaseRepository):
     """CRUD operations for positions."""
 
-    def __init__(self, conn: sqlite3.Connection | None = None):
-        self.conn = conn or get_connection()
+    _META = ModelMeta(
+        table="positions",
+        model=Position,
+        fields=[
+            ModelField("id"),
+            ModelField("thesis_id"),
+            ModelField("symbol"),
+            ModelField("side", serialize=lambda v: v.value, deserialize=PositionSide),
+            ModelField("entry_price"),
+            ModelField("entry_date", serialize=_isoformat, deserialize=lambda raw: date.fromisoformat(raw)),
+            ModelField("size"),
+            ModelField("status", serialize=lambda v: v.value, deserialize=PositionStatus),
+            ModelField("exit_price"),
+            ModelField("exit_date", serialize=_isoformat, deserialize=lambda raw: date.fromisoformat(raw) if raw else None),
+            ModelField("paper", serialize=lambda v: 1 if v else 0, deserialize=lambda raw: bool(raw)),
+            ModelField("notes"),
+            ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
+        ],
+        default_order="created_at DESC",
+    )
 
     def create(self, position: Position) -> Position:
         """Insert a new position."""
-        self.conn.execute(
-            """
-            INSERT INTO positions
-            (id, thesis_id, symbol, side, entry_price, entry_date, size, status, exit_price, exit_date, paper, notes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                position.id,
-                position.thesis_id,
-                position.symbol,
-                position.side.value,
-                position.entry_price,
-                position.entry_date.isoformat(),
-                position.size,
-                position.status.value,
-                position.exit_price,
-                position.exit_date.isoformat() if position.exit_date else None,
-                1 if position.paper else 0,
-                position.notes,
-                position.created_at.isoformat(),
-            ),
-        )
-        self.conn.commit()
-        return position
+        return self._insert(self._META, position)
 
     def get(self, position_id: str) -> Position | None:
         """Get position by ID."""
-        row = self.conn.execute(
-            "SELECT * FROM positions WHERE id = ?", (position_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_position(row)
+        return self._get_by_id(self._META, position_id)
 
     def list(self, status: PositionStatus | None = None) -> list[Position]:
         """List positions, optionally filtered by status."""
         if status:
-            rows = self.conn.execute(
-                "SELECT * FROM positions WHERE status = ? ORDER BY created_at DESC",
-                (status.value,),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM positions ORDER BY created_at DESC"
-            ).fetchall()
-        return [self._row_to_position(row) for row in rows]
+            return self._list(self._META, where="status = ?", params=(status.value,))
+        return self._list(self._META)
 
     def update(self, position: Position) -> Position:
         """Update an existing position."""
-        self.conn.execute(
-            """
-            UPDATE positions
-            SET thesis_id = ?, symbol = ?, side = ?, entry_price = ?, entry_date = ?,
-                size = ?, status = ?, exit_price = ?, exit_date = ?, paper = ?, notes = ?
-            WHERE id = ?
-            """,
-            (
-                position.thesis_id,
-                position.symbol,
-                position.side.value,
-                position.entry_price,
-                position.entry_date.isoformat(),
-                position.size,
-                position.status.value,
-                position.exit_price,
-                position.exit_date.isoformat() if position.exit_date else None,
-                1 if position.paper else 0,
-                position.notes,
-                position.id,
-            ),
-        )
-        self.conn.commit()
-        return position
+        return self._update(self._META, position)
 
     def delete(self, position_id: str) -> bool:
         """Delete a position by ID."""
-        cursor = self.conn.execute("DELETE FROM positions WHERE id = ?", (position_id,))
-        self.conn.commit()
-        return cursor.rowcount > 0
-
-    def _row_to_position(self, row: sqlite3.Row) -> Position:
-        return Position(
-            id=row["id"],
-            thesis_id=row["thesis_id"],
-            symbol=row["symbol"],
-            side=PositionSide(row["side"]),
-            entry_price=row["entry_price"],
-            entry_date=date.fromisoformat(row["entry_date"]),
-            size=row["size"],
-            status=PositionStatus(row["status"]),
-            exit_price=row["exit_price"],
-            exit_date=date.fromisoformat(row["exit_date"]) if row["exit_date"] else None,
-            paper=bool(row["paper"]),
-            notes=row["notes"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-        )
+        return self._delete(self._META, "id = ?", (position_id,)) > 0
 
 
-class EvidenceRepository:
+class EvidenceRepository(BaseRepository):
     """CRUD operations for evidence."""
 
-    def __init__(self, conn: sqlite3.Connection | None = None):
-        self.conn = conn or get_connection()
+    _META = ModelMeta(
+        table="evidence",
+        model=Evidence,
+        fields=[
+            ModelField("id"),
+            ModelField("thesis_id"),
+            ModelField("symbol", serialize=lambda v: v.upper() if v else None),
+            ModelField("agent"),
+            ModelField("type", serialize=lambda v: v.value, deserialize=EvidenceType),
+            ModelField("content"),
+            ModelField("source"),
+            ModelField("confidence"),
+            ModelField("dimension", serialize=lambda v: v.value if v else None, deserialize=lambda raw: ThesisDimension(raw) if raw else None),
+            ModelField("metadata", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "metadata")),
+            ModelField("timestamp", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+        ],
+        default_order="timestamp DESC",
+    )
 
     def create(self, evidence: Evidence, dedupe: bool = False) -> Evidence | None:
-        """Insert new evidence.
-
-        Args:
-            evidence: The evidence to insert
-            dedupe: If True, skip insert if similar evidence exists (same agent + content)
-
-        Returns:
-            The evidence if inserted, None if skipped due to deduplication
-        """
+        """Insert new evidence, optionally deduping."""
         if dedupe and self.exists_similar(evidence):
             return None
-
-        self.conn.execute(
-            """
-            INSERT INTO evidence (id, thesis_id, symbol, agent, type, content, source, confidence, dimension, metadata, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                evidence.id,
-                evidence.thesis_id,
-                evidence.symbol,
-                evidence.agent,
-                evidence.type.value,
-                evidence.content,
-                evidence.source,
-                evidence.confidence,
-                evidence.dimension.value if evidence.dimension else None,
-                json.dumps(evidence.metadata),
-                evidence.timestamp.isoformat(),
-            ),
-        )
-        self.conn.commit()
-        return evidence
+        return self._insert(self._META, evidence)
 
     def exists_similar(self, evidence: Evidence) -> bool:
         """Check if similar evidence already exists.
@@ -332,7 +294,7 @@ class EvidenceRepository:
         elif evidence.symbol:
             cursor = self.conn.execute(
                 "SELECT 1 FROM evidence WHERE symbol = ? AND agent = ? AND content = ? LIMIT 1",
-                (evidence.symbol, evidence.agent, evidence.content),
+                (evidence.symbol.upper(), evidence.agent, evidence.content),
             )
         else:
             return False
@@ -340,32 +302,21 @@ class EvidenceRepository:
 
     def list_for_thesis(self, thesis_id: str) -> list[Evidence]:
         """List all evidence for a thesis."""
-        rows = self.conn.execute(
-            "SELECT * FROM evidence WHERE thesis_id = ? ORDER BY timestamp DESC",
-            (thesis_id,),
-        ).fetchall()
-        return [self._row_to_evidence(row) for row in rows]
+        return self._list(self._META, where="thesis_id = ?", params=(thesis_id,))
 
     def list_for_symbol(self, symbol: str) -> list[Evidence]:
         """List all evidence for a symbol (including orphan evidence)."""
-        rows = self.conn.execute(
-            "SELECT * FROM evidence WHERE symbol = ? ORDER BY timestamp DESC",
-            (symbol.upper(),),
-        ).fetchall()
-        return [self._row_to_evidence(row) for row in rows]
+        return self._list(self._META, where="symbol = ?", params=(symbol.upper(),))
 
     def list_orphans(self, symbol: str | None = None) -> list[Evidence]:
         """List evidence without a thesis, optionally filtered by symbol."""
         if symbol:
-            rows = self.conn.execute(
-                "SELECT * FROM evidence WHERE thesis_id IS NULL AND symbol = ? ORDER BY timestamp DESC",
-                (symbol.upper(),),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM evidence WHERE thesis_id IS NULL ORDER BY timestamp DESC"
-            ).fetchall()
-        return [self._row_to_evidence(row) for row in rows]
+            return self._list(
+                self._META,
+                where="thesis_id IS NULL AND symbol = ?",
+                params=(symbol.upper(),),
+            )
+        return self._list(self._META, where="thesis_id IS NULL")
 
     def link_to_thesis(self, evidence_id: str, thesis_id: str) -> bool:
         """Link orphan evidence to a thesis."""
@@ -387,25 +338,14 @@ class EvidenceRepository:
 
     def delete(self, evidence_id: str) -> bool:
         """Delete evidence by ID."""
-        cursor = self.conn.execute("DELETE FROM evidence WHERE id = ?", (evidence_id,))
-        self.conn.commit()
-        return cursor.rowcount > 0
+        return self._delete(self._META, "id = ?", (evidence_id,)) > 0
 
     def delete_for_thesis(self, thesis_id: str) -> int:
         """Delete all evidence for a thesis. Returns count deleted."""
-        cursor = self.conn.execute("DELETE FROM evidence WHERE thesis_id = ?", (thesis_id,))
-        self.conn.commit()
-        return cursor.rowcount
+        return self._delete(self._META, "thesis_id = ?", (thesis_id,))
 
     def prune_for_closed_theses(self, retention_days: int = 30) -> int:
-        """Delete evidence for theses closed more than retention_days ago.
-
-        Args:
-            retention_days: Days to retain evidence after thesis closure (default 30)
-
-        Returns:
-            Number of evidence items deleted
-        """
+        """Delete evidence for theses closed more than retention_days ago."""
         cursor = self.conn.execute(
             """
             DELETE FROM evidence
@@ -421,146 +361,77 @@ class EvidenceRepository:
         self.conn.commit()
         return cursor.rowcount
 
-    def _row_to_evidence(self, row: sqlite3.Row) -> Evidence:
-        try:
-            metadata = json.loads(row["metadata"])
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse metadata JSON for evidence %s", row["id"])
-            metadata = {}
 
-        return Evidence(
-            id=row["id"],
-            thesis_id=row["thesis_id"],
-            symbol=row["symbol"],
-            agent=row["agent"],
-            type=EvidenceType(row["type"]),
-            content=row["content"],
-            source=row["source"],
-            confidence=row["confidence"],
-            dimension=ThesisDimension(row["dimension"]) if row["dimension"] else None,
-            metadata=metadata,
-            timestamp=datetime.fromisoformat(row["timestamp"]),
-        )
-
-
-class OutcomeRepository:
+class OutcomeRepository(BaseRepository):
     """CRUD operations for outcomes."""
 
-    def __init__(self, conn: sqlite3.Connection | None = None):
-        self.conn = conn or get_connection()
+    _META = ModelMeta(
+        table="outcomes",
+        model=Outcome,
+        fields=[
+            ModelField("id"),
+            ModelField("position_id"),
+            ModelField("pnl"),
+            ModelField("pnl_pct"),
+            ModelField("thesis_accuracy", serialize=lambda v: v.value, deserialize=ThesisAccuracy),
+            ModelField("agent_performance", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "agent_performance")),
+            ModelField("retrospective"),
+            ModelField("recorded_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+        ],
+        default_order="recorded_at DESC",
+    )
 
     def create(self, outcome: Outcome) -> Outcome:
         """Insert a new outcome."""
-        self.conn.execute(
-            """
-            INSERT INTO outcomes (id, position_id, pnl, pnl_pct, thesis_accuracy, agent_performance, retrospective, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                outcome.id,
-                outcome.position_id,
-                outcome.pnl,
-                outcome.pnl_pct,
-                outcome.thesis_accuracy.value,
-                json.dumps(outcome.agent_performance),
-                outcome.retrospective,
-                outcome.recorded_at.isoformat(),
-            ),
-        )
-        self.conn.commit()
-        return outcome
+        return self._insert(self._META, outcome)
 
     def get_for_position(self, position_id: str) -> Outcome | None:
         """Get outcome for a position."""
-        row = self.conn.execute(
-            "SELECT * FROM outcomes WHERE position_id = ?", (position_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_outcome(row)
+        return self._get_by_id(self._META, position_id, key_column="position_id")
 
     def list(self) -> list[Outcome]:
         """List all outcomes."""
-        rows = self.conn.execute(
-            "SELECT * FROM outcomes ORDER BY recorded_at DESC"
-        ).fetchall()
-        return [self._row_to_outcome(row) for row in rows]
+        return self._list(self._META)
 
     def delete(self, outcome_id: str) -> bool:
         """Delete an outcome by ID."""
-        cursor = self.conn.execute("DELETE FROM outcomes WHERE id = ?", (outcome_id,))
-        self.conn.commit()
-        return cursor.rowcount > 0
-
-    def _row_to_outcome(self, row: sqlite3.Row) -> Outcome:
-        try:
-            agent_performance = json.loads(row["agent_performance"])
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse agent_performance JSON for outcome %s", row["id"])
-            agent_performance = {}
-
-        return Outcome(
-            id=row["id"],
-            position_id=row["position_id"],
-            pnl=row["pnl"],
-            pnl_pct=row["pnl_pct"],
-            thesis_accuracy=ThesisAccuracy(row["thesis_accuracy"]),
-            agent_performance=agent_performance,
-            retrospective=row["retrospective"],
-            recorded_at=datetime.fromisoformat(row["recorded_at"]),
-        )
+        return self._delete(self._META, "id = ?", (outcome_id,)) > 0
 
 
-class WatchlistRepository:
+class WatchlistRepository(BaseRepository):
     """CRUD operations for watchlist."""
 
-    def __init__(self, conn: sqlite3.Connection | None = None):
-        self.conn = conn or get_connection()
+    _META = ModelMeta(
+        table="watchlist",
+        model=WatchlistItem,
+        fields=[
+            ModelField("id"),
+            ModelField("symbol", serialize=lambda v: v.upper()),
+            ModelField("notes"),
+            ModelField("thesis_id"),
+            ModelField("threshold"),
+            ModelField("alert_destination"),
+            ModelField("last_scanned", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw) if raw else None),
+            ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
+        ],
+        default_order="created_at DESC",
+    )
 
     def add(self, item: WatchlistItem) -> WatchlistItem:
         """Add a symbol to watchlist."""
-        self.conn.execute(
-            """
-            INSERT OR REPLACE INTO watchlist (id, symbol, notes, thesis_id, threshold, alert_destination, last_scanned, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                item.id,
-                item.symbol.upper(),
-                item.notes,
-                item.thesis_id,
-                item.threshold,
-                item.alert_destination,
-                item.last_scanned.isoformat() if item.last_scanned else None,
-                item.created_at.isoformat(),
-            ),
-        )
-        self.conn.commit()
-        return item
+        return self._insert(self._META, item, replace=True)
 
     def remove(self, symbol: str) -> bool:
         """Remove a symbol from watchlist."""
-        cursor = self.conn.execute(
-            "DELETE FROM watchlist WHERE symbol = ?", (symbol.upper(),)
-        )
-        self.conn.commit()
-        return cursor.rowcount > 0
+        return self._delete(self._META, "symbol = ?", (symbol.upper(),)) > 0
 
     def get(self, symbol: str) -> WatchlistItem | None:
         """Get watchlist item by symbol."""
-        row = self.conn.execute(
-            "SELECT * FROM watchlist WHERE symbol = ?", (symbol.upper(),)
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_item(row)
+        return self._get_by_id(self._META, symbol.upper(), key_column="symbol")
 
     def list(self) -> list[WatchlistItem]:
         """List all watchlist items."""
-        rows = self.conn.execute(
-            "SELECT * FROM watchlist ORDER BY created_at DESC"
-        ).fetchall()
-        return [self._row_to_item(row) for row in rows]
+        return self._list(self._META)
 
     def update_scanned(self, symbol: str) -> None:
         """Update last_scanned timestamp."""
@@ -570,63 +441,42 @@ class WatchlistRepository:
         )
         self.conn.commit()
 
-    def _row_to_item(self, row: sqlite3.Row) -> WatchlistItem:
-        return WatchlistItem(
-            id=row["id"],
-            symbol=row["symbol"],
-            notes=row["notes"],
-            thesis_id=row["thesis_id"],
-            threshold=row["threshold"],
-            alert_destination=row["alert_destination"],
-            last_scanned=datetime.fromisoformat(row["last_scanned"]) if row["last_scanned"] else None,
-            created_at=datetime.fromisoformat(row["created_at"]),
-        )
 
-
-class AlertRepository:
+class AlertRepository(BaseRepository):
     """CRUD operations for alerts."""
 
-    def __init__(self, conn: sqlite3.Connection | None = None):
-        self.conn = conn or get_connection()
+    _META = ModelMeta(
+        table="alerts",
+        model=Alert,
+        fields=[
+            ModelField("id"),
+            ModelField("symbol"),
+            ModelField("alert_type", serialize=lambda v: v.value, deserialize=AlertType),
+            ModelField("message"),
+            ModelField("data", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "data")),
+            ModelField("read", serialize=lambda v: 1 if v else 0, deserialize=lambda raw: bool(raw)),
+            ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+        ],
+        default_order="created_at DESC",
+    )
 
     def create(self, alert: Alert) -> Alert:
         """Create a new alert."""
-        self.conn.execute(
-            """
-            INSERT INTO alerts (id, symbol, alert_type, message, data, read, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                alert.id,
-                alert.symbol,
-                alert.alert_type.value,
-                alert.message,
-                json.dumps(alert.data),
-                1 if alert.read else 0,
-                alert.created_at.isoformat(),
-            ),
-        )
-        self.conn.commit()
-        return alert
+        return self._insert(self._META, alert)
 
     def list_unread(self) -> list[Alert]:
         """List unread alerts."""
-        rows = self.conn.execute(
-            "SELECT * FROM alerts WHERE read = 0 ORDER BY created_at DESC"
-        ).fetchall()
-        return [self._row_to_alert(row) for row in rows]
+        return self._list(self._META, where="read = 0")
 
     def list_all(self, limit: int = 50) -> list[Alert]:
         """List all alerts."""
-        rows = self.conn.execute(
-            "SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [self._row_to_alert(row) for row in rows]
+        return self._list(self._META, limit=limit)
 
     def mark_read(self, alert_id: str) -> bool:
         """Mark an alert as read."""
         cursor = self.conn.execute(
-            "UPDATE alerts SET read = 1 WHERE id = ?", (alert_id,)
+            "UPDATE alerts SET read = 1 WHERE id = ?",
+            (alert_id,),
         )
         self.conn.commit()
         return cursor.rowcount > 0
@@ -639,74 +489,60 @@ class AlertRepository:
 
     def delete(self, alert_id: str) -> bool:
         """Delete an alert by ID."""
-        cursor = self.conn.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
-        self.conn.commit()
-        return cursor.rowcount > 0
+        return self._delete(self._META, "id = ?", (alert_id,)) > 0
 
     def delete_read(self) -> int:
         """Delete all read alerts. Returns count deleted."""
-        cursor = self.conn.execute("DELETE FROM alerts WHERE read = 1")
-        self.conn.commit()
-        return cursor.rowcount
-
-    def _row_to_alert(self, row: sqlite3.Row) -> Alert:
-        try:
-            data = json.loads(row["data"])
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse data JSON for alert %s", row["id"])
-            data = {}
-
-        return Alert(
-            id=row["id"],
-            symbol=row["symbol"],
-            alert_type=AlertType(row["alert_type"]),
-            message=row["message"],
-            data=data,
-            read=bool(row["read"]),
-            created_at=datetime.fromisoformat(row["created_at"]),
-        )
+        return self._delete(self._META, "read = 1", ())
 
 
-class BacktestRepository:
+class BacktestRepository(BaseRepository):
     """CRUD operations for backtests and signals."""
 
-    def __init__(self, conn: sqlite3.Connection | None = None):
-        self.conn = conn or get_connection()
+    _META = ModelMeta(
+        table="backtests",
+        model=Backtest,
+        fields=[
+            ModelField("id"),
+            ModelField("symbol", serialize=lambda v: v.upper()),
+            ModelField("start_date", serialize=_isoformat, deserialize=lambda raw: date.fromisoformat(raw)),
+            ModelField("end_date", serialize=_isoformat, deserialize=lambda raw: date.fromisoformat(raw)),
+            ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+        ],
+        default_order="created_at DESC",
+    )
+
+    _SIGNAL_META = ModelMeta(
+        table="backtest_signals",
+        model=BacktestSignal,
+        fields=[
+            ModelField("id"),
+            ModelField("backtest_id"),
+            ModelField("date", serialize=_isoformat, deserialize=lambda raw: date.fromisoformat(raw)),
+            ModelField("agent_name"),
+            ModelField("conviction_delta"),
+            ModelField("dimension_scores", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "dimension_scores")),
+            ModelField("forward_returns", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "forward_returns")),
+        ],
+        default_order="date ASC",
+    )
 
     def create(self, backtest: Backtest) -> Backtest:
         """Create a new backtest."""
-        self.conn.execute(
-            """
-            INSERT INTO backtests (id, symbol, start_date, end_date, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                backtest.id,
-                backtest.symbol.upper(),
-                backtest.start_date.isoformat(),
-                backtest.end_date.isoformat(),
-                backtest.created_at.isoformat(),
-            ),
-        )
-        self.conn.commit()
-        return backtest
+        return self._insert(self._META, backtest)
 
     def get(self, backtest_id: str) -> Backtest | None:
         """Get backtest by ID."""
-        row = self.conn.execute(
-            "SELECT * FROM backtests WHERE id = ?", (backtest_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_backtest(row)
+        return self._get_by_id(self._META, backtest_id)
 
     def get_signals(self, backtest_id: str) -> list[BacktestSignal]:
         """Get all signals for a backtest."""
-        rows = self.conn.execute(
-            "SELECT * FROM backtest_signals WHERE backtest_id = ? ORDER BY date ASC",
-            (backtest_id,),
-        ).fetchall()
-        return [self._row_to_signal(row) for row in rows]
+        return self._list(
+            self._SIGNAL_META,
+            where="backtest_id = ?",
+            params=(backtest_id,),
+            order_by="date ASC",
+        )
 
     def get_signal_history(
         self,
@@ -715,21 +551,7 @@ class BacktestRepository:
         limit: int = 50,
         horizon: str = "20d",
     ) -> list[BacktestSignal]:
-        """Get recent signals for a symbol/agent with forward returns.
-
-        Used by adaptive mode to determine if momentum or contrarian works better.
-        Only returns signals that have forward_returns data for the specified horizon.
-
-        Args:
-            symbol: Stock symbol
-            agent_name: Agent name (e.g., "technical")
-            limit: Max signals to return
-            horizon: Forward return horizon to filter by (e.g., "5d", "20d", "60d")
-
-        Returns:
-            List of BacktestSignal with forward returns, newest first
-        """
-        # Join with backtests to filter by symbol
+        """Get recent signals for a symbol/agent with forward returns."""
         rows = self.conn.execute(
             """
             SELECT bs.* FROM backtest_signals bs
@@ -738,13 +560,12 @@ class BacktestRepository:
             ORDER BY bs.date DESC
             LIMIT ?
             """,
-            (symbol.upper(), agent_name, limit * 2),  # fetch extra, filter in Python
+            (symbol.upper(), agent_name, limit * 2),
         ).fetchall()
 
-        signals = []
+        signals: list[BacktestSignal] = []
         for row in rows:
-            signal = self._row_to_signal(row)
-            # Only include signals with the requested forward return horizon
+            signal = self._row_to_model(self._SIGNAL_META, row)
             if horizon in signal.forward_returns:
                 signals.append(signal)
                 if len(signals) >= limit:
@@ -755,70 +576,13 @@ class BacktestRepository:
     def list(self, symbol: str | None = None) -> list[Backtest]:
         """List backtests, optionally filtered by symbol."""
         if symbol:
-            rows = self.conn.execute(
-                "SELECT * FROM backtests WHERE symbol = ? ORDER BY created_at DESC",
-                (symbol.upper(),),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM backtests ORDER BY created_at DESC"
-            ).fetchall()
-        return [self._row_to_backtest(row) for row in rows]
+            return self._list(self._META, where="symbol = ?", params=(symbol.upper(),))
+        return self._list(self._META)
 
     def delete(self, backtest_id: str) -> bool:
         """Delete a backtest by ID (cascades to signals)."""
-        cursor = self.conn.execute("DELETE FROM backtests WHERE id = ?", (backtest_id,))
-        self.conn.commit()
-        return cursor.rowcount > 0
+        return self._delete(self._META, "id = ?", (backtest_id,)) > 0
 
     def add_signal(self, signal: BacktestSignal) -> BacktestSignal:
         """Add a signal to a backtest."""
-        self.conn.execute(
-            """
-            INSERT INTO backtest_signals (id, backtest_id, date, agent_name, conviction_delta, dimension_scores, forward_returns)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                signal.id,
-                signal.backtest_id,
-                signal.date.isoformat(),
-                signal.agent_name,
-                signal.conviction_delta,
-                json.dumps(signal.dimension_scores),
-                json.dumps(signal.forward_returns),
-            ),
-        )
-        self.conn.commit()
-        return signal
-
-    def _row_to_backtest(self, row: sqlite3.Row) -> Backtest:
-        return Backtest(
-            id=row["id"],
-            symbol=row["symbol"],
-            start_date=date.fromisoformat(row["start_date"]),
-            end_date=date.fromisoformat(row["end_date"]),
-            created_at=datetime.fromisoformat(row["created_at"]),
-        )
-
-    def _row_to_signal(self, row: sqlite3.Row) -> BacktestSignal:
-        try:
-            dimension_scores = json.loads(row["dimension_scores"])
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse dimension_scores JSON for signal %s", row["id"])
-            dimension_scores = {}
-
-        try:
-            forward_returns = json.loads(row["forward_returns"])
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse forward_returns JSON for signal %s", row["id"])
-            forward_returns = {}
-
-        return BacktestSignal(
-            id=row["id"],
-            backtest_id=row["backtest_id"],
-            date=date.fromisoformat(row["date"]),
-            agent_name=row["agent_name"],
-            conviction_delta=row["conviction_delta"],
-            dimension_scores=dimension_scores,
-            forward_returns=forward_returns,
-        )
+        return self._insert(self._SIGNAL_META, signal)
