@@ -42,6 +42,8 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
     settings = get_settings_lazy()
     if threshold is None:
         threshold = settings.default_scan_threshold
+    if threshold < 0:
+        click.echo(f"Warning: negative threshold ({threshold}) will trigger alerts on all symbols", err=True)
     output = resolve_output_format(output)
     verbose = output == "text" and not quiet
 

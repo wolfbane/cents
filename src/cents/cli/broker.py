@@ -10,6 +10,13 @@ from cents.models import PositionStatus
 
 from ._shared import default_subcommand, exit_with_error, validate_symbol
 
+
+def _validate_qty(ctx, param, value):
+    """Validate quantity is positive before confirmation."""
+    if value is not None and value <= 0:
+        raise click.BadParameter(f"must be positive, got {value}")
+    return value
+
 logger = logging.getLogger(__name__)
 
 
@@ -119,7 +126,7 @@ def broker_sync(thesis_id: str | None):
 
 @broker.command("buy")
 @click.argument("symbol")
-@click.option("--qty", "-q", type=float, required=True, help="Number of shares")
+@click.option("--qty", "-q", type=float, required=True, callback=_validate_qty, help="Number of shares")
 @click.option("--thesis", "-t", "thesis_id", help="Link to thesis ID")
 @click.confirmation_option(prompt="Are you sure you want to execute this trade?")
 def broker_buy(symbol: str, qty: float, thesis_id: str | None):
@@ -150,7 +157,7 @@ def broker_buy(symbol: str, qty: float, thesis_id: str | None):
 
 @broker.command("sell")
 @click.argument("symbol")
-@click.option("--qty", "-q", type=float, required=True, help="Number of shares")
+@click.option("--qty", "-q", type=float, required=True, callback=_validate_qty, help="Number of shares")
 @click.confirmation_option(prompt="Are you sure you want to execute this trade?")
 def broker_sell(symbol: str, qty: float):
     """Sell shares (paper trading).

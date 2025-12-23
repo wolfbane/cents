@@ -42,17 +42,27 @@ def position_open(
     Example: cents position open NVDA --size 10 --price 137
     """
     symbol = validate_symbol(symbol)
+
+    # Validate inputs before creating position
+    if size <= 0:
+        exit_with_error(f"Size must be positive, got {size}")
+    if price <= 0:
+        exit_with_error(f"Price must be positive, got {price}")
+
     repo = PositionRepository()
     side = PositionSide.SHORT if short else PositionSide.LONG
-    p = Position(
-        symbol=symbol,
-        size=size,
-        entry_price=price,
-        side=side,
-        thesis_id=thesis_id,
-        notes=notes,
-        paper=True,
-    )
+    try:
+        p = Position(
+            symbol=symbol,
+            size=size,
+            entry_price=price,
+            side=side,
+            thesis_id=thesis_id,
+            notes=notes,
+            paper=True,
+        )
+    except ValueError as e:
+        exit_with_error(str(e))
     repo.create(p)
     click.echo(f"Opened {side.value} position {p.id}: {size} {symbol} @ ${price:.2f}")
 

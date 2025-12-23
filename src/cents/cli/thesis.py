@@ -122,21 +122,30 @@ def thesis_create(
     if suggestion:
         initial_conviction = suggestion.get("conviction", 50.0)
 
-    t = Thesis(
-        title=title,
-        hypothesis=hypothesis,
-        conviction=initial_conviction,
-        tags=tag_list,
-        symbol=symbol.upper() if symbol else None,
-        business_quality=business_quality,
-        valuation=Valuation(valuation) if valuation else None,
-        moat=moat,
-        time_horizon=TimeHorizon(time_horizon) if time_horizon else None,
-        horizon_end=horizon_dt,
-        key_risks=risk_list,
-        target_price=target_price,
-        stop_price=stop_price,
-    )
+    # Validate price inputs
+    if target_price is not None and target_price <= 0:
+        exit_with_error(f"Target price must be positive, got {target_price}")
+    if stop_price is not None and stop_price <= 0:
+        exit_with_error(f"Stop price must be positive, got {stop_price}")
+
+    try:
+        t = Thesis(
+            title=title,
+            hypothesis=hypothesis,
+            conviction=initial_conviction,
+            tags=tag_list,
+            symbol=symbol.upper() if symbol else None,
+            business_quality=business_quality,
+            valuation=Valuation(valuation) if valuation else None,
+            moat=moat,
+            time_horizon=TimeHorizon(time_horizon) if time_horizon else None,
+            horizon_end=horizon_dt,
+            key_risks=risk_list,
+            target_price=target_price,
+            stop_price=stop_price,
+        )
+    except ValueError as e:
+        exit_with_error(str(e))
     repo.create(t)
     click.echo(f"Created thesis {t.id}: {t.title}")
     if suggestion:
@@ -151,17 +160,18 @@ def thesis_create(
 @click.option(
     "--status",
     "-s",
-    type=click.Choice(["open", "closed", "invalidated"]),
-    help="Filter by status",
+    type=click.Choice(["open", "closed", "invalidated", "all"]),
+    default="open",
+    help="Filter by status (default: open)",
 )
 @click.option("--symbol", "-S", help="Filter by symbol")
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def thesis_list(status: str | None, symbol: str | None, output: str | None):
+def thesis_list(status: str, symbol: str | None, output: str | None):
     """List theses."""
     output = resolve_output_format(output)
 
     repo = ThesisRepository()
-    status_filter = ThesisStatus(status) if status else None
+    status_filter = ThesisStatus(status) if status != "all" else None
     theses = repo.list(status=status_filter)
 
     # Filter by symbol if specified
@@ -268,6 +278,8 @@ def thesis_update(
         exit_with_error(f"Thesis {thesis_id} not found.")
 
     if conviction is not None:
+        if conviction < 0 or conviction > 100:
+            click.echo(f"Warning: conviction {conviction} clamped to 0-100 range", err=True)
         t.conviction = max(0.0, min(100.0, conviction))
     if status:
         t.status = ThesisStatus(status)
