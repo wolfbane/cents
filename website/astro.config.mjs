@@ -4,7 +4,7 @@ import starlight from "@astrojs/starlight";
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://dollarsandcents.ai",
+  site: "https://dollars-and-cents.ai",
   integrations: [
     starlight({
       title: "Cents",

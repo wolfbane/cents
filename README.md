@@ -5,7 +5,7 @@ Thesis-driven investment research, agent-orchestrated.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](#development)
-[![Docs](https://img.shields.io/badge/docs-dollarsandcents.ai-blueviolet.svg)](https://dollarsandcents.ai)
+[![Docs](https://img.shields.io/badge/docs-dollars-and-cents.ai-blueviolet.svg)](https://dollars-and-cents.ai)
 
 > ⚠️ **Not financial advice.** Cents is an educational and research tool for tracking your own investment theses. It does not provide investment advice, recommendations, or solicitations. Outputs are model-generated and may be inaccurate. You are solely responsible for your own investment decisions. Consult a licensed financial advisor before trading.
 
@@ -116,7 +116,7 @@ Database stored at `~/.cents/data/cents.db` (SQLite, created automatically).
 
 ## Documentation
 
-Full docs at [dollarsandcents.ai](https://dollarsandcents.ai) — quickstart walkthrough, command reference for all 13 groups, agent internals, architecture, and roadmap.
+Full docs at [dollars-and-cents.ai](https://dollars-and-cents.ai) — quickstart walkthrough, command reference for all 13 groups, agent internals, architecture, and roadmap.
 
 ## Development
 

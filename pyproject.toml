@@ -27,8 +27,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://dollarsandcents.ai"
-Documentation = "https://dollarsandcents.ai/docs"
+Homepage = "https://dollars-and-cents.ai"
+Documentation = "https://dollars-and-cents.ai/docs"
 Repository = "https://github.com/wolfbane/cents"
 
 [project.optional-dependencies]

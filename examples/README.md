@@ -1,6 +1,6 @@
 # Examples
 
-Sample artifacts referenced by the docs site at `dollarsandcents.ai`. The site serves them out of `../website/public/` — regenerate **directly into those paths** so the homepage demo and `agents.mdx` iframe pick them up:
+Sample artifacts referenced by the docs site at `dollars-and-cents.ai`. The site serves them out of `../website/public/` — regenerate **directly into those paths** so the homepage demo and `agents.mdx` iframe pick them up:
 
 - **`../website/public/demo.cast`** — asciinema recording of an end-to-end session.
 
