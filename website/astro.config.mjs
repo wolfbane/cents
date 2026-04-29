@@ -11,6 +11,9 @@ export default defineConfig({
       description:
         "Thesis-driven investment research, agent-orchestrated. CLI documentation for the cents tool.",
       customCss: ["./src/styles/custom.css"],
+      components: {
+        Footer: "./src/components/Footer.astro",
+      },
       social: [
         {
           icon: "github",

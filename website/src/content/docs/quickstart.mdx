@@ -10,10 +10,14 @@ you when conviction shifts.
 
 ## Install
 
+Cents isn't on PyPI yet — install from source:
+
 ```bash
-pip install -e .              # Basic install
-pip install -e ".[dev]"       # With test dependencies
-pip install -e ".[broker]"    # With Alpaca trading integration
+git clone https://github.com/wolfbane/cents.git
+cd cents
+pip install .                  # Basic install
+pip install ".[dev]"           # With test dependencies
+pip install ".[broker]"        # With Alpaca trading integration
 ```
 
 Cents requires Python 3.11+. You'll also want at least an FMP API key — see

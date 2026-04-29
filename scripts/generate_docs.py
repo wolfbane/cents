@@ -9,7 +9,7 @@ Hand-written prose can live next to the generated file as
 ``{name}.intro.mdx``. When present, its content is prepended to the body of
 the generated file so regeneration never clobbers human-written narrative.
 
-Run as::
+Run from a fresh checkout (no install required)::
 
     python scripts/generate_docs.py [output_dir]
 
@@ -22,6 +22,12 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Iterable
+
+# Make the in-tree `src/cents` importable without requiring `pip install -e .`
+# so contributors can regenerate docs straight from a clone.
+_REPO_SRC = Path(__file__).resolve().parents[1] / "src"
+if str(_REPO_SRC) not in sys.path:
+    sys.path.insert(0, str(_REPO_SRC))
 
 import click
 

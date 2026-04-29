@@ -579,6 +579,38 @@ class TestResearchCLI:
         assert "Strong revenue growth" in html
 
 
+class TestRecommendOutput:
+    """Tests for the recommend command's output formatting."""
+
+    def test_priority_1_uses_action_review_header(self, capsys):
+        """Priority-1 recommendations render under the 'ACTION (review)' header.
+
+        Regression test: this header was previously 'URGENT (act now)' which
+        reads as financial advice. Don't let it slip back.
+        """
+        from cents.cli.recommend import (
+            Action,
+            Recommendation,
+            _print_recommendations,
+        )
+
+        rec = Recommendation(
+            symbol="NVDA",
+            action=Action.CLOSE,
+            reason="Stop-loss triggered",
+            thesis_id="t1",
+            current_price=100.0,
+            conviction=20.0,
+            priority=1,
+        )
+        _print_recommendations([rec], actionable=False)
+
+        out = capsys.readouterr().out
+        assert "ACTION (review)" in out
+        assert "URGENT" not in out
+        assert "act now" not in out
+
+
 class TestGenerateThesisSuggestion:
     """Tests for _generate_thesis_suggestion helper."""
 

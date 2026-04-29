@@ -1,0 +1,28 @@
+---
+import Default from "@astrojs/starlight/components/Footer.astro";
+---
+
+<div class="cents-disclaimer">
+  <strong>Not financial advice.</strong> Cents is an educational and research
+  tool for tracking your own investment theses. Outputs are model-generated and
+  may be inaccurate. You are solely responsible for your own investment
+  decisions.
+</div>
+
+<Default><slot /></Default>
+
+<style>
+  .cents-disclaimer {
+    margin: 1.5rem 0 1rem;
+    padding: 0.85rem 1rem;
+    border-left: 3px solid var(--sl-color-orange);
+    background: var(--sl-color-bg-nav);
+    color: var(--sl-color-gray-2);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    border-radius: 0 4px 4px 0;
+  }
+  .cents-disclaimer strong {
+    color: var(--sl-color-white);
+  }
+</style>

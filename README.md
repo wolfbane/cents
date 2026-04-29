@@ -15,11 +15,17 @@ Cents is a CLI for the AI/finance crowd that treats investing as a hypothesis-te
 
 ## Install
 
+Cents is not yet published on PyPI — install from source:
+
 ```bash
-pip install -e .              # Basic install
-pip install -e ".[dev]"       # With test dependencies
-pip install -e ".[broker]"    # With Alpaca trading integration
+git clone https://github.com/wolfbane/cents.git
+cd cents
+pip install .                  # Basic install
+pip install ".[dev]"           # With test dependencies
+pip install ".[broker]"        # With Alpaca trading integration
 ```
+
+For local development, swap `pip install` for `pip install -e` to get an editable install.
 
 Requires Python 3.11+.
 
