@@ -56,38 +56,61 @@ const playerId = `asciinema-${Math.random().toString(36).slice(2, 10)}`;
   const PLAYER_CSS = "/vendor/asciinema-player/asciinema-player.css";
   const PLAYER_JS = "/vendor/asciinema-player/asciinema-player.min.js";
 
-  function injectOnce(selector, build) {
-    if (document.querySelector(selector)) return Promise.resolve();
+  // Cache promises on window so concurrent <AsciinemaPlayer> instances share
+  // one load — otherwise a second mount() finds the <script> already in the
+  // DOM, resolves injectOnce immediately, and races window.AsciinemaPlayer.
+  const ASSETS_KEY = "__centsAsciinemaAssets";
+
+  function loadAsset(selector, build) {
+    const existing = document.querySelector(selector);
+    if (existing) {
+      // The element exists but may still be loading; we always promise-wrap.
+      return new Promise((resolve, reject) => {
+        if (existing.dataset.loaded === "1") return resolve();
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error("asset load failed")), { once: true });
+      });
+    }
     return new Promise((resolve, reject) => {
       const el = build();
-      el.addEventListener("load", () => resolve(), { once: true });
+      el.addEventListener("load", () => { el.dataset.loaded = "1"; resolve(); }, { once: true });
       el.addEventListener("error", () => reject(new Error("asset load failed")), { once: true });
       document.head.appendChild(el);
     });
   }
 
   function loadPlayerAssets() {
-    const css = injectOnce(`link[href="${PLAYER_CSS}"]`, () => {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = PLAYER_CSS;
-      return link;
-    });
-    const js = injectOnce(`script[src="${PLAYER_JS}"]`, () => {
-      const script = document.createElement("script");
-      script.src = PLAYER_JS;
-      script.async = true;
-      return script;
-    });
-    return Promise.all([css, js]);
+    if (!window[ASSETS_KEY]) {
+      window[ASSETS_KEY] = Promise.all([
+        loadAsset(`link[href="${PLAYER_CSS}"]`, () => {
+          const link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = PLAYER_CSS;
+          return link;
+        }),
+        loadAsset(`script[src="${PLAYER_JS}"]`, () => {
+          const script = document.createElement("script");
+          script.src = PLAYER_JS;
+          script.async = true;
+          return script;
+        }),
+      ]);
+    }
+    return window[ASSETS_KEY];
   }
 
   async function mount() {
     try {
       const head = await fetch(src, { method: "HEAD" });
       if (!head.ok) return;
-      const len = Number(head.headers.get("content-length") ?? "0");
-      if (len > 0 && len < PLACEHOLDER_BYTES) return;
+      // Skip only when Content-Length is present AND tiny (placeholder). If
+      // the header is missing entirely (unusual on static hosts), assume the
+      // cast is real and let the player handle a malformed body itself.
+      const lenHeader = head.headers.get("content-length");
+      if (lenHeader !== null) {
+        const len = Number(lenHeader);
+        if (len > 0 && len < PLACEHOLDER_BYTES) return;
+      }
 
       await loadPlayerAssets();
       if (!window.AsciinemaPlayer) return;

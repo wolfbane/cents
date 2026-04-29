@@ -1,8 +1,17 @@
 # Examples
 
-Sample exports used by the docs site.
+Sample artifacts referenced by the docs site at `dollarsandcents.ai`. The site serves them out of `../website/public/` — regenerate **directly into those paths** so the homepage demo and `agents.mdx` iframe pick them up:
 
-- `research-NVDA.html` — generated via `cents research NVDA --export-html examples/research-NVDA.html` (requires API keys configured).
-- `demo.cast` — asciinema recording of an end-to-end session (`asciinema rec examples/demo.cast`).
+- **`../website/public/demo.cast`** — asciinema recording of an end-to-end session.
 
-Both are referenced by the website at `../website/` and should be regenerated whenever the CLI surface changes meaningfully.
+  ```bash
+  asciinema rec ../website/public/demo.cast
+  ```
+
+- **`../website/public/examples/research-NVDA.html`** — sample HTML report.
+
+  ```bash
+  cents research NVDA --export-html ../website/public/examples/research-NVDA.html
+  ```
+
+Both require API keys configured (`~/.cents/config.toml`). Re-run whenever the CLI surface or output formatting changes meaningfully.
