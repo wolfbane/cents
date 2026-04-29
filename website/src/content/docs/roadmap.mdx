@@ -1,0 +1,53 @@
+---
+title: Roadmap
+description: Where Cents is going — quality polish in v0.2, productization in v1.0.
+---
+
+The roadmap is grouped by horizon. Each item is a short title and a
+one-line "why".
+
+## v0.2 — quality polish (next 1-2 months)
+
+- **GitHub Actions CI** — pytest + ruff + mypy on every push, badge in
+  README. Catches regressions before they hit master.
+- **100% type-hint coverage** — bring the codebase from ~52% to fully typed,
+  gated by `mypy --strict`. Makes contributions safer and editors smarter.
+- **Pre-commit hooks** — ruff, black, mypy locally. Same gate as CI, just
+  earlier in the loop.
+- **Module-size cleanup** — split `cli/backtest.py` (currently 689 lines)
+  and `db/repository.py` (588 lines) into focused modules. The 800-line
+  per-file guideline exists for a reason.
+- **Sentiment agent model bump** — move from `claude-3-haiku-20240307` to
+  the current Haiku release. Cheaper, faster, better classification.
+- **Sample fixtures + `--use-fixtures`** — let `cents research` run end-to-
+  end without API keys. The cleanest possible demo improvement.
+- **Graceful agent degradation** — orchestrator returns partial results if
+  NewsAPI or FRED is unavailable, instead of failing the whole run.
+- **Coverage badge** — surface test coverage publicly so contributions know
+  the bar.
+
+## v1.0 — productization (longer horizon)
+
+- **Web API (Cloudflare Worker)** — `POST /research/{symbol}` returning the
+  same `AgentResult` JSON. Same shape, different transport.
+- **Live Cloudflare Worker demo** — fixture-backed live demo on this site,
+  same shape as the static export. Removes the "cool, but does it run?"
+  friction.
+- **Slack/webhook alerts** — `CENTS_WEBHOOK_URL` is already plumbed through
+  the alert pipeline; needs a payload formatter and rate-limit niceties.
+- **Agent performance profiler** — `cents metrics --by-agent` showing
+  accuracy + cost + latency per agent. Forces every agent to earn its
+  weight.
+- **Broker paper-trading dashboard** — open positions, P&L by thesis,
+  realized accuracy. Closes the loop between research and outcomes.
+
+## Out of scope (deliberate)
+
+- **Real-time streaming data.** Cents is a research and review tool, not a
+  trading terminal.
+- **Auto-execution from the CLI.** The broker integration is paper-only by
+  design; live trading stays opt-in and manual.
+- **Hosted multi-user product.** Local-first, single-user is a feature.
+
+Suggestions and counter-proposals are welcome on
+[GitHub issues](https://github.com/wolfbane/cents/issues).

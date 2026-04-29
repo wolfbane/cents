@@ -1,0 +1,124 @@
+---
+title: Architecture
+description: Data flow, agent orchestration, and the AgentResult contract.
+---
+
+Cents is intentionally boring on the storage layer: SQLite, repository
+pattern, no daemon. The interesting part is the agent orchestration and
+the `AgentResult` contract that every research agent returns.
+
+## Data flow
+
+CLI commands hit repositories, which talk to a single SQLite database.
+External data providers are called from the agents only — the persistence
+layer never reaches out to the network.
+
+```mermaid
+flowchart LR
+  CLI[CLI commands<br/>thesis · research · scan · ...]
+  Repo[Repositories<br/>ThesisRepository · EvidenceRepository<br/>PositionRepository · WatchlistRepository]
+  DB[(SQLite<br/>~/.cents/data/cents.db)]
+  Agents[Research agents]
+  FMP[(FMP)]
+  Alpaca[(Alpaca)]
+  FRED[(FRED)]
+  News[(NewsAPI)]
+  Anthropic[(Anthropic)]
+
+  CLI --> Repo
+  Repo <--> DB
+  CLI --> Agents
+  Agents --> FMP
+  Agents --> Alpaca
+  Agents --> FRED
+  Agents --> News
+  Agents --> Anthropic
+  Agents --> Repo
+```
+
+The repository pattern accepts an optional `conn` so tests can inject an
+in-memory SQLite connection — see `tests/conftest.py` for the fixtures.
+
+## Agent orchestration
+
+The orchestrator runs every child agent, collects their `AgentResult`s, and
+folds them into a single weighted synthesis.
+
+```mermaid
+flowchart TB
+  Symbol[symbol + thesis]
+  F[Fundamentals<br/>FMP]
+  T[Technical<br/>Alpaca]
+  M[Macro<br/>FRED]
+  S[Sentiment<br/>NewsAPI + Anthropic]
+  Mo[Moat<br/>FMP]
+  I[Insider<br/>FMP]
+  Orch[Orchestrator<br/>weighted aggregate]
+  Result[AgentResult<br/>evidence · conviction_delta · dimension_scores]
+
+  Symbol --> F
+  Symbol --> T
+  Symbol --> M
+  Symbol --> S
+  Symbol --> Mo
+  Symbol --> I
+
+  F -- AgentResult --> Orch
+  T -- AgentResult --> Orch
+  M -- AgentResult --> Orch
+  S -- AgentResult --> Orch
+  Mo -- AgentResult --> Orch
+  I -- AgentResult --> Orch
+
+  Orch --> Result
+```
+
+The orchestrator's weighting combines two factors:
+
+- **Confidence weight** — each evidence item carries a `confidence` in
+  `[0, 1]`; the agent's mean evidence confidence scales its conviction
+  delta.
+- **Age decay** — evidence weight decays linearly from `1.0` toward a
+  `0.1` floor over a per-dimension TTL (7 days for technical/sentiment,
+  30 days for macro/valuation/risk, 90 days for quality/moat).
+
+A per-agent clamp of ±10 conviction points keeps any single agent from
+dominating the result.
+
+## The AgentResult contract
+
+Every agent — including the orchestrator — returns the same dataclass. This
+is the surface the HTML export, the JSON serializer, and the CLI all
+consume.
+
+```mermaid
+classDiagram
+  class AgentResult {
+    +list~Evidence~ evidence
+    +float conviction_delta
+    +str summary
+    +dict~str, float~ dimension_scores
+    +dict metadata
+    +__post_init__()
+  }
+  class Evidence {
+    +str symbol
+    +EvidenceType type
+    +str description
+    +float confidence
+    +ThesisDimension dimension
+    +datetime timestamp
+    +str source
+  }
+  AgentResult "1" --> "*" Evidence : contains
+```
+
+- `evidence` — every supporting / contradicting / neutral observation the
+  agent generated, including a numeric confidence and the dimension it
+  speaks to.
+- `conviction_delta` — clamped to ±10 in `__post_init__`.
+- `dimension_scores` — per-dimension contributions (valuation, quality,
+  moat, technical, risk, macro, sentiment).
+- `summary` — human-readable string surfaced in CLI output.
+- `metadata` — escape hatch for agent-specific extras (signal mode flags,
+  raw provider responses for debugging).

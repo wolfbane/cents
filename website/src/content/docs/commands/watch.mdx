@@ -1,0 +1,88 @@
+---
+title: "cents watch"
+description: "Manage watchlist."
+---
+
+
+Manage watchlist.
+
+## Synopsis
+
+```bash
+cents watch <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents watch add` — Add or update a symbol on watchlist.
+- `cents watch list` — List watched symbols.
+- `cents watch remove` — Remove a symbol from watchlist.
+
+### `cents watch add`
+
+Add or update a symbol on watchlist.
+
+**Synopsis**
+
+```bash
+cents watch add [OPTIONS] SYMBOL
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `SYMBOL` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--thesis/-t TEXT` | `text` |  | Link to thesis ID |
+| `--notes/-n TEXT` | `text` |  | Notes for this watch |
+| `--threshold FLOAT` | `float` |  | Custom conviction delta threshold for this symbol |
+| `--webhook TEXT` | `text` |  | Custom webhook/alert destination for this symbol |
+
+**Example**
+
+```bash
+cents watch add [OPTIONS] SYMBOL
+```
+
+### `cents watch list`
+
+List watched symbols.
+
+**Synopsis**
+
+```bash
+cents watch list
+```
+
+**Example**
+
+```bash
+cents watch list
+```
+
+### `cents watch remove`
+
+Remove a symbol from watchlist.
+
+**Synopsis**
+
+```bash
+cents watch remove SYMBOL
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `SYMBOL` | `text` | yes |
+
+**Example**
+
+```bash
+cents watch remove SYMBOL
+```

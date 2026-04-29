@@ -1,17 +1,21 @@
 """Research CLI command."""
 import logging
 from datetime import date, datetime
+from pathlib import Path
 
 import click
 
 from cents.agents import AGENTS
+from cents.data.alpaca import get_price_provider
 from cents.db import ThesisRepository, EvidenceRepository
 
 from cents.serialization import serialize
+from ._research_html import EVIDENCE_ICONS, render_research_html
 from ._shared import (
     echo_json,
     exit_with_error,
     generate_thesis_suggestion,
+    parse_date,
     resolve_output_format,
     validate_symbol,
 )
@@ -45,6 +49,14 @@ logger = logging.getLogger(__name__)
     default=None,
     help="Historical date for backtesting (YYYY-MM-DD format)",
 )
+@click.option(
+    "--export-html",
+    "export_html_path",
+    type=click.Path(dir_okay=False, resolve_path=False),
+    default=None,
+    metavar="PATH",
+    help="Export a self-contained HTML report (e.g., --export-html /tmp/report.html)",
+)
 def research(
     symbol: str,
     thesis_id: str | None,
@@ -54,23 +66,19 @@ def research(
     quiet: bool,
     suggest_thesis: bool,
     as_of_str: str | None,
+    export_html_path: str | None,
 ):
     """Run research agents on a symbol."""
     symbol = validate_symbol(symbol)
     output = resolve_output_format(output)
     verbose = output == "text" and not quiet
 
-    # Parse as_of date if provided
     as_of: date | None = None
     if as_of_str:
-        try:
-            as_of = datetime.strptime(as_of_str, "%Y-%m-%d").date()
-            if verbose:
-                click.echo(f"Historical analysis as of: {as_of}\n")
-        except ValueError:
-            exit_with_error(f"Invalid date format: {as_of_str}. Use YYYY-MM-DD.")
+        as_of = parse_date(as_of_str, "as-of")
+        if verbose:
+            click.echo(f"Historical analysis as of: {as_of}\n")
 
-    # Get thesis if specified
     thesis = None
     if thesis_id:
         thesis_repo = ThesisRepository()
@@ -80,18 +88,15 @@ def research(
         if verbose:
             click.echo(f"Evaluating against thesis: {thesis.title}\n")
 
-    # Determine which agents to run
-    # If no agent specified, use orchestrator (which runs all agents internally)
-    # This avoids double execution since orchestrator aggregates all agents
+    # Default to the orchestrator: it runs every agent internally and returns
+    # the weighted aggregate. Running agents individually here would double-count.
     if agent_name:
         agents_to_run = {agent_name: AGENTS[agent_name]}
     else:
         agents_to_run = {"orchestrator": AGENTS["orchestrator"]}
 
-    # Fetch current/historical price
     price: float | None = None
     try:
-        from cents.data.alpaca import get_price_provider
         provider = get_price_provider()
         price = provider.get_latest_price(symbol.upper(), as_of=as_of)
     except Exception as e:
@@ -117,7 +122,7 @@ def research(
             if result.evidence:
                 click.echo("Evidence:")
                 for e in result.evidence:
-                    icon = {"supporting": "+", "contradicting": "-", "neutral": "~"}[e.type.value]
+                    icon = EVIDENCE_ICONS.get(e.type.value, "~")
                     click.echo(f"  [{icon}] {e.content}")
             click.echo()
 
@@ -126,6 +131,7 @@ def research(
                 "agent": name,
                 "summary": result.summary,
                 "conviction_delta": result.conviction_delta,
+                "dimension_scores": dict(result.dimension_scores),
                 "evidence": [serialize(e) for e in result.evidence],
             }
         )
@@ -133,8 +139,7 @@ def research(
         agent_deltas[name] = result.conviction_delta
         all_evidence.extend(result.evidence)
 
-    # Use orchestrator's delta if present (it's the weighted aggregate),
-    # otherwise sum individual agent deltas
+    # Orchestrator's delta is the weighted aggregate — prefer it over a sum.
     if "orchestrator" in agent_deltas:
         total_conviction_delta = agent_deltas["orchestrator"]
     else:
@@ -156,7 +161,8 @@ def research(
         evidence_saved = evidence_count > 0
 
         if thesis and evidence_count > 0:
-            # Scale delta by proportion of new evidence
+            # Scale the conviction delta by the share of new evidence so
+            # repeated scans of the same data don't keep moving the needle.
             scale = evidence_count / (evidence_count + evidence_skipped)
             scaled_delta = total_conviction_delta * scale
             thesis_repo = ThesisRepository()
@@ -174,35 +180,47 @@ def research(
                 click.echo(f"Evidence saved for {symbol.upper()} (no thesis linked)")
                 click.echo(f"Link later with: cents evidence link {symbol.upper()} --thesis <ID>")
 
-    # Generate thesis suggestion if requested
     thesis_suggestion = None
     if suggest_thesis:
         thesis_suggestion = generate_thesis_suggestion(symbol, agent_outputs, total_conviction_delta)
 
-    if output == "json":
-        payload = {
-            "symbol": symbol.upper(),
-            "price": price,
-            "as_of": as_of.isoformat() if as_of else None,
-            "thesis_id": thesis.id if thesis else None,
-            "total_conviction_delta": total_conviction_delta,
-            "agents": agent_outputs,
-            "evidence_saved": evidence_saved,
-            "evidence_count": len(all_evidence),
+    research_payload: dict = {
+        "symbol": symbol.upper(),
+        "price": price,
+        "as_of": as_of.isoformat() if as_of else None,
+        "thesis_id": thesis.id if thesis else None,
+        "total_conviction_delta": total_conviction_delta,
+        "agents": agent_outputs,
+        "evidence_saved": evidence_saved,
+        "evidence_count": len(all_evidence),
+    }
+    if thesis_suggestion:
+        research_payload["thesis_suggestion"] = thesis_suggestion
+
+    if export_html_path is not None:
+        html_payload = {
+            **research_payload,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
         }
-        if thesis_suggestion:
-            payload["thesis_suggestion"] = thesis_suggestion
-        echo_json(payload)
+        try:
+            Path(export_html_path).write_text(
+                render_research_html(html_payload), encoding="utf-8"
+            )
+        except OSError as e:
+            exit_with_error(f"Failed to write HTML export to {export_html_path}: {e}")
+        if verbose:
+            click.echo(f"Exported HTML report to {export_html_path}")
+
+    if output == "json":
+        echo_json(research_payload)
     else:
         if quiet:
             click.echo(
                 f"{symbol.upper()} conviction delta: {total_conviction_delta:+.1f}"
             )
         elif not verbose:
-            # This happens when output was coerced to text but quiet disabled
             click.echo(f"Total conviction delta: {total_conviction_delta:+.1f}")
 
-        # Display thesis suggestion in text mode
         if thesis_suggestion and not quiet:
             click.echo("\n--- THESIS SUGGESTION ---")
             click.echo(f"Title:      {thesis_suggestion['title']}")

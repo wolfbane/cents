@@ -1,0 +1,68 @@
+---
+title: "cents alert"
+description: "Manage alerts."
+---
+
+
+Manage alerts.
+
+## Synopsis
+
+```bash
+cents alert <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents alert list` — List alerts.
+- `cents alert read` — Mark alert(s) as read.
+
+### `cents alert list`
+
+List alerts.
+
+**Synopsis**
+
+```bash
+cents alert list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--all` | `boolean` | `false` | Show all alerts including read |
+
+**Example**
+
+```bash
+cents alert list [OPTIONS]
+```
+
+### `cents alert read`
+
+Mark alert(s) as read.
+
+**Synopsis**
+
+```bash
+cents alert read [OPTIONS] [ALERT_ID]
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `ALERT_ID` | `text` | no |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--all` | `boolean` | `false` | Mark all as read |
+
+**Example**
+
+```bash
+cents alert read [OPTIONS] [ALERT_ID]
+```

@@ -1,0 +1,63 @@
+---
+title: "cents outcome"
+description: "Track outcomes."
+---
+
+
+Track outcomes.
+
+## Synopsis
+
+```bash
+cents outcome <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents outcome list` — List all recorded outcomes.
+- `cents outcome record` — Record outcome for a closed position.
+
+### `cents outcome list`
+
+List all recorded outcomes.
+
+**Synopsis**
+
+```bash
+cents outcome list
+```
+
+**Example**
+
+```bash
+cents outcome list
+```
+
+### `cents outcome record`
+
+Record outcome for a closed position.
+
+**Synopsis**
+
+```bash
+cents outcome record [OPTIONS] POSITION_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `POSITION_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--accuracy/-a [correct|incorrect|partial|unclear]` | `[correct \| incorrect \| partial \| unclear]` | `unclear` | Was the thesis correct? |
+| `--notes/-n TEXT` | `text` |  | Retrospective notes |
+
+**Example**
+
+```bash
+cents outcome record [OPTIONS] POSITION_ID
+```

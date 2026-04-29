@@ -1,0 +1,63 @@
+---
+title: Cents
+description: Thesis-driven investment research, agent-orchestrated.
+template: splash
+hero:
+  tagline: Thesis-driven investment research, agent-orchestrated.
+  actions:
+    - text: Quickstart
+      link: /quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: GitHub
+      link: https://github.com/wolfbane/cents
+      icon: external
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+import AsciinemaPlayer from "../../components/AsciinemaPlayer.astro";
+
+Cents is a CLI for the AI/finance crowd that treats investing as a
+hypothesis-testing exercise. Write down a thesis, let seven specialised
+research agents gather evidence, and track outcomes against the original
+hypothesis — so you measure thesis accuracy, not just P&L.
+
+```bash
+pip install cents
+```
+
+<AsciinemaPlayer src="/demo.cast" />
+
+<CardGrid>
+  <Card title="Thesis-driven" icon="pencil">
+    Every position starts as a written hypothesis with valuation, time horizon,
+    and dimension expectations. Research is evaluated _against the thesis_, not
+    in the abstract.
+  </Card>
+  <Card title="Multi-agent" icon="puzzle">
+    Seven specialised agents — fundamentals, technical, macro, sentiment, moat,
+    insider, plus an orchestrator — pull from FMP, Alpaca, FRED, and NewsAPI,
+    each contributing evidence and a conviction delta.
+  </Card>
+  <Card title="Accuracy-tracking" icon="approve-check">
+    Outcomes are recorded against the thesis that opened the position, so you
+    can answer "how often is my thinking right?" — not just "did it go up?"
+  </Card>
+</CardGrid>
+
+> ⚠️ **Not financial advice.** Cents is an educational and research tool for
+> tracking your own investment theses. Outputs are model-generated and may be
+> inaccurate. You are solely responsible for your own investment decisions.
+
+## Get started
+
+<CardGrid>
+  <Card title="Quickstart" icon="rocket">
+    A 5-step walkthrough from zero to your first scan.
+    [Read the quickstart →](/quickstart/)
+  </Card>
+  <Card title="Star on GitHub" icon="github">
+    Source, issues, and discussions live at
+    [github.com/wolfbane/cents](https://github.com/wolfbane/cents).
+  </Card>
+</CardGrid>

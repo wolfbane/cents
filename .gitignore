@@ -7,3 +7,9 @@ build/
 *.db
 .venv/
 venv/
+.claude/
+.beads/
+.coverage
+.pytest_cache/
+.DS_Store
+*.log

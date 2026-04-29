@@ -1,0 +1,186 @@
+---
+title: "cents position"
+description: "Manage positions."
+---
+
+
+Manage positions.
+
+## Synopsis
+
+```bash
+cents position <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents position close` — Close a position.
+- `cents position link` — Link a position to a thesis.
+- `cents position list` — List positions.
+- `cents position open` — Open a new paper position.
+- `cents position show` — Show position details.
+- `cents position value` — Show current market value of open positions.
+
+### `cents position close`
+
+Close a position.
+
+    Example: cents position close abc123 --price 177
+
+**Synopsis**
+
+```bash
+cents position close [OPTIONS] POSITION_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `POSITION_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--price/-p FLOAT` | `float` |  | Exit price |
+
+**Example**
+
+```bash
+cents position close abc123 --price 177
+```
+
+### `cents position link`
+
+Link a position to a thesis.
+
+    Example: cents position link abc123 --thesis def456
+
+**Synopsis**
+
+```bash
+cents position link [OPTIONS] POSITION_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `POSITION_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--thesis/-t TEXT` | `text` |  | Thesis ID to link to |
+
+**Example**
+
+```bash
+cents position link abc123 --thesis def456
+```
+
+### `cents position list`
+
+List positions.
+
+**Synopsis**
+
+```bash
+cents position list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--status/-s [open|closed]` | `[open \| closed]` |  | Filter by status |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents position list [OPTIONS]
+```
+
+### `cents position open`
+
+Open a new paper position.
+
+    Example: cents position open NVDA --size 10 --price 137
+
+**Synopsis**
+
+```bash
+cents position open [OPTIONS] SYMBOL
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `SYMBOL` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--size/-s FLOAT` | `float` |  | Number of shares |
+| `--price/-p FLOAT` | `float` |  | Entry price |
+| `--thesis/-t TEXT` | `text` |  | Link to thesis ID |
+| `--short` | `boolean` | `false` | Short position (default is long) |
+| `--notes/-n TEXT` | `text` |  | Position notes |
+
+**Example**
+
+```bash
+cents position open NVDA --size 10 --price 137
+```
+
+### `cents position show`
+
+Show position details.
+
+**Synopsis**
+
+```bash
+cents position show POSITION_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `POSITION_ID` | `text` | yes |
+
+**Example**
+
+```bash
+cents position show POSITION_ID
+```
+
+### `cents position value`
+
+Show current market value of open positions.
+
+    Example: cents position value        # All open positions
+             cents position value AAPL   # Specific symbol only
+
+**Synopsis**
+
+```bash
+cents position value [SYMBOL]
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `SYMBOL` | `text` | no |
+
+**Example**
+
+```bash
+cents position value        # All open positions
+```

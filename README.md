@@ -1,10 +1,19 @@
 # Cents
 
-Agentic investing guidance with thesis-driven research.
+Thesis-driven investment research, agent-orchestrated.
 
-Cents helps you track investment theses, gather evidence from multiple research agents, and measure outcomes based on thesis accuracy—not just P&L.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](#development)
+[![Docs](https://img.shields.io/badge/docs-dollarsandcents.ai-blueviolet.svg)](https://dollarsandcents.ai)
 
-## Installation
+> ⚠️ **Not financial advice.** Cents is an educational and research tool for tracking your own investment theses. It does not provide investment advice, recommendations, or solicitations. Outputs are model-generated and may be inaccurate. You are solely responsible for your own investment decisions. Consult a licensed financial advisor before trading.
+
+## What is Cents?
+
+Cents is a CLI for the AI/finance crowd that treats investing as a hypothesis-testing exercise. You write down a thesis ("NVDA's data-center growth will drive earnings beats over 12 months"), and Cents orchestrates seven specialised research agents — fundamentals, technical, macro, sentiment, moat, insider, plus an orchestrator — that gather evidence and adjust a conviction score. Positions and outcomes are tracked against the original thesis so you measure thesis accuracy, not just P&L. Everything lives in local SQLite; data flows from FMP, Alpaca, FRED, and NewsAPI.
+
+## Install
 
 ```bash
 pip install -e .              # Basic install
@@ -14,7 +23,7 @@ pip install -e ".[broker]"    # With Alpaca trading integration
 
 Requires Python 3.11+.
 
-## Quick Start
+## Quickstart
 
 ```bash
 # 1. Create a thesis
@@ -35,38 +44,25 @@ cents scan
 cents alert list
 ```
 
-## Configuration
-
-Create `~/.cents/config.toml`:
-
-```toml
-news_api_key = "..."           # newsapi.org
-fred_api_key = "..."           # fred.stlouisfed.org
-fmp_api_key = "..."            # financialmodelingprep.com
-alpaca_api_key = "..."         # alpaca.markets (data + trading)
-alpaca_secret_key = "..."
-default_scan_threshold = 5.0   # conviction delta for alerts
-default_output = "text"        # "text" or "json"
-```
-
-Environment variables override config: `NEWS_API_KEY`, `FRED_API_KEY`, `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `CENTS_OUTPUT_FORMAT`, `CENTS_SCAN_THRESHOLD`, `CENTS_WEBHOOK_URL`, `CENTS_DB_PATH`.
-
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `thesis` | Create, list, update, close investment theses |
 | `research` | Run research agents on a symbol |
+| `evidence` | Manage research evidence |
 | `watch` | Manage watchlist (add, list, remove) |
 | `scan` | Scan watchlist and generate alerts |
 | `alert` | View and manage alerts |
 | `position` | Track positions linked to theses |
 | `outcome` | Record and review investment outcomes |
+| `recommend` | Generate buy/sell/hold recommendations from thesis rules |
+| `portfolio` | Manage portfolios (separate database files) |
 | `broker` | Alpaca broker integration (positions, orders) |
+| `backtest` | Run and analyze agent backtests |
+| `status` | Show current configuration and database status |
 
 ## Research Agents
-
-Research runs multiple agents that gather evidence and calculate conviction deltas:
 
 | Agent | Source | Data |
 |-------|--------|------|
@@ -78,10 +74,7 @@ Research runs multiple agents that gather evidence and calculate conviction delt
 | **Insider** | FMP | Insider buying/selling patterns, cluster activity |
 | **Orchestrator** | All | Synthesizes all agents into weighted conviction |
 
-Each agent returns:
-- Evidence items (supporting/contradicting/neutral)
-- Conviction delta (how much to adjust thesis, e.g., +3.0 or -2.0)
-- Dimension scores (valuation, quality, moat, technical, risk)
+Each agent returns evidence items (supporting/contradicting/neutral), a conviction delta, and dimension scores (valuation, quality, moat, technical, risk).
 
 ## Workflow
 
@@ -98,11 +91,26 @@ Each agent returns:
                     └─────────────┘     └─────────────┘
 ```
 
-1. **Create thesis** with hypothesis, valuation view, time horizon
-2. **Research** gathers evidence from agents, updates conviction
-3. **Scan** watchlist periodically, get alerts when conviction changes significantly
-4. **Track position** when you enter a trade
-5. **Record outcome** when thesis resolves—measure thesis accuracy, not just returns
+## Configuration
+
+`~/.cents/config.toml`:
+
+```toml
+fmp_api_key = "..."            # financialmodelingprep.com
+alpaca_api_key = "..."         # alpaca.markets
+alpaca_secret_key = "..."
+news_api_key = "..."           # newsapi.org (optional)
+fred_api_key = "..."           # fred.stlouisfed.org (optional)
+default_scan_threshold = 5.0
+```
+
+Env vars override config: `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `NEWS_API_KEY`, `FRED_API_KEY`, `CENTS_DB_PATH`, `CENTS_OUTPUT_FORMAT`, `CENTS_SCAN_THRESHOLD`, `CENTS_WEBHOOK_URL`.
+
+Database stored at `~/.cents/data/cents.db` (SQLite, created automatically).
+
+## Documentation
+
+Full docs at [dollarsandcents.ai](https://dollarsandcents.ai) — quickstart walkthrough, command reference for all 13 groups, agent internals, architecture, and roadmap.
 
 ## Development
 
@@ -112,4 +120,6 @@ pytest tests/test_agents.py   # Run specific test file
 pytest -k "test_research"     # Run tests matching pattern
 ```
 
-Database stored at `~/.cents/data/cents.db` (SQLite, created automatically). Override with `CENTS_DB_PATH` env var.
+## License
+
+MIT — see [LICENSE](LICENSE).

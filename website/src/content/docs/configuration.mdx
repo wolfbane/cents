@@ -1,0 +1,86 @@
+---
+title: Configuration
+description: API keys, environment variables, and the ~/.cents/config.toml layout.
+---
+
+Cents reads settings from `~/.cents/config.toml` and overrides them with
+environment variables. Everything below is optional unless an agent that
+needs the key is invoked.
+
+## `~/.cents/config.toml`
+
+```toml
+fmp_api_key = "..."            # financialmodelingprep.com
+alpaca_api_key = "..."         # alpaca.markets
+alpaca_secret_key = "..."
+news_api_key = "..."           # newsapi.org (optional)
+fred_api_key = "..."           # fred.stlouisfed.org (optional)
+default_scan_threshold = 5.0
+```
+
+The database lives at `~/.cents/data/cents.db` (SQLite, created on first run).
+Override with `CENTS_DB_PATH`.
+
+## Environment variables
+
+Env vars take precedence over the TOML file. Useful for CI, ephemeral
+shells, or per-portfolio profiles.
+
+| Variable               | Purpose                                              |
+| ---------------------- | ---------------------------------------------------- |
+| `FMP_API_KEY`          | Fundamentals, moat, insider agents                   |
+| `ALPACA_API_KEY`       | Technical agent + broker integration                 |
+| `ALPACA_SECRET_KEY`    | Technical agent + broker integration                 |
+| `NEWS_API_KEY`         | Sentiment agent                                      |
+| `FRED_API_KEY`         | Macro agent                                          |
+| `ANTHROPIC_API_KEY`    | Sentiment agent (LLM scoring of headlines)           |
+| `CENTS_DB_PATH`        | Override SQLite location                             |
+| `CENTS_OUTPUT_FORMAT`  | `text` (default) or `json`                           |
+| `CENTS_SCAN_THRESHOLD` | Default watchlist alert threshold (in delta points)  |
+| `CENTS_WEBHOOK_URL`    | Outbound webhook for alerts (currently plumbed-only) |
+
+## Provider guide
+
+### FMP — Financial Modeling Prep
+
+- Link: [financialmodelingprep.com](https://site.financialmodelingprep.com/)
+- Free tier: yes (rate-limited; sufficient for personal research)
+- Scope: fundamentals (P/E, margins, ROE, debt), moat metrics (margin
+  stability, ROIC trends), insider transactions, analyst ratings.
+
+### Alpaca
+
+- Link: [alpaca.markets](https://alpaca.markets/)
+- Free tier: yes (paper trading + market data)
+- Scope: equity prices, bars, and 52-week range for the technical agent;
+  position/order endpoints for the optional `broker` integration.
+
+### FRED — Federal Reserve Economic Data
+
+- Link: [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)
+- Free tier: yes (no usage cap for typical research patterns)
+- Scope: Fed funds rate, yield curve, VIX, unemployment — the macro agent's
+  entire input set.
+
+### NewsAPI
+
+- Link: [newsapi.org](https://newsapi.org/)
+- Free tier: yes (developer plan, limited to 100 requests/day and 24h delay)
+- Scope: recent headlines used by the sentiment agent. Optional — the
+  sentiment agent degrades to a no-op if the key is missing.
+
+### Anthropic
+
+- Link: [console.anthropic.com](https://console.anthropic.com/)
+- Free tier: trial credit
+- Scope: powers the sentiment agent's headline classification. Without it,
+  sentiment falls back to keyword heuristics.
+
+## Verifying
+
+Once keys are set, `cents status` prints which providers are wired up and
+where the database lives.
+
+```bash
+cents status
+```

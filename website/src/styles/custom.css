@@ -1,0 +1,37 @@
+/* Cents — dollarsandcents.ai
+ * Money-green accent, dark-by-default, monospace landing hero.
+ */
+
+:root {
+  /* Override Starlight accent palette with money-green. */
+  --sl-color-accent-low: #052e1c;
+  --sl-color-accent: #1f9d55;
+  --sl-color-accent-high: #a3f3c4;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #cdf3dc;
+  --sl-color-accent: #1f9d55;
+  --sl-color-accent-high: #0b3d22;
+}
+
+/* Monospace landing hero header. */
+.hero h1,
+.hero .tagline {
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  letter-spacing: -0.02em;
+}
+
+/* Tighten landing hero spacing on large screens. */
+@media (min-width: 50rem) {
+  .hero {
+    padding-block: 2rem;
+  }
+}
+
+/* Subtle terminal-style border on inline code. */
+.sl-markdown-content :not(a, strong, em, del, span, input, code) > code {
+  border: 1px solid var(--sl-color-gray-5);
+}

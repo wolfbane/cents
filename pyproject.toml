@@ -5,12 +5,28 @@ build-backend = "hatchling.build"
 [project]
 name = "cents"
 version = "0.1.0"
-description = "Agentic investing guidance with thesis-driven research"
+description = "Thesis-driven investment research, agent-orchestrated"
 requires-python = ">=3.11"
+authors = [{name = "Matthew Fellows"}]
+license = {text = "MIT"}
+readme = "README.md"
+keywords = ["investing", "research", "thesis", "portfolio", "agents", "claude", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
 dependencies = [
     "click>=8.1.0",
     "anthropic>=0.40.0",
 ]
+
+[project.urls]
+Homepage = "https://dollarsandcents.ai"
+Documentation = "https://dollarsandcents.ai/docs"
+Repository = "https://github.com/wolfbane/cents"
 
 [project.optional-dependencies]
 dev = [

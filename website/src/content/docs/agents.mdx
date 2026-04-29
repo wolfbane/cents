@@ -1,0 +1,112 @@
+---
+title: Agents
+description: How each research agent works — its data source, the evidence it produces, and how the orchestrator weights it.
+---
+
+Every `cents research` call fans out to seven agents. Each one returns an
+`AgentResult` containing an evidence list, a single conviction delta
+(clamped to ±10), per-dimension scores, and a human-readable summary. The
+orchestrator aggregates them with confidence and age weighting.
+
+## Sample report
+
+The static report below is rendered by `cents research --export html` and
+embedded verbatim — same data, same dimension scores, same evidence rows.
+
+{/* The artifact lands at /examples/research-NVDA.html in a follow-up commit
+    once the `--export html` flag is finalised in Phase 2. */}
+<iframe
+  src="/examples/research-NVDA.html"
+  title="Sample research report — NVDA"
+  loading="lazy"
+  style="width: 100%; height: 600px; border: 1px solid var(--sl-color-gray-5); border-radius: 0.5rem; background: var(--sl-color-bg);"
+/>
+
+## Per-agent breakdown
+
+### Fundamentals
+
+- **Source:** [Financial Modeling Prep](https://site.financialmodelingprep.com/) (`/api/v3/ratios`, `/api/v3/key-metrics`).
+- **Evidence:** P/E ratio, gross/operating/net margins, ROE, debt-to-equity,
+  current ratio, analyst price-target spread.
+- **Dimension scores:** primarily `valuation` and `quality`; risk-adjacent
+  metrics (debt, liquidity) feed `risk`.
+- **Logic:** compares each ratio to the thesis's stated valuation
+  (`undervalued` / `fair` / `overvalued`) and emits supporting,
+  contradicting, or neutral evidence accordingly.
+
+### Technical
+
+- **Source:** [Alpaca](https://alpaca.markets/) market data (price bars, daily aggregates).
+- **Evidence:** moving-average crossovers, momentum slope, 52-week range
+  position, recent volume vs. trailing average.
+- **Dimension scores:** `technical`, with a small `risk` contribution when
+  volatility is elevated.
+- **Logic:** classic trend-following heuristics anchored to the symbol's own
+  history; returns supporting evidence when the trend aligns with the
+  thesis time horizon.
+
+### Macro
+
+- **Source:** [FRED](https://fred.stlouisfed.org/) (Fed funds rate, 10y-2y
+  spread, VIX, unemployment).
+- **Evidence:** rate regime, yield-curve shape, VIX percentile, employment
+  trend.
+- **Dimension scores:** `macro` (and `risk` when stress signals fire).
+- **Logic:** evidence is contextual rather than directional — a steepening
+  yield curve nudges conviction up for cyclicals, down for long-duration
+  assets, framed by the thesis's time horizon.
+
+### Sentiment
+
+- **Source:** [NewsAPI](https://newsapi.org/) headlines + [Anthropic](https://www.anthropic.com/) Claude for classification.
+- **Evidence:** recent headline volume and per-headline sentiment scores.
+- **Dimension scores:** `sentiment`.
+- **Logic:** Claude classifies each headline as positive / negative /
+  neutral; the agent aggregates with a recency weighting. Falls back to a
+  keyword heuristic if `ANTHROPIC_API_KEY` is missing, and to a no-op if
+  `NEWS_API_KEY` is missing.
+
+### Moat
+
+- **Source:** FMP financials (multi-year ratios + segment data).
+- **Evidence:** margin stability over 3-5 years, ROIC trend, gross-margin
+  durability.
+- **Dimension scores:** `moat`, secondary `quality`.
+- **Logic:** stable margins + rising ROIC = supporting moat evidence;
+  compressing margins = contradicting. Avoids one-period snapshots.
+
+### Insider
+
+- **Source:** FMP insider-transaction endpoint.
+- **Evidence:** net insider buying/selling, cluster activity (multiple
+  insiders trading in the same direction within a window).
+- **Dimension scores:** small contributions to `quality` and `risk`.
+- **Logic:** cluster buying is treated as a stronger supporting signal than
+  isolated transactions; cluster selling registers as contradicting.
+
+### Orchestrator
+
+- **Source:** the six agents above.
+- **Output:** a single `AgentResult` whose evidence is the union of every
+  child agent's evidence and whose conviction delta is the weighted sum.
+- **Weighting:**
+  - **Confidence weighting** — each evidence item carries a `confidence`
+    in `[0, 1]`; the agent's average evidence confidence scales its
+    conviction delta before aggregation.
+  - **Age decay** — evidence weight decays linearly from `1.0` to `0.1`
+    over a per-dimension TTL (technical/sentiment 7 days, macro/valuation/
+    risk 30 days, quality/moat 90 days). Old evidence is never fully
+    discarded — it floors at `0.1` so historical context survives.
+  - **Clamping** — every individual agent's conviction delta is clamped to
+    ±10 so a single agent can't dominate the synthesis.
+- **Synthesis summary:** human-readable string of the form
+  `NVDA synthesis: fundamentals: +3.1 | technical: +1.8 | sentiment: +0.4 = +5.3 total (weighted)`.
+
+## Reading the dimension scores
+
+The five dimensions — `valuation`, `quality`, `moat`, `technical`, `risk`,
+plus secondary `macro` and `sentiment` — are independent axes. The
+orchestrator sums per-agent dimension contributions, so a high overall
+conviction delta with one badly negative dimension is a flag worth reading,
+not just a number to act on.

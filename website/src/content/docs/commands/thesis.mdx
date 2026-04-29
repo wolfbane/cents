@@ -1,0 +1,170 @@
+---
+title: "cents thesis"
+description: "Manage investment theses."
+---
+
+
+Manage investment theses.
+
+## Synopsis
+
+```bash
+cents thesis <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents thesis close` — Close a thesis with outcome assessment.
+- `cents thesis create` — Create a new investment thesis.
+- `cents thesis list` — List theses.
+- `cents thesis show` — Show thesis details.
+- `cents thesis update` — Update a thesis.
+
+### `cents thesis close`
+
+Close a thesis with outcome assessment.
+
+**Synopsis**
+
+```bash
+cents thesis close [OPTIONS] THESIS_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `THESIS_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--outcome/-o [correct|incorrect|partial|unclear]` | `[correct \| incorrect \| partial \| unclear]` |  | Was the thesis correct? |
+| `--notes/-n TEXT` | `text` |  | Closing notes (updates hypothesis) |
+
+**Example**
+
+```bash
+cents thesis close [OPTIONS] THESIS_ID
+```
+
+### `cents thesis create`
+
+Create a new investment thesis.
+
+    Example: cents thesis create --title "NVDA bull case" --symbol NVDA
+
+**Synopsis**
+
+```bash
+cents thesis create [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--title/-T TEXT` | `text` |  | Thesis title |
+| `--hypothesis/-h TEXT` | `text` |  | Detailed thesis statement |
+| `--tags/-t TEXT` | `text` |  | Comma-separated tags |
+| `--symbol/-S TEXT` | `text` |  | Stock ticker (e.g., AAPL) |
+| `--business-quality/-b TEXT` | `text` |  | Quality assessment |
+| `--valuation/-v [undervalued|fair|overvalued]` | `[undervalued \| fair \| overvalued]` |  | Valuation assessment |
+| `--moat/-m TEXT` | `text` |  | Competitive advantage |
+| `--time-horizon/-H [short|medium|long]` | `[short \| medium \| long]` |  | Investment horizon |
+| `--horizon-end TEXT` | `text` |  | Expiry date (YYYY-MM-DD) |
+| `--risks/-r TEXT` | `text` |  | Comma-separated key risks |
+| `--target-price FLOAT` | `float` |  | Target price to close thesis |
+| `--stop-price FLOAT` | `float` |  | Stop price to close thesis |
+| `--from-research TEXT` | `text` |  | Auto-populate from research on symbol |
+
+**Example**
+
+```bash
+cents thesis create --title "NVDA bull case" --symbol NVDA
+```
+
+### `cents thesis list`
+
+List theses.
+
+**Synopsis**
+
+```bash
+cents thesis list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--status/-s [open|closed|invalidated|all]` | `[open \| closed \| invalidated \| all]` | `open` | Filter by status (default: open) |
+| `--symbol/-S TEXT` | `text` |  | Filter by symbol |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents thesis list [OPTIONS]
+```
+
+### `cents thesis show`
+
+Show thesis details.
+
+**Synopsis**
+
+```bash
+cents thesis show THESIS_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `THESIS_ID` | `text` | yes |
+
+**Example**
+
+```bash
+cents thesis show THESIS_ID
+```
+
+### `cents thesis update`
+
+Update a thesis.
+
+**Synopsis**
+
+```bash
+cents thesis update [OPTIONS] THESIS_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `THESIS_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--conviction/-c FLOAT` | `float` |  | Set conviction (0-100) |
+| `--status/-s [open|closed|invalidated]` | `[open \| closed \| invalidated]` |  |  |
+| `--symbol/-S TEXT` | `text` |  | Stock ticker |
+| `--business-quality/-b TEXT` | `text` |  | Quality assessment |
+| `--valuation/-v [undervalued|fair|overvalued]` | `[undervalued \| fair \| overvalued]` |  |  |
+| `--moat/-m TEXT` | `text` |  | Competitive advantage |
+| `--time-horizon/-H [short|medium|long]` | `[short \| medium \| long]` |  |  |
+| `--horizon-end TEXT` | `text` |  | Expiry date (YYYY-MM-DD) |
+| `--risks/-r TEXT` | `text` |  | Comma-separated key risks |
+| `--target-price FLOAT` | `float` |  | Target price |
+| `--stop-price FLOAT` | `float` |  | Stop price |
+
+**Example**
+
+```bash
+cents thesis update [OPTIONS] THESIS_ID
+```

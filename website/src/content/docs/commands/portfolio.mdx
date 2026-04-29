@@ -1,0 +1,135 @@
+---
+title: "cents portfolio"
+description: "Manage portfolios (separate database files)."
+---
+
+
+Manage portfolios (separate database files).
+
+    Switch between different portfolios for tracking separate accounts
+    or users. Use 'cents portfolio add' to register a database file,
+    then 'cents portfolio use' to switch between them.
+
+## Synopsis
+
+```bash
+cents portfolio <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents portfolio add` — Register a new portfolio.
+- `cents portfolio current` — Show the currently active portfolio.
+- `cents portfolio list` — List all registered portfolios.
+- `cents portfolio remove` — Remove a portfolio (does not delete the database file).
+- `cents portfolio use` — Switch to a portfolio.
+
+### `cents portfolio add`
+
+Register a new portfolio.
+
+    NAME is a short identifier (e.g., 'personal', 'ira', 'friend').
+    PATH is the path to the database file.
+
+    Example: cents portfolio add friend ~/Downloads/friend.db
+
+**Synopsis**
+
+```bash
+cents portfolio add NAME PATH
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+| `PATH` | `path` | yes |
+
+**Example**
+
+```bash
+cents portfolio add friend ~/Downloads/friend.db
+```
+
+### `cents portfolio current`
+
+Show the currently active portfolio.
+
+**Synopsis**
+
+```bash
+cents portfolio current
+```
+
+**Example**
+
+```bash
+cents portfolio current
+```
+
+### `cents portfolio list`
+
+List all registered portfolios.
+
+**Synopsis**
+
+```bash
+cents portfolio list
+```
+
+**Example**
+
+```bash
+cents portfolio list
+```
+
+### `cents portfolio remove`
+
+Remove a portfolio (does not delete the database file).
+
+    Example: cents portfolio remove friend
+
+**Synopsis**
+
+```bash
+cents portfolio remove NAME
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+
+**Example**
+
+```bash
+cents portfolio remove friend
+```
+
+### `cents portfolio use`
+
+Switch to a portfolio.
+
+    All subsequent cents commands will use this portfolio.
+
+    Example: cents portfolio use friend
+
+**Synopsis**
+
+```bash
+cents portfolio use NAME
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+
+**Example**
+
+```bash
+cents portfolio use friend
+```

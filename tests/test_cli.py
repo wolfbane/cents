@@ -2,7 +2,7 @@
 
 import os
 import sqlite3
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -531,6 +531,52 @@ class TestResearchCLI:
             result = runner.invoke(cli, ["research", "AAPL", "--thesis", "nonexistent"])
             assert result.exit_code == 1
             assert "not found" in result.output
+
+    def test_research_help_advertises_export_flag(self, runner):
+        """--export-html should appear in the research command help."""
+        result = runner.invoke(cli, ["research", "--help"])
+        assert result.exit_code == 0
+        assert "--export-html" in result.output
+
+    @patch("cents.cli.research.AGENTS")
+    def test_research_export_html(self, mock_agents, runner, mock_db, tmp_path):
+        """--export-html PATH writes a self-contained HTML file."""
+        from cents.agents.base import AgentResult
+        from cents.models import Evidence, EvidenceType
+
+        evidence = Evidence(
+            agent="orchestrator",
+            content="Strong revenue growth",
+            source="fundamentals-agent",
+            type=EvidenceType.SUPPORTING,
+            confidence=0.8,
+        )
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.research.return_value = AgentResult(
+            evidence=[evidence],
+            conviction_delta=4.5,
+            summary="Bullish setup",
+            dimension_scores={"valuation": 1.5, "quality": 3.0},
+        )
+        mock_agent_class = MagicMock(return_value=mock_agent_instance)
+        mock_agents.__getitem__.return_value = mock_agent_class
+
+        out_path = tmp_path / "report.html"
+
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(
+                cli,
+                ["research", "NVDA", "--no-save", "--export-html", str(out_path)],
+            )
+            assert result.exit_code == 0, result.output
+
+        html = out_path.read_text(encoding="utf-8")
+        assert len(html) > 1000, "HTML report should have substantive content"
+        assert "NVDA" in html
+        assert "<style>" in html
+        assert 'rel="stylesheet"' not in html
+        assert "Bullish setup" in html
+        assert "Strong revenue growth" in html
 
 
 class TestGenerateThesisSuggestion:

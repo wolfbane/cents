@@ -1,0 +1,73 @@
+---
+title: Quickstart
+description: Go from install to your first watchlist scan in five steps.
+---
+
+import { Steps } from "@astrojs/starlight/components";
+
+This is the five-minute path from a fresh install to a watchlist that pings
+you when conviction shifts.
+
+## Install
+
+```bash
+pip install -e .              # Basic install
+pip install -e ".[dev]"       # With test dependencies
+pip install -e ".[broker]"    # With Alpaca trading integration
+```
+
+Cents requires Python 3.11+. You'll also want at least an FMP API key — see
+[Configuration](/configuration/) for the full key matrix.
+
+## The five-step loop
+
+<Steps>
+
+1. **Create a thesis.** A thesis is a written hypothesis: what you believe,
+   how you'd value it, and the time horizon you're playing for. Everything
+   else hangs off this record.
+
+   ```bash
+   cents thesis create --symbol NVDA --title "NVDA AI dominance continues" \
+     --hypothesis "Data center growth will drive earnings beats" \
+     --valuation undervalued --time-horizon medium
+   ```
+
+2. **Add the symbol to your watchlist.** Watchlist entries link a symbol to
+   a thesis and an alert threshold (in conviction-delta points). The scan
+   command will fire when crossed.
+
+   ```bash
+   cents watch add NVDA --thesis <thesis-id> --threshold 5.0
+   ```
+
+3. **Run research.** This is where the agents earn their keep — fundamentals,
+   technical, macro, sentiment, moat, and insider all gather evidence and the
+   orchestrator weights them into a single conviction delta.
+
+   ```bash
+   cents research NVDA --thesis <thesis-id>
+   ```
+
+4. **Scan the watchlist.** A scan walks every watched symbol, refreshes
+   research, and compares the resulting conviction delta to that symbol's
+   threshold.
+
+   ```bash
+   cents scan
+   ```
+
+5. **Review alerts.** Anything that crossed the threshold during the scan
+   becomes a row here, sorted by recency.
+
+   ```bash
+   cents alert list
+   ```
+
+</Steps>
+
+## Next
+
+Set up API keys so the agents can actually pull data — see
+[Configuration](/configuration/). Once that's done, browse the
+[Commands reference](/commands/) for the full CLI surface.

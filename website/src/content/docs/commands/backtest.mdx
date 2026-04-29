@@ -1,0 +1,203 @@
+---
+title: "cents backtest"
+description: "Run and analyze agent backtests."
+---
+
+
+Run and analyze agent backtests.
+
+## Synopsis
+
+```bash
+cents backtest <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents backtest analyze` — Analyze signal-to-return correlations.
+- `cents backtest delete` — Delete a backtest and its signals.
+- `cents backtest list` — List all backtests.
+- `cents backtest report` — Generate detailed backtest report with best/worst signals.
+- `cents backtest run` — Run a backtest for one or more symbols over a date range.
+- `cents backtest show` — Show backtest details and signals.
+
+### `cents backtest analyze`
+
+Analyze signal-to-return correlations.
+
+    Shows correlation and hit rate by agent across time horizons.
+
+    Examples:
+      cents backtest analyze abc123        # Single backtest
+      cents backtest analyze --symbol NVDA # All NVDA backtests
+      cents backtest analyze --all         # All backtests
+
+**Synopsis**
+
+```bash
+cents backtest analyze [OPTIONS] [BACKTEST_ID]
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `BACKTEST_ID` | `text` | no |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--symbol/-s TEXT` | `text` |  | Analyze all backtests for symbol |
+| `--all` | `boolean` | `false` | Analyze all backtests |
+| `--output [text|json]` | `[text \| json]` | `text` | Output format |
+
+**Example**
+
+```bash
+cents backtest analyze [OPTIONS] [BACKTEST_ID]
+```
+
+### `cents backtest delete`
+
+Delete a backtest and its signals.
+
+**Synopsis**
+
+```bash
+cents backtest delete [OPTIONS] BACKTEST_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `BACKTEST_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--yes/-y` | `boolean` | `false` | Skip confirmation |
+
+**Example**
+
+```bash
+cents backtest delete [OPTIONS] BACKTEST_ID
+```
+
+### `cents backtest list`
+
+List all backtests.
+
+**Synopsis**
+
+```bash
+cents backtest list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--symbol/-s TEXT` | `text` |  | Filter by symbol |
+| `--output [text|json]` | `[text \| json]` | `text` | Output format |
+
+**Example**
+
+```bash
+cents backtest list [OPTIONS]
+```
+
+### `cents backtest report`
+
+Generate detailed backtest report with best/worst signals.
+
+**Synopsis**
+
+```bash
+cents backtest report [OPTIONS] BACKTEST_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `BACKTEST_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output [text|json]` | `[text \| json]` | `text` | Output format |
+
+**Example**
+
+```bash
+cents backtest report [OPTIONS] BACKTEST_ID
+```
+
+### `cents backtest run`
+
+Run a backtest for one or more symbols over a date range.
+
+    Examples:
+      cents backtest run NVDA --start 2023-01-01 --end 2024-01-01
+      cents backtest run --symbols AAPL,MSFT,NVDA --start 2023-01-01
+
+**Synopsis**
+
+```bash
+cents backtest run [OPTIONS] [SYMBOL]
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `SYMBOL` | `text` | no |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--symbols TEXT` | `text` |  | Comma-separated list of symbols (alternative to positional arg) |
+| `--start/-s TEXT` | `text` |  | Start date (YYYY-MM-DD) |
+| `--end/-e TEXT` | `text` |  | End date (YYYY-MM-DD, default: 60 days ago) |
+| `--interval/-i [daily|weekly|monthly]` | `[daily \| weekly \| monthly]` | `weekly` | Evaluation interval |
+| `--agents/-a TEXT` | `text` |  | Comma-separated list of agents (default: all) |
+| `--output [text|json]` | `[text \| json]` | `text` | Output format |
+
+**Example**
+
+```bash
+cents backtest run [OPTIONS] [SYMBOL]
+```
+
+### `cents backtest show`
+
+Show backtest details and signals.
+
+**Synopsis**
+
+```bash
+cents backtest show [OPTIONS] BACKTEST_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `BACKTEST_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output [text|json]` | `[text \| json]` | `text` | Output format |
+
+**Example**
+
+```bash
+cents backtest show [OPTIONS] BACKTEST_ID
+```

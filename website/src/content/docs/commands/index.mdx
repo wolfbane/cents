@@ -1,0 +1,97 @@
+---
+title: Commands
+description: One-line summary of every cents command group, with links to per-command pages.
+---
+
+import { LinkCard, CardGrid } from "@astrojs/starlight/components";
+
+Cents exposes 13 top-level command groups, each grouping related operations
+on theses, research, watchlists, alerts, positions, and broker state.
+
+The pages below are auto-generated from the CLI's `--help` output, so they
+stay in sync with the installed `cents` binary. Each page lists subcommands,
+options, types, defaults, and a usage example.
+
+:::note[Generator status]
+Per-command pages are populated by `scripts/generate_docs.py` (Phase 2 of
+the launch plan). Until that generator runs, the cards below link to pages
+that may not yet exist — start with the [Quickstart](/quickstart/) for
+runnable examples.
+:::
+
+## Command groups
+
+<CardGrid>
+  <LinkCard
+    title="thesis"
+    href="/commands/thesis/"
+    description="Create, list, update, and close investment theses."
+  />
+  <LinkCard
+    title="research"
+    href="/commands/research/"
+    description="Run research agents on a symbol; export reports to JSON or HTML."
+  />
+  <LinkCard
+    title="evidence"
+    href="/commands/evidence/"
+    description="List, inspect, and curate evidence attached to theses."
+  />
+  <LinkCard
+    title="watch"
+    href="/commands/watch/"
+    description="Manage the watchlist (add, list, remove, set thresholds)."
+  />
+  <LinkCard
+    title="scan"
+    href="/commands/scan/"
+    description="Scan the watchlist and emit alerts when conviction shifts."
+  />
+  <LinkCard
+    title="alert"
+    href="/commands/alert/"
+    description="View and manage alerts produced by recent scans."
+  />
+  <LinkCard
+    title="position"
+    href="/commands/position/"
+    description="Open, close, and inspect positions linked to a thesis."
+  />
+  <LinkCard
+    title="outcome"
+    href="/commands/outcome/"
+    description="Record outcomes against a thesis and review accuracy."
+  />
+  <LinkCard
+    title="recommend"
+    href="/commands/recommend/"
+    description="Generate buy/sell/hold recommendations from thesis rules."
+  />
+  <LinkCard
+    title="portfolio"
+    href="/commands/portfolio/"
+    description="Manage portfolios as separate database files."
+  />
+  <LinkCard
+    title="broker"
+    href="/commands/broker/"
+    description="Alpaca broker integration — positions, orders, sync."
+  />
+  <LinkCard
+    title="backtest"
+    href="/commands/backtest/"
+    description="Run and analyse historical agent backtests."
+  />
+  <LinkCard
+    title="status"
+    href="/commands/status/"
+    description="Show current configuration and database status."
+  />
+</CardGrid>
+
+## How regeneration works
+
+The generator walks the Click command tree (`cents.cli.cli.commands`) and
+emits one MDX file per group into this directory. Hand-written prose lives
+in sibling `*.intro.mdx` files that get prepended at generation time, so
+regenerating after a CLI change never clobbers the narrative.

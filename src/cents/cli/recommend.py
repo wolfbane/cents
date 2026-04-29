@@ -298,7 +298,7 @@ def _print_recommendations(recommendations: list[Recommendation], actionable: bo
         return f"  {action_str} {r.symbol.ljust(6)} {price_str.rjust(10)}  {r.reason}"
 
     if urgent:
-        click.echo(click.style("URGENT (act now):", fg="red", bold=True))
+        click.echo(click.style("ACTION (review):", fg="red", bold=True))
         for r in urgent:
             click.echo(format_rec(r))
         click.echo()

@@ -1,0 +1,40 @@
+---
+title: "cents recommend"
+description: "Generate buy/sell/hold recommendations based on thesis rules."
+---
+
+
+Generate buy/sell/hold recommendations based on thesis rules.
+
+    Evaluates all open theses against current prices and conviction levels
+    to produce actionable recommendations.
+
+    Rules (in priority order):
+      1. Stop loss triggered → CLOSE
+      2. Target price reached → CLOSE
+      3. Thesis invalidated → CLOSE/REVIEW
+      4. Thesis expired → REVIEW
+      5. Low conviction with position → SELL
+      6. High conviction without position → BUY
+      7. Otherwise → HOLD
+
+## Synopsis
+
+```bash
+cents recommend [OPTIONS]
+```
+
+## Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--buy-threshold FLOAT` | `float` | `70.0` | Minimum conviction to recommend BUY (default: 70) |
+| `--sell-threshold FLOAT` | `float` | `30.0` | Maximum conviction to recommend SELL (default: 30) |
+| `--output [text|json]` | `[text \| json]` |  | Output format (default: from config) |
+| `--actionable` | `boolean` | `false` | Only show actionable recommendations (exclude HOLD) |
+
+## Example
+
+```bash
+cents recommend [OPTIONS]
+```

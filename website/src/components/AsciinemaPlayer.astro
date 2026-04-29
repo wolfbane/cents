@@ -1,0 +1,112 @@
+---
+/**
+ * AsciinemaPlayer
+ *
+ * Wraps the asciinema-player web component. Falls back to a "demo recording
+ * coming soon" placeholder when the cast file is missing or empty.
+ *
+ * Loads the player JS + CSS lazily on the client. Server renders the
+ * placeholder; the script swaps in the real player after mount if the cast
+ * URL responds with a non-trivial body.
+ */
+interface Props {
+  /** Path to the .cast file under /public (e.g. "/demo.cast"). */
+  src: string;
+  /** Optional poster, e.g. "npt:0:5". */
+  poster?: string;
+  /** Player rows. */
+  rows?: number;
+  /** Player cols. */
+  cols?: number;
+  /** Auto-play when ready. */
+  autoplay?: boolean;
+}
+
+const {
+  src,
+  poster = "npt:0:1",
+  rows = 24,
+  cols = 100,
+  autoplay = false,
+} = Astro.props;
+
+const playerId = `asciinema-${Math.random().toString(36).slice(2, 10)}`;
+---
+
+<div class="asciinema-wrapper">
+  <div id={playerId} class="asciinema-mount">
+    <div class="asciinema-placeholder">
+      <p><strong>Demo recording coming soon.</strong></p>
+      <p class="asciinema-placeholder__sub">
+        The asciinema cast at <code>{src}</code> is a placeholder. Once recorded,
+        it will play here in-browser.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script
+  define:vars={{ src, poster, rows, cols, autoplay, playerId }}
+  type="module"
+>
+  // Defer loading the player CSS/JS until we've confirmed the cast file is
+  // a real recording — placeholders have content-length < PLACEHOLDER_BYTES.
+  const PLACEHOLDER_BYTES = 32;
+  const PLAYER_CSS = "https://cdn.jsdelivr.net/npm/asciinema-player@3.15.1/dist/bundle/asciinema-player.min.css";
+  const PLAYER_JS = "https://cdn.jsdelivr.net/npm/asciinema-player@3.15.1/dist/bundle/asciinema-player.min.js";
+
+  function injectPlayerCss() {
+    if (document.querySelector(`link[href="${PLAYER_CSS}"]`)) return;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = PLAYER_CSS;
+    document.head.appendChild(link);
+  }
+
+  async function mount() {
+    try {
+      const head = await fetch(src, { method: "HEAD" });
+      if (!head.ok) return;
+      const len = Number(head.headers.get("content-length") ?? "0");
+      if (len > 0 && len < PLACEHOLDER_BYTES) return;
+
+      injectPlayerCss();
+      const mod = await import(PLAYER_JS);
+      const target = document.getElementById(playerId);
+      if (!target) return;
+      target.innerHTML = "";
+      mod.create(src, target, { poster, rows, cols, autoplay });
+    } catch {
+      // Network or import error — leave the placeholder visible.
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mount, { once: true });
+  } else {
+    mount();
+  }
+</script>
+
+<style>
+  .asciinema-wrapper {
+    margin: 1.5rem 0;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: var(--sl-color-black);
+  }
+  .asciinema-placeholder {
+    padding: 2rem 1.25rem;
+    text-align: center;
+    color: var(--sl-color-gray-3);
+    font-family: var(--__sl-font-mono, monospace);
+  }
+  .asciinema-placeholder code {
+    background: var(--sl-color-gray-6);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+  .asciinema-placeholder__sub {
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+  }
+</style>

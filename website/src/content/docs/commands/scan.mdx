@@ -1,0 +1,32 @@
+---
+title: "cents scan"
+description: "Scan watchlist and generate alerts for significant changes."
+---
+
+
+Scan watchlist and generate alerts for significant changes.
+
+## Synopsis
+
+```bash
+cents scan [OPTIONS]
+```
+
+## Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--threshold/-t FLOAT` | `float` |  | Default conviction change threshold for alerts (default: from config) |
+| `--webhook/-w TEXT` | `text` |  | Webhook URL for notifications |
+| `--output [text|json]` | `[text \| json]` |  | Output format for scan results (default: from config) |
+| `--quiet` | `boolean` | `false` | Suppress verbose logs for scripting |
+| `--expiry-days INTEGER` | `integer` | `7` | Days before expiry to alert |
+| `--batch-suggest` | `boolean` | `false` | Generate thesis suggestions for all symbols |
+| `--apply` | `boolean` | `false` | Save evidence and update thesis conviction |
+| `--recommend` | `boolean` | `false` | Run recommend after scan completes |
+
+## Example
+
+```bash
+cents scan [OPTIONS]
+```

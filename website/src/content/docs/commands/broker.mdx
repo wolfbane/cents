@@ -1,0 +1,138 @@
+---
+title: "cents broker"
+description: "Alpaca broker integration."
+---
+
+
+Alpaca broker integration.
+
+## Synopsis
+
+```bash
+cents broker <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents broker buy` — Buy shares (paper trading).
+- `cents broker list` — List positions from broker.
+- `cents broker sell` — Sell shares (paper trading).
+- `cents broker status` — Check broker connection and account status.
+- `cents broker sync` — Sync positions from broker to cents.
+
+### `cents broker buy`
+
+Buy shares (paper trading).
+
+    Example: cents broker buy NVDA --qty 10
+
+**Synopsis**
+
+```bash
+cents broker buy [OPTIONS] SYMBOL
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `SYMBOL` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--qty/-q FLOAT` | `float` |  | Number of shares |
+| `--thesis/-t TEXT` | `text` |  | Link to thesis ID |
+| `--yes` | `boolean` | `false` | Confirm the action without prompting. |
+
+**Example**
+
+```bash
+cents broker buy NVDA --qty 10
+```
+
+### `cents broker list`
+
+List positions from broker.
+
+**Synopsis**
+
+```bash
+cents broker list
+```
+
+**Example**
+
+```bash
+cents broker list
+```
+
+### `cents broker sell`
+
+Sell shares (paper trading).
+
+    Example: cents broker sell NVDA --qty 10
+
+**Synopsis**
+
+```bash
+cents broker sell [OPTIONS] SYMBOL
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `SYMBOL` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--qty/-q FLOAT` | `float` |  | Number of shares |
+| `--yes` | `boolean` | `false` | Confirm the action without prompting. |
+
+**Example**
+
+```bash
+cents broker sell NVDA --qty 10
+```
+
+### `cents broker status`
+
+Check broker connection and account status.
+
+**Synopsis**
+
+```bash
+cents broker status
+```
+
+**Example**
+
+```bash
+cents broker status
+```
+
+### `cents broker sync`
+
+Sync positions from broker to cents.
+
+**Synopsis**
+
+```bash
+cents broker sync [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--thesis/-t TEXT` | `text` |  | Link synced positions to thesis |
+
+**Example**
+
+```bash
+cents broker sync [OPTIONS]
+```
