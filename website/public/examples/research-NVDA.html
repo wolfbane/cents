@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>cents research: NVO</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --accent: #16a34a;
+  --bg: #ffffff;
+  --bg-card: #f8fafc;
+  --fg: #0f172a;
+  --fg-muted: #475569;
+  --border: #e2e8f0;
+  --pos: #16a34a;
+  --neg: #dc2626;
+  --neutral: #64748b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0f17;
+    --bg-card: #111827;
+    --fg: #e5e7eb;
+    --fg-muted: #94a3b8;
+    --border: #1f2937;
+    --pos: #4ade80;
+    --neg: #f87171;
+    --neutral: #94a3b8;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  margin: 0;
+  padding: 2rem 1rem;
+  line-height: 1.5;
+}
+.container { max-width: 920px; margin: 0 auto; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; margin-bottom: 2rem; }
+h1, h2, h3, .mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", monospace;
+}
+h1 { font-size: 2rem; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; margin: 2rem 0 1rem; color: var(--fg); }
+.subtitle { color: var(--fg-muted); font-size: 0.9rem; margin: 0; }
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+.meta-item .label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+.meta-item .value { font-family: ui-monospace, monospace; font-size: 1.1rem; font-weight: 600; }
+.delta-pos { color: var(--pos); }
+.delta-neg { color: var(--neg); }
+.delta-neutral { color: var(--neutral); }
+.accent { color: var(--accent); }
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.agent-name {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.summary { color: var(--fg); margin: 0.5rem 0; }
+.dimension-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.dim-pill {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+}
+.evidence-list { list-style: none; padding: 0; margin: 0; }
+.evidence-item {
+  border-left: 3px solid var(--neutral);
+  padding: 0.6rem 0 0.6rem 0.75rem;
+  margin-bottom: 0.6rem;
+}
+.evidence-item.supporting { border-left-color: var(--pos); }
+.evidence-item.contradicting { border-left-color: var(--neg); }
+.evidence-item.neutral { border-left-color: var(--neutral); }
+.evidence-icon {
+  display: inline-block;
+  width: 1.1rem;
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+}
+.evidence-icon.supporting { color: var(--pos); }
+.evidence-icon.contradicting { color: var(--neg); }
+.evidence-icon.neutral { color: var(--neutral); }
+.evidence-source {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}
+.evidence-content { margin: 0.25rem 0; }
+.evidence-confidence { font-size: 0.75rem; color: var(--fg-muted); font-family: ui-monospace, monospace; }
+footer { margin-top: 3rem; color: var(--fg-muted); font-size: 0.75rem; text-align: center; }
+.disclaimer { margin-top: 0.5rem; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1><span class="accent">cents</span> research / NVO</h1>
+    <p class="subtitle">Thesis-driven, agent-orchestrated research report</p>
+    <div class="meta-grid">
+      <div class="meta-item">
+        <div class="label">Symbol</div>
+        <div class="value mono">NVO</div>
+      </div>
+      <div class="meta-item">
+        <div class="label">Price</div>
+        <div class="value mono">$42.22</div>
+      </div>
+      <div class="meta-item">
+        <div class="label">Conviction Δ</div>
+        <div class="value mono delta-pos">+10.0</div>
+      </div>
+      <div class="meta-item">
+        <div class="label">As of</div>
+        <div class="value mono">live</div>
+      </div>
+      <div class="meta-item">
+        <div class="label">Generated</div>
+        <div class="value mono">2026-04-30T19:35:20</div>
+      </div>
+    </div>
+  </header>
+
+  <h2>Agent results</h2>
+  <section class="card">
+      <div class="card-header">
+        <span class="agent-name">orchestrator</span>
+        <span class="mono delta-pos">Δ +10.0</span>
+      </div>
+      <p class="summary">NVO synthesis: fundamentals: +3.9 | technical: +2.4 | macro: +1.4 | sentiment: +2.8 | moat: +5.8 = +16.3 total (weighted)</p>
+      <div class="dimension-scores"><span class="dim-pill">valuation: +3.0</span><span class="dim-pill">quality: +4.0</span><span class="dim-pill">risk: +0.0</span><span class="dim-pill">technical: +4.0</span><span class="dim-pill">macro: +2.0</span><span class="dim-pill">sentiment: +3.3</span><span class="dim-pill">moat: +7.5</span></div>
+      <ul class="evidence-list"><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">fmp</span>
+      </div>
+      <div class="evidence-content">P/E Ratio: 11.81</div>
+      <div class="evidence-confidence">confidence: 0.80</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">fmp</span>
+      </div>
+      <div class="evidence-content">Profit Margin: 33.1% [vs Healthcare]</div>
+      <div class="evidence-confidence">confidence: 0.80</div>
+    </li><li class="evidence-item neutral">
+      <div>
+        <span class="evidence-icon neutral">~</span>
+        <span class="evidence-source">fmp</span>
+      </div>
+      <div class="evidence-content">Debt/Equity: 67.5% [vs Healthcare]</div>
+      <div class="evidence-confidence">confidence: 0.75</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">alpaca</span>
+      </div>
+      <div class="evidence-content">Price: $42.22 | 1W: +9.6% | 1M: +14.9% | 3M: -28.8%</div>
+      <div class="evidence-confidence">confidence: 0.70</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">alpaca</span>
+      </div>
+      <div class="evidence-content">MA20: $39.31 | MA50: $38.73 | Price vs MA20: +7.4%</div>
+      <div class="evidence-confidence">confidence: 0.65</div>
+    </li><li class="evidence-item neutral">
+      <div>
+        <span class="evidence-icon neutral">~</span>
+        <span class="evidence-source">alpaca</span>
+      </div>
+      <div class="evidence-content">Volume: 20.5M avg (last 5d) | 1.3x 20d average</div>
+      <div class="evidence-confidence">confidence: 0.60</div>
+    </li><li class="evidence-item neutral">
+      <div>
+        <span class="evidence-icon neutral">~</span>
+        <span class="evidence-source">alpaca</span>
+      </div>
+      <div class="evidence-content">Avg Daily Range: 2.44% of price</div>
+      <div class="evidence-confidence">confidence: 0.55</div>
+    </li><li class="evidence-item contradicting">
+      <div>
+        <span class="evidence-icon contradicting">-</span>
+        <span class="evidence-source">alpaca</span>
+      </div>
+      <div class="evidence-content">52W Range: $35.29 - $81.05 | Position: 15%</div>
+      <div class="evidence-confidence">confidence: 0.50</div>
+    </li><li class="evidence-item neutral">
+      <div>
+        <span class="evidence-icon neutral">~</span>
+        <span class="evidence-source">FRED:DFF</span>
+      </div>
+      <div class="evidence-content">Fed Funds Rate: 3.64 (+0.00 over 3mo)</div>
+      <div class="evidence-confidence">confidence: 0.70</div>
+    </li><li class="evidence-item neutral">
+      <div>
+        <span class="evidence-icon neutral">~</span>
+        <span class="evidence-source">FRED:T10Y2Y</span>
+      </div>
+      <div class="evidence-content">10Y-2Y Spread (Yield Curve): 0.52 (-0.22 over 3mo)</div>
+      <div class="evidence-confidence">confidence: 0.70</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">FRED:UNRATE</span>
+      </div>
+      <div class="evidence-content">Unemployment Rate: 4.30 (+0.00 over 3mo)</div>
+      <div class="evidence-confidence">confidence: 0.70</div>
+    </li><li class="evidence-item neutral">
+      <div>
+        <span class="evidence-icon neutral">~</span>
+        <span class="evidence-source">FRED:VIXCLS</span>
+      </div>
+      <div class="evidence-content">VIX (Volatility Index): 18.81 (+1.4 over 3mo)</div>
+      <div class="evidence-confidence">confidence: 0.70</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">GlobeNewswire: https://www.globenewswire.com/news-release/2026/04/20/3276770/0/en/Novo-Nordisk-Etavopivat-is-the-first-in-a-new-class-of-drugs-to-meet-both-co-primary-endpoints-in-the-phase-3-HIBISCUS-trial-substantially-reducing-vaso-occlusive-crisis-events-and.html</span>
+      </div>
+      <div class="evidence-content">Novo Nordisk: Etavopivat is the first in a new class of drugs to meet both co-pr...</div>
+      <div class="evidence-confidence">confidence: 0.87</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">Tradingview.com: https://www.tradingview.com/news/gurufocus:1ce3c21cf094b:0-novo-bets-on-openai-to-rebuild-its-obesity-edge/</span>
+      </div>
+      <div class="evidence-content">Novo Bets on OpenAI to Rebuild Its Obesity Edge</div>
+      <div class="evidence-confidence">confidence: 0.83</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">24/7 Wall St.: https://247wallst.com/investing/2026/04/20/hims-hers-rallies-9-as-investors-bet-big-on-peptide-pipeline-and-novo-nordisk-deal/</span>
+      </div>
+      <div class="evidence-content">Hims &amp; Hers Rallies 9% as Investors Bet Big on Peptide Pipeline and Novo Nordisk...</div>
+      <div class="evidence-confidence">confidence: 0.84</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">fmp</span>
+      </div>
+      <div class="evidence-content">5-year avg ROIC: 100.8%</div>
+      <div class="evidence-confidence">confidence: 0.85</div>
+    </li><li class="evidence-item contradicting">
+      <div>
+        <span class="evidence-icon contradicting">-</span>
+        <span class="evidence-source">fmp</span>
+      </div>
+      <div class="evidence-content">High ROIC variance: 121.6% std dev</div>
+      <div class="evidence-confidence">confidence: 0.70</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">fmp</span>
+      </div>
+      <div class="evidence-content">Gross margin stability: 0.7% variance over 5 years</div>
+      <div class="evidence-confidence">confidence: 0.80</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">fmp</span>
+      </div>
+      <div class="evidence-content">Gross margin 84.6% [vs Healthcare], +29.6% vs sector</div>
+      <div class="evidence-confidence">confidence: 0.75</div>
+    </li><li class="evidence-item supporting">
+      <div>
+        <span class="evidence-icon supporting">+</span>
+        <span class="evidence-source">orchestrator</span>
+      </div>
+      <div class="evidence-content">Overall bullish: 11 supporting vs 2 contradicting signals | Strong agent agreement (bullish) | Dimensions: macro: +2, moat: +8, quality: +4, sentiment: +3, technical: +4, valuation: +3</div>
+      <div class="evidence-confidence">confidence: 0.75</div>
+    </li></ul>
+    </section>
+
+  <footer>
+    Generated by <span class="accent">cents</span> — thesis-driven investment research CLI.
+    <div class="disclaimer">Not financial advice. For research and educational use only.</div>
+  </footer>
+</div>
+</body>
+</html>

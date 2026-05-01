@@ -14,6 +14,10 @@ from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 logger = logging.getLogger(__name__)
 
+# claude-3-haiku-20240307 was retired April 2026; using the current Haiku
+# alias so it tracks future snapshots without further code changes.
+_LLM_MODEL = "claude-haiku-4-5"
+
 # Module-level cache for LLM article scores (keyed by URL)
 _article_score_cache: dict[str, dict] = {}
 
@@ -353,7 +357,7 @@ Return 3-5 relevant indices, or fewer if less are relevant."""
 
         try:
             response = client.messages.create(
-                model="claude-3-haiku-20240307",
+                model=_LLM_MODEL,
                 max_tokens=100,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -414,7 +418,7 @@ Score meaning: -1 = very bearish for thesis, 0 = neutral, +1 = very bullish for 
 
         try:
             response = client.messages.create(
-                model="claude-3-haiku-20240307",
+                model=_LLM_MODEL,
                 max_tokens=150,
                 messages=[{"role": "user", "content": prompt}],
             )
