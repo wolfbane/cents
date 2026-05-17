@@ -1,0 +1,85 @@
+---
+title: Cohorts
+description: Directional and policy-neutral — the control group that lets you tell skill from regime beta.
+---
+
+A **cohort** is the kind of bet a thesis represents. Cents tracks two:
+
+- **Directional** — a single-leg position that takes a clear regime
+  view (long X _because_ tariffs, rates, AI capex…).
+- **Neutral** — a paired-hedge construction (long X + short its sector
+  ETF, sized 1:1 dollar) that cancels most of the regime exposure and
+  isolates the company-specific signal.
+
+## Why have two
+
+If you only run directional theses, you cannot tell whether your wins
+came from **skill** (picking the right name) or **regime beta** (the
+tape was friendly during the period you measured). The neutral cohort
+is the control group that makes the comparison meaningful.
+
+Concretely: if the directional cohort returns 0.8 Sharpe over six
+months and the neutral cohort returns 0.7 Sharpe over the same window,
+the **gap (0.1)** is the value of taking regime bets, holding skill
+constant. The headline 0.8 is the wrong number to optimize against —
+you'd be measuring "lucky to be invested in 2026" plus "lucky in this
+specific name." The gap separates those.
+
+Without the neutral cohort: you'd never know if the gap is positive,
+zero, or negative. A negative gap is the most important finding you
+can have — your directional bets are actively destroying value — and
+you can only discover it with the control group running in parallel.
+
+## How it's modeled
+
+A neutral thesis carries:
+
+- `cohort = NEUTRAL` (vs. `DIRECTIONAL`)
+- `hedge_symbol = "XLF"` (the short leg)
+- Two `Position` rows linked to the same `thesis_id`: one LONG on
+  `symbol`, one SHORT on `hedge_symbol` (sides flip for bearish-signal
+  paired theses — see [Factory](/factory/#direction-follows-signal-sign))
+- The thesis's spread P&L is just the sum of both legs' P&L, since both
+  are linked to the same `thesis_id`
+
+Optionally, `paired_thesis_id` links to a "twin" directional thesis so
+you can do manual A/B comparisons.
+
+## CLI
+
+```bash
+# Create a neutral thesis directly
+cents thesis create --symbol NVDA --title "..." \
+  --cohort neutral --hedge-with SOXX
+
+# Generate a paired twin of an existing directional thesis
+cents thesis twin <thesis-id> --hedge-with SOXX
+
+# Open both legs of a neutral thesis in one command
+cents position open NVDA --thesis <id> \
+  --size 100 --price 135 \
+  --hedge-price 215     # short leg auto-sized to dollar-match
+
+# Per-cohort P&L report
+cents cohort
+```
+
+## In the factory
+
+The factory's `cohort_mode` config decides what gets opened:
+
+- `paired` (intended default) — every factory thesis is opened as
+  neutral with a sector-ETF hedge
+- `directional_only` — single-leg only (faster ramp, no control group)
+
+Sector ETF lookup uses FMP's sector classification mapped to the SPDR
+nine (XLK, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLB, XLRE, XLC), with
+SPY as the fallback when sector or FMP key isn't available.
+
+## What it deliberately doesn't do
+
+- No beta-matched sizing — 1:1 dollar across legs (followup; TSLA's
+  beta vs XLY is the canonical mismatch case)
+- No correlation-based peer lookup — `--hedge-with` is always
+  user-supplied (or sector-ETF in the factory)
+- No spread-based scan triggers — close manually for now

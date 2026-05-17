@@ -1,0 +1,143 @@
+---
+title: The factory
+description: The autonomous loop — universe, budget, philosophy, and the rules it follows.
+---
+
+The factory is `cents` running itself. It walks a universe of symbols,
+asks the orchestrator who's interesting, opens paper theses for those
+that clear an entry threshold, watches them, and closes them on target
+/ stop / horizon / premise-invalidation.
+
+This page covers _what it is_ and _how it thinks_. For the philosophical
+backdrop — why we built it this way — read
+[Operating principles](/principles/).
+
+## Philosophy first
+
+The factory's goal is **not** maximizing P&L. It's producing a labeled
+outcomes dataset stratified by cohort and regime, so that after enough
+resolved theses you can mine the data for which kinds of trades cents
+generates _well_ in which regime conditions. The income algorithm comes
+out of that map; it doesn't exist yet, and shouldn't, until the data
+supports a real conclusion.
+
+Two commitments shape the structure:
+
+- **The neutral cohort is mandatory** (paired mode is the intended
+  default). Without it you can't tell whether the directional cohort
+  earned skill or rode regime beta.
+- **Premise tags are first-class.** Every thesis declares which regime
+  variables it depends on, drawn from the same controlled vocabulary
+  the EventAgent uses to tag policy events. That shared vocab is what
+  makes premise-invalidation mechanical, and what makes
+  correlated-signal control work.
+
+## Budget mechanics
+
+Defaults from `cents factory init`:
+
+| Field | Default | What it means |
+| --- | --- | --- |
+| `budget_usd` | `100_000` | Max gross notional across all open factory positions |
+| `target_positions` | `30` | Derives `position_size_usd = budget / target = $3,333` |
+| `entry_threshold` | `7.0` | `|conviction_delta|` required to open |
+| `preemption_margin` | `5.0` | New conviction must beat lowest open's by this much to displace |
+| `cohort_mode` | `directional_only`\* | `paired` opens both legs (2× notional); `directional_only` opens one |
+| `default_horizon_days` | `30` | Auto-close as `UNCLEAR` after this many days |
+| `default_target_pct` | `+10%` | Close as `CORRECT` when price moves this far in conviction direction |
+| `default_stop_pct` | `-5%` | Close as `INCORRECT` when price moves this far against conviction |
+| `max_new_per_run` | `5` | Rate-limit so one run can't reshape the whole book |
+| `max_per_premise_tag` | `2` | Concentration cap — max open theses sharing any single premise tag |
+
+\* The scaffold defaults to `directional_only` for now, but the intended
+default is `paired` — change it manually after `cents factory init`.
+
+So under defaults: $3,333 per leg; paired theses cost $6,667 each; the
+budget supports ~15 paired theses or ~30 directional. With
+`max_per_premise_tag = 2`, no more than 2 open theses ever depend on
+any single regime variable.
+
+## Operating rules
+
+### Open a thesis when…
+
+- Symbol has no current factory thesis (the held-symbols set excludes
+  both `symbol` and `hedge_symbol`)
+- Orchestrator's `|conviction_delta| ≥ entry_threshold`
+- LLM-classified `premise_tags` don't push any tag past
+  `max_per_premise_tag` cap
+- Either budget covers it, OR a lowest-conviction open thesis can be
+  preempted (and new conviction exceeds it by `preemption_margin`)
+- Within `max_new_per_run` for this run
+- (In paired mode) a sector-ETF hedge is resolvable (SPY fallback when
+  unknown)
+
+### Direction follows signal sign
+
+- `delta > 0` → LONG underlying (+ SHORT hedge in paired mode); target
+  above entry, stop below
+- `delta < 0` → SHORT underlying (+ LONG hedge in paired mode); target
+  below entry (price has to drop to win), stop above
+
+### Close a thesis when…
+
+- `PREMISE_INVALIDATION` alert fires (an ingested event's tags intersect
+  this thesis's `premise_tags`) → outcome **`INVALIDATED`**
+- Price hits target → **`CORRECT`**
+- Price hits stop → **`INCORRECT`**
+- Horizon expires → **`UNCLEAR`**
+- A higher-conviction candidate preempts it → **`PREEMPTED`**
+  (stratified out of win-rate analytics)
+
+### Cooldown
+
+Symbols closed as `INVALIDATED` in this run are off-limits to the
+same-run open phase. Both the symbol and its hedge — so the
+invalidating event can't reopen them before it ages out.
+
+## What it deliberately doesn't do
+
+- No real-money execution — paper positions only
+- No reinvestment / compounding — budget is a static notional cap
+- No beta-matched sizing — 1:1 dollar across legs
+- No active threshold auto-tuning — entry/preemption parameters are
+  static config
+- No pyramiding — one open thesis per symbol at a time
+- No chained preemption — won't unwind two cheap theses to fit one
+  expensive new one
+- No backtest mode — runs only against `now()`
+
+Each of these is tracked as a follow-up in
+[GitHub issues](https://github.com/wolfbane/cents/issues).
+
+## Operational cost (observed)
+
+One full run on a 14-symbol universe: ~90 seconds, ~$0.02 in Anthropic
+spend. A daily event refresh adds ~$0.05 (one Haiku call per ingested
+event). At a daily cadence: roughly $20–35/year in operating cost, plus
+whatever Sentiment scoring you trigger separately. Visible end-to-end
+via `cents usage summary`.
+
+## The implicit deal
+
+You give the factory a hypothetical $100k budget; it spends it on small,
+premise-tagged, regime-snapshotted, direction-aware bets across the
+universe you defined. It tells you what closed, why it closed, and what
+the LLM cost you. After enough closes, you have a dataset that can
+answer questions like _"do cents-generated theses tagged `tariffs.china`
+outperform those tagged `ai_capex`?"_ and _"does the directional cohort
+actually beat the neutral cohort, or are we renting beta?"_ — and that's
+the deliverable, not the P&L number on any one run.
+
+## Operating the factory
+
+```bash
+cents factory init             # scaffold ~/.cents/factory.toml
+cents factory run --dry-run    # preview proposed actions
+cents factory run              # the real loop
+cents factory status           # current state, last run, budget util
+cents factory analyze          # cohort-stratified outcomes summary
+```
+
+See also: [Universe](/universe/), [Cohort](/cohort/), and
+[Events](/events/).

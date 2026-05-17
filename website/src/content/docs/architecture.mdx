@@ -1,37 +1,44 @@
 ---
 title: Architecture
-description: Data flow, agent orchestration, and the AgentResult contract.
+description: Data flow, agent orchestration, the regime-aware substrate, and the autonomous factory loop.
 ---
 
 Cents is intentionally boring on the storage layer: SQLite, repository
-pattern, no daemon. The interesting part is the agent orchestration and
-the `AgentResult` contract that every research agent returns.
+pattern, no daemon. The interesting parts are (1) the agent
+orchestration, (2) the regime-aware substrate that ties events to
+theses, and (3) the autonomous factory loop on top.
 
 ## Data flow
 
 CLI commands hit repositories, which talk to a single SQLite database.
-External data providers are called from the agents only — the persistence
-layer never reaches out to the network.
+External data providers are called from the agents only — the
+persistence layer never reaches out to the network.
 
 ```mermaid
 flowchart LR
-  CLI[CLI commands<br/>thesis · research · scan · ...]
-  Repo[Repositories<br/>ThesisRepository · EvidenceRepository<br/>PositionRepository · WatchlistRepository]
+  CLI[CLI commands<br/>thesis · research · scan · event · factory · cohort · universe · usage]
+  Repo[Repositories<br/>ThesisRepository · EvidenceRepository · EventRepository<br/>PositionRepository · WatchlistRepository · LLMUsageRepository<br/>UniverseRepository · FactoryRunRepository · AlertRepository]
   DB[(SQLite<br/>~/.cents/data/cents.db)]
-  Agents[Research agents]
+  Agents[Research agents<br/>incl. EventAgent]
+  Factory[Factory engine<br/>autonomous loop]
   FMP[(FMP)]
   Alpaca[(Alpaca)]
   FRED[(FRED)]
   News[(NewsAPI)]
+  FedReg[(Federal Register)]
   Anthropic[(Anthropic)]
 
   CLI --> Repo
   Repo <--> DB
   CLI --> Agents
+  CLI --> Factory
+  Factory --> Agents
+  Factory --> Repo
   Agents --> FMP
   Agents --> Alpaca
   Agents --> FRED
   Agents --> News
+  Agents --> FedReg
   Agents --> Anthropic
   Agents --> Repo
 ```
@@ -39,10 +46,14 @@ flowchart LR
 The repository pattern accepts an optional `conn` so tests can inject an
 in-memory SQLite connection — see `tests/conftest.py` for the fixtures.
 
+Every Anthropic call routes through `record_llm_usage()` which persists
+a row to the `llm_usage` table, so `cents usage summary` can break
+spend down by agent / model / day / operation.
+
 ## Agent orchestration
 
-The orchestrator runs every child agent, collects their `AgentResult`s, and
-folds them into a single weighted synthesis.
+The orchestrator runs every child agent, collects their `AgentResult`s,
+and folds them into a single weighted synthesis.
 
 ```mermaid
 flowchart TB
@@ -53,6 +64,7 @@ flowchart TB
   S[Sentiment<br/>NewsAPI + Anthropic]
   Mo[Moat<br/>FMP]
   I[Insider<br/>FMP]
+  E[Event<br/>Federal Register + Anthropic]
   Orch[Orchestrator<br/>weighted aggregate]
   Result[AgentResult<br/>evidence · conviction_delta · dimension_scores]
 
@@ -62,6 +74,7 @@ flowchart TB
   Symbol --> S
   Symbol --> Mo
   Symbol --> I
+  Symbol --> E
 
   F -- AgentResult --> Orch
   T -- AgentResult --> Orch
@@ -69,6 +82,7 @@ flowchart TB
   S -- AgentResult --> Orch
   Mo -- AgentResult --> Orch
   I -- AgentResult --> Orch
+  E -- AgentResult --> Orch
 
   Orch --> Result
 ```
@@ -83,13 +97,115 @@ The orchestrator's weighting combines two factors:
   30 days for macro/valuation/risk, 90 days for quality/moat).
 
 A per-agent clamp of ±10 conviction points keeps any single agent from
-dominating the result.
+dominating the result. The orchestrator's _own_ aggregate result uses a
+higher cap of ±30, so a strong-consensus signal isn't quantized to ±10
+by the per-agent clamp.
+
+## The regime-aware substrate
+
+Three primitives turn cents from a research tool into a regime-aware
+research tool:
+
+```mermaid
+flowchart LR
+  EvA[EventAgent.refresh]
+  FedReg[(Federal Register)]
+  EvT[(events table)]
+  Theses[(theses table<br/>premise_tags · regime_snapshot)]
+  Alert[PREMISE_INVALIDATION<br/>alert]
+  Factory[Factory close phase]
+
+  EvA -->|pulls daily| FedReg
+  EvA -->|LLM-tags against<br/>EVENT_TAGS vocab| EvT
+  EvT -->|cross-reference on ingest<br/>tag intersection| Theses
+  Theses -->|matched thesis| Alert
+  Alert -->|read in close phase| Factory
+  Factory -->|outcome=INVALIDATED| Theses
+```
+
+- **`Thesis.premise_tags`** — the regime variables a thesis depends on
+  (e.g. `["tariffs.china", "ai_capex"]`), drawn from the controlled
+  vocabulary `EVENT_TAGS`.
+- **`Thesis.regime_snapshot`** — the regime context at thesis birth:
+  recent event count, top tag counts, net polarity. Stored as JSON
+  for later cohort-stratified analytics.
+- **`AlertType.PREMISE_INVALIDATION`** — fires when an ingested event's
+  tags intersect an open thesis's `premise_tags`. Carries
+  `data.thesis_id` and `data.matched_tags`. The factory's close phase
+  reads these and closes matching theses as `INVALIDATED`.
+
+See [Events & premise invalidation](/events/) for the full mechanics.
+
+## The autonomous factory
+
+The factory walks a universe of symbols, opens paper theses where the
+orchestrator clears the entry threshold (paired with sector-ETF twins
+in paired mode), closes positions on target / stop / horizon /
+premise-invalidation, and writes a structured run log.
+
+```mermaid
+flowchart TB
+  Run[cents factory run]
+  RefreshEv[refresh events<br/>EventAgent.refresh]
+  Close{close phase}
+  PremiseAlert{PREMISE_INVALIDATION<br/>alert?}
+  TargetStop{target / stop / horizon?}
+  CloseTh[close thesis<br/>record outcome reason]
+  Universe[(universe symbols)]
+  Open{open phase}
+  Orchestrator[run orchestrator]
+  Threshold{|delta| ≥ threshold?}
+  Premise[classify premise tags<br/>LLM call]
+  Concentration{premise tag at cap?}
+  Budget{budget OK or preempt?}
+  OpenTh[create thesis<br/>open positions]
+  Record[record run<br/>llm cost, counts]
+
+  Run --> RefreshEv
+  RefreshEv --> Close
+  Close -->|for each open thesis| PremiseAlert
+  PremiseAlert -->|yes| CloseTh
+  PremiseAlert -->|no| TargetStop
+  TargetStop -->|yes| CloseTh
+  TargetStop -->|no| Open
+  Close --> Open
+  Open -->|for each symbol| Orchestrator
+  Orchestrator --> Threshold
+  Threshold -->|no| Open
+  Threshold -->|yes| Premise
+  Premise --> Concentration
+  Concentration -->|hit| Open
+  Concentration -->|ok| Budget
+  Budget -->|no fit, no preempt| Open
+  Budget -->|fits or preempts lower-conviction| OpenTh
+  OpenTh --> Open
+  Open --> Record
+```
+
+Key contracts:
+
+- The close phase respects a same-run **cooldown**: a symbol closed as
+  `INVALIDATED` won't be re-opened in the same run (its hedge symbol
+  too).
+- Direction follows signal sign: bullish delta opens LONG underlying,
+  bearish opens SHORT underlying; hedges (in paired mode) sit
+  opposite. Target / stop semantics flip accordingly.
+- Preemption is conviction-weighted: a new thesis can displace the
+  lowest-conviction open thesis only if `new_conviction >
+  lowest_open.conviction + preemption_margin`. Displaced thesis closes
+  as `PREEMPTED` (stratified out of win-rate analytics).
+- LLM cost on `factory_runs.llm_cost_usd` is computed by diffing
+  `llm_usage` rows where `called_at` falls in `[started_at,
+  completed_at]`, priced via `cents.pricing.estimate_cost_usd`.
+
+See [Factory](/factory/) for the operating rules and budget mechanics
+in detail.
 
 ## The AgentResult contract
 
-Every agent — including the orchestrator — returns the same dataclass. This
-is the surface the HTML export, the JSON serializer, and the CLI all
-consume.
+Every agent — including the orchestrator and EventAgent — returns the
+same dataclass. This is the surface the HTML export, the JSON
+serializer, and the CLI all consume.
 
 ```mermaid
 classDiagram
@@ -99,6 +215,7 @@ classDiagram
     +str summary
     +dict~str, float~ dimension_scores
     +dict metadata
+    +bool aggregate
     +__post_init__()
   }
   class Evidence {
@@ -113,12 +230,15 @@ classDiagram
   AgentResult "1" --> "*" Evidence : contains
 ```
 
-- `evidence` — every supporting / contradicting / neutral observation the
-  agent generated, including a numeric confidence and the dimension it
-  speaks to.
-- `conviction_delta` — clamped to ±10 in `__post_init__`.
+- `evidence` — every supporting / contradicting / neutral observation
+  the agent generated, including a numeric confidence and the
+  dimension it speaks to.
+- `conviction_delta` — clamped in `__post_init__`. The cap is ±10
+  (`MAX_CONVICTION_DELTA`) for individual agents and ±30
+  (`MAX_AGGREGATE_CONVICTION_DELTA`) when `aggregate=True` (the
+  orchestrator).
 - `dimension_scores` — per-dimension contributions (valuation, quality,
   moat, technical, risk, macro, sentiment).
 - `summary` — human-readable string surfaced in CLI output.
-- `metadata` — escape hatch for agent-specific extras (signal mode flags,
-  raw provider responses for debugging).
+- `metadata` — escape hatch for agent-specific extras (signal mode
+  flags, raw provider responses for debugging).

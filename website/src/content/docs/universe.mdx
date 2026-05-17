@@ -1,0 +1,108 @@
+---
+title: Universes
+description: Named, persistable collections of symbols — the input the factory walks.
+---
+
+A **universe** is a named collection of symbols that the factory
+iterates on each run. It's stored in its own SQLite table, has a
+pluggable source, and can be refreshed independently.
+
+## The shape
+
+A `Universe` has:
+
+- `name` — primary key, case-insensitive (stored lowercased)
+- `source` — one of three pluggable sources (see below)
+- `source_config` — JSON blob for source-specific params (e.g.
+  `{"index": "sp500"}`)
+- `symbols` — the resolved list at the time of last refresh
+- `is_default` — exactly one universe can be marked default; that's
+  what `cents factory run` uses when its config says `universe = "default"`
+- `description` — free-form
+- timestamps
+
+## Sources
+
+### `static`
+
+Explicit symbol list. Symbols come from `--symbols A,B,C` or
+`--from-file path.txt` (one symbol per line, `#` comments allowed).
+Refresh is a no-op unless you re-supply symbols. The cheapest, least
+clever option — you know exactly what's in scope.
+
+```bash
+cents universe create thematic --source static \
+  --symbols NVDA,AMD,AVGO,TSM,ASML \
+  --description "Semis with material China exposure"
+```
+
+### `watchlist`
+
+Mirrors the existing `cents watch list`. The watchlist is what you've
+been manually monitoring; this lets the factory iterate the same set.
+Refresh re-reads the watchlist at call time.
+
+```bash
+cents universe create my-watchlist --source watchlist
+```
+
+### `fmp_index`
+
+Pulls index constituents from FMP's `/stable/{index}-constituent`
+endpoint. Currently supported keys: `sp500`, `nasdaq`, `dowjones`.
+Requires `FMP_API_KEY`. Refresh fetches the current constituent list —
+handles index reconstitutions on the next `cents universe refresh`.
+
+```bash
+cents universe create sp500 --source fmp_index --index sp500
+cents universe refresh sp500   # re-pull constituents
+```
+
+## CLI
+
+```bash
+cents universe create <NAME> [--source ...] [--symbols ...] [--from-file ...] [--index ...]
+cents universe list                  # marker next to the default
+cents universe show <NAME>           # full detail + first 20 symbols
+cents universe refresh <NAME>        # re-resolve dynamic sources
+cents universe set-default <NAME>    # which one the factory picks up
+cents universe delete <NAME> [--force]
+```
+
+## How the factory uses it
+
+The factory iterates the resolved symbols in their stored order. For
+each symbol it skips if the symbol is in the held-symbol set (already
+has a factory thesis, is the hedge leg of an existing paired thesis,
+or was just invalidated this run). The remaining symbols pass through
+orchestrator → entry-threshold gate → premise classification →
+concentration cap → budget / preemption gate → open.
+
+**Order is preserved, not shuffled.** Deterministic and easy to reason
+about, but it does mean if your universe is alphabetical and signals
+are evenly distributed, A-named symbols get systematically more chances
+to open when `max_new_per_run` is binding.
+
+## Patterns by use case
+
+| Use case | Recommended source |
+| --- | --- |
+| Iterate something stable and known (S&P 500 baseline) | `fmp_index` with `sp500` |
+| Try a thematic cut (semis basket, energy basket) | `static` with `--from-file` |
+| Mirror your manual workflow — let the factory consider whatever you're already watching | `watchlist` |
+| Run parallel experiments — e.g. factory perf on financials vs. tech | Multiple named `static` universes, switch via `set-default` or `--universe` |
+
+## What it deliberately doesn't do
+
+- No automatic filters (market cap, sector, liquidity) — universe is
+  whatever you give it
+- No symbol blacklist — if you don't want NVDA, don't put it in
+- No automatic refresh schedule — `cents universe refresh` is manual
+  or via cron
+- No universe composition (union/intersection of others) — copy-paste
+  for v1
+
+For most use cases the watchlist or a static list is the right answer.
+The `fmp_index` source exists for when you want a sustainably-large
+universe that auto-handles constituent changes without you tracking
+them.

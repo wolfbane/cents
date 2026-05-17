@@ -26,8 +26,18 @@ export default defineConfig({
           label: "Start here",
           items: [
             { label: "Overview", link: "/" },
+            { label: "Operating principles", link: "/principles/" },
             { label: "Quickstart", link: "/quickstart/" },
             { label: "Configuration", link: "/configuration/" },
+          ],
+        },
+        {
+          label: "Concepts",
+          items: [
+            { label: "The factory", link: "/factory/" },
+            { label: "Universes", link: "/universe/" },
+            { label: "Cohorts", link: "/cohort/" },
+            { label: "Events & invalidation", link: "/events/" },
           ],
         },
         {

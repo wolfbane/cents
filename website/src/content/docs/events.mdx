@@ -1,0 +1,115 @@
+---
+title: Events & premise invalidation
+description: Policy event ingestion, the controlled vocabulary, and how premise-invalidation alerts fire.
+---
+
+The **EventAgent** ingests policy and macro events from authoritative
+feeds, LLM-tags them against a fixed vocabulary, and cross-references
+them against every open thesis. When an event's tags intersect a
+thesis's `premise_tags`, a **`PREMISE_INVALIDATION`** alert fires.
+
+This is the substrate that makes regime-aware investing mechanical
+rather than a vibe.
+
+## The vocabulary
+
+`EVENT_TAGS` (in `cents.models.event`) is a fixed set of ~30 themes
+covering the regime variables a US-equities thesis might depend on:
+
+```python
+# Trade / tariffs
+"tariffs.universal", "tariffs.china", "tariffs.eu", "tariffs.mexico_canada",
+"tariffs.sectoral", "export_controls", "sanctions",
+
+# Fiscal / tax
+"tax_policy", "fiscal_spending", "debt_ceiling", "shutdown",
+
+# Monetary / FX
+"fed_policy", "rates", "dollar",
+
+# Sectoral policy
+"energy_policy", "energy_permitting", "clean_energy_credits",
+"semis_policy", "ai_policy", "healthcare_policy", "drug_pricing",
+"antitrust", "financial_regulation", "crypto_policy", "defense_spending",
+"labor_policy", "immigration_policy",
+
+# Legal / regulatory
+"scotus_ruling", "executive_order",
+
+# Macro themes
+"ai_capex", "reshoring", "deglobalization", "geopolitical_conflict",
+```
+
+Both sides of the system — the EventAgent (tagging fetched events) and
+the premise classifier (tagging theses with their dependencies) — draw
+from this single list. That's what makes the intersection meaningful.
+
+Adding tags is safe; renaming them is not.
+
+## The data source
+
+v1 source is the **Federal Register API** (`/api/v1/documents.json`),
+which publishes every executive order, agency rule, and regulation. The
+EventAgent pulls types `PRESDOCU` (presidential documents incl.
+executive orders), `RULE` (final rules), and `PRORULE` (proposed rules).
+No API key required.
+
+Subsequent sources — SEC EDGAR (8-Ks for sectoral exposure), the
+SCOTUS calendar, USTR/Treasury/OFAC press feeds, FOMC schedule — are
+follow-ups tracked in
+[GitHub issues](https://github.com/wolfbane/cents/issues). The
+EventAgent pipeline (tagging, persistence, premise matching) is
+source-agnostic; adding a source is a new `_fetch_*` method that yields
+raw event dicts.
+
+## How tagging works
+
+For each ingested event, the EventAgent calls Claude Haiku with the
+event's title + abstract + type, and the EVENT_TAGS vocabulary. The
+prompt asks: _"which regime variables does this US federal action
+relate to?"_ — explicitly framed so a tag belongs only if a thesis
+depending on that variable would be materially affected. Tags outside
+the vocabulary are dropped.
+
+The same regime-variable framing is used by the
+[premise classifier](/principles/#2-premise-tags-declare-what-your-idea-depends-on)
+on the thesis side. Same vocab, same lens, both sides — so the
+intersection is mechanical and meaningful, not coincidental.
+
+## Premise invalidation, end-to-end
+
+1. **You (or the factory)** create a thesis with `premise_tags =
+   ["tariffs.china", "ai_capex"]`.
+2. **EventAgent.refresh()** pulls new Federal Register documents,
+   LLM-tags them, persists to the `events` table.
+3. For each newly-ingested event, the agent cross-references against
+   every open thesis. Any thesis whose `premise_tags` intersect the
+   event's `tags` gets a `PREMISE_INVALIDATION` alert with
+   `data.thesis_id`, `data.matched_tags`, and the event's polarity.
+4. **`cents factory run`** sees the alert in its close phase, closes
+   the matching thesis as `INVALIDATED`, and records the closure
+   reason on the outcome.
+5. The cooldown rule prevents the same symbol from being reopened in
+   the same run (until the event ages out).
+
+## CLI
+
+```bash
+cents event refresh                  # pull new Federal Register events
+cents event list --tag tariffs.china # filter by tag
+cents event list --since-days 7      # window
+cents event show <event-id>          # full detail incl. agencies, polarity
+```
+
+The refresh hooks into `cents scan` automatically — every scan cycle
+pulls events once and fires any cross-reference alerts before the
+per-symbol scan runs.
+
+## What it deliberately doesn't do
+
+- No real-time push — refresh is pull-based, on demand or via cron
+- No source other than Federal Register in v1
+- No NLP beyond LLM tagging — no entity extraction, no sentiment beyond
+  the bullish/bearish/neutral coarse polarity
+- No backtest mode — `as_of` parameter exists on the agent surface but
+  the factory doesn't use it yet

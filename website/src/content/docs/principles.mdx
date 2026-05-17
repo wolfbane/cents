@@ -1,0 +1,183 @@
+---
+title: Operating principles
+description: How cents thinks — written for someone who's never invested before, but accurate for someone who has.
+---
+
+If you're new to investing, this page is the right starting point. If
+you're not, it's still the shortest description of what cents is trying
+to do that the rest of the docs assume you already understand.
+
+## Start with one idea: the thesis
+
+A **thesis** is a written reason for owning a stock. Not "I think NVDA
+will go up" — something more specific, like "NVDA will go up because
+demand for AI chips will keep growing for the next 12 months." That
+sentence is _testable_: a year later, you can look back and decide
+whether the reasoning held.
+
+Cents makes you write down a thesis whenever you take a position, and
+attaches a **conviction score** (0–100) — how confident you are. A
+bunch of automated research agents help refine that conviction: one
+looks at fundamentals (earnings, debt), one at technical price patterns,
+one at the macro economy, one at news sentiment, and so on. Each one
+adjusts your conviction up or down based on what it finds.
+
+That's the boring core. The rest of cents exists to solve one specific
+problem.
+
+## The problem: the rules keep changing
+
+The political and policy environment right now is unusually chaotic.
+Tariffs get announced, paused, struck down by the Supreme Court, then
+re-imposed under a different law — sometimes within weeks. Executive
+orders pile up. The dollar swings. In a calm period, you could buy a
+stock for a good reason and hold it for a year. Right now, the reason
+you bought might evaporate overnight because the government changed the
+rules.
+
+This breaks a hidden assumption in normal investing tools. They assume
+the _backdrop_ — the regime — is stable, so the only thing you need to
+track is **price**. In a regime like this one, that's wrong. You also
+need to track whether your **reasoning** still holds.
+
+## The fix, in three pieces
+
+### 1. The EventAgent: watch the rules, not just the company
+
+A regular news agent reads articles about a specific stock — like
+searching "NVDA" on a news site. That's fine for company-specific
+stuff (earnings, scandals), but it misses the big policy events that
+move everything. A new executive order on Chinese tariffs doesn't show
+up in a search for "NVDA" — but it absolutely affects every chip
+company.
+
+The **EventAgent** fixes that gap. It pulls from the Federal Register
+(the official US publication of every executive order, agency rule, and
+regulation), and tags each item with what it's about — `tariffs.china`,
+`fed_policy`, `energy_policy`, etc. It maintains a running list of what's
+actually happening at the policy level, drawn from a fixed vocabulary
+([`EVENT_TAGS`](/architecture/#the-eventagent)) of about 30 themes.
+
+### 2. Premise tags: declare what your idea depends on
+
+When you write a thesis (or when the factory writes one for you), it
+also gets tagged with the regime variables it depends on. For an NVDA
+thesis: `["tariffs.china", "ai_capex"]` — "this idea works only if China
+tariff policy stays roughly where it is and companies keep spending
+heavily on AI." For a JPM thesis: `["fed_policy", "rates"]` — "this works
+only if Fed and rates stay roughly in the regime they're in."
+
+The tags come from the **same fixed vocabulary** the EventAgent uses.
+That shared vocab is what makes the mechanical part possible.
+
+### 3. Premise-invalidation alerts: get warned when the world shifts
+
+When the EventAgent ingests a new event tagged `tariffs.china`, the
+system automatically cross-references it against every open thesis. Any
+thesis whose premise tags include `tariffs.china` gets an alert: _"hey,
+an event just happened that may have killed the reason you bought
+this."_
+
+Without this, you'd find out the same way you always do — the stock
+drops a few days later, you read the news, and you connect the dots.
+With this, the system warns you the moment the event is published,
+before the market has fully processed it.
+
+A new outcome category goes with this: in addition to **target hit**
+(you were right, take profits), **stop hit** (you were wrong, cut
+losses), and **horizon expired** (your time window ran out), there's
+now **premise invalidated** (the reason your idea worked just stopped
+being true). That distinction matters when you later look back — "I was
+right about the stock but the rug got pulled" is a different lesson than
+"I was just wrong."
+
+## Why a regime _snapshot_ too?
+
+Every time a thesis is created, cents records a snapshot of the broader
+environment at that moment: how many policy events were happening
+recently, which themes dominated, the overall mood (bullish/bearish).
+It's not used to make any one decision — it's stored for later.
+
+Why bother? Because eventually, with enough closed theses to learn from,
+you don't want to just average them and say "my theses win 55% of the
+time." You want to ask: _"my theses win 75% of the time when the policy
+backdrop looks like Y, but only 35% when it looks like Z."_ That kind of
+insight is only possible if you recorded what the backdrop _was_ at the
+moment each thesis was opened. The snapshot is the seed.
+
+## Two cohorts: the control group matters
+
+If cents is going to produce theses autonomously (via the
+[factory](/factory/)), there's a measurement problem: how do you know
+whether your wins are skill, or whether you just happened to run the
+factory during a friendly tape?
+
+The answer is the same answer every science uses: a **control group**.
+For investing, that means **policy-neutral** theses — paired trades
+where you're long one stock and short its sector ETF at matched dollar
+size. The pair cancels most of the regime exposure, leaving roughly
+just the company-specific signal.
+
+Cents runs **both** cohorts in parallel by default:
+
+- **Directional cohort** — single-leg theses that take a clear regime
+  view (long X _because_ tariffs / rates / AI capex).
+- **Neutral cohort** — paired theses that hedge out the regime exposure,
+  capturing whether the underlying name actually outperforms its peers.
+
+The gap between the two cohorts' returns is the **value of taking
+regime bets**, holding skill constant. If the directional cohort
+returns 0.8 Sharpe and the neutral cohort returns 0.7, the actual edge
+is 0.1, not 0.8. Without the neutral cohort, you can't tell skill from
+tape. With it, you can.
+
+## The autonomous factory
+
+The [factory](/factory/) is the loop that runs all of this
+autonomously. It walks a universe of symbols, asks the orchestrator who
+looks interesting, opens paper theses (paired by default) for those
+that clear an entry threshold, watches them, and closes them on target /
+stop / horizon / premise-invalidation. Every thesis it creates gets the
+full regime-aware treatment: premise tags, regime snapshot, sector-ETF
+hedge.
+
+**The factory's goal is not P&L.** It's to produce a labeled outcomes
+dataset, stratified by cohort and regime, so that after enough resolved
+theses you can mine the data for what kinds of trades cents-the-system
+actually generates _well_ in which regime conditions. The eventual
+"income algorithm" comes out of that map — it doesn't exist yet, and
+shouldn't, until the data is big enough to support a real conclusion.
+
+This is why the factory tracks:
+
+- Outcomes by **closure reason**, not just win / lose
+- LLM **cost per run**, so you know the operating bill
+- Per-thesis **regime snapshot**, so future analytics can stratify
+- A **PREEMPTED** outcome (excluded from win-rate math) so theses that
+  got displaced by higher-conviction candidates don't poison the stats
+- A **concentration cap** per premise tag, so three financials all
+  depending on `fed_policy` don't get counted as three independent bets
+  when they're really one Fed call
+
+## The mental model, condensed
+
+- **Old way:** "I bought stock X for reason Y. Did the stock go up?"
+- **New way:** "I bought stock X for reason Y, which depends on policy
+  environment Z being stable. Did Y still hold by the time the position
+  resolved? Did Z shift? If yes/no, what does that tell me about my
+  next decision?"
+
+It's more bookkeeping upfront. But the bookkeeping is what eventually
+lets you tell the difference between a good investment process and being
+lucky to live in a good time to be invested.
+
+## Where to go next
+
+- **[Quickstart](/quickstart/)** — install and run your first scan
+- **[Architecture](/architecture/)** — how the pieces fit together,
+  with diagrams
+- **[Agents](/agents/)** — what each research agent does, including the
+  EventAgent
+- **[Factory](/factory/)** — the autonomous loop in detail
+- **[Roadmap](/roadmap/)** — what's done, what's queued, what's
+  deliberately out of scope

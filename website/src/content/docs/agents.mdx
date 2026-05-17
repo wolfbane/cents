@@ -3,9 +3,10 @@ title: Agents
 description: How each research agent works — its data source, the evidence it produces, and how the orchestrator weights it.
 ---
 
-Every `cents research` call fans out to seven agents. Each one returns an
-`AgentResult` containing an evidence list, a single conviction delta
-(clamped to ±10), per-dimension scores, and a human-readable summary. The
+Every `cents research` call fans out to eight agents. Each one returns
+an `AgentResult` containing an evidence list, a single conviction delta
+(clamped to ±10 for individual agents, ±30 for the orchestrator's
+aggregate), per-dimension scores, and a human-readable summary. The
 orchestrator aggregates them with confidence and age weighting.
 
 ## Sample report
@@ -83,9 +84,25 @@ embedded verbatim — same data, same dimension scores, same evidence rows.
 - **Logic:** cluster buying is treated as a stronger supporting signal than
   isolated transactions; cluster selling registers as contradicting.
 
+### Event
+
+- **Source:** [Federal Register API](https://www.federalregister.gov/developers/api/v1) (executive orders,
+  rules, proposed rules) + [Anthropic](https://www.anthropic.com/) Claude for tagging against the
+  `EVENT_TAGS` controlled vocabulary.
+- **Evidence:** recent policy events that match the thesis's
+  `premise_tags` — surfaces in the `macro` dimension with the event's
+  polarity (bullish/bearish/neutral) feeding the conviction delta.
+- **Dimension scores:** `macro`.
+- **Logic:** the agent has two responsibilities. (1) On `refresh()`,
+  pull new Federal Register documents, LLM-tag them, persist, and fire
+  `PREMISE_INVALIDATION` alerts against open theses whose
+  `premise_tags` intersect. (2) On `research()`, return recent matching
+  events as macro evidence for the thesis. See
+  [Events & premise invalidation](/events/) for the full picture.
+
 ### Orchestrator
 
-- **Source:** the six agents above.
+- **Source:** the seven agents above.
 - **Output:** a single `AgentResult` whose evidence is the union of every
   child agent's evidence and whose conviction delta is the weighted sum.
 - **Weighting:**
@@ -96,8 +113,11 @@ embedded verbatim — same data, same dimension scores, same evidence rows.
     over a per-dimension TTL (technical/sentiment 7 days, macro/valuation/
     risk 30 days, quality/moat 90 days). Old evidence is never fully
     discarded — it floors at `0.1` so historical context survives.
-  - **Clamping** — every individual agent's conviction delta is clamped to
-    ±10 so a single agent can't dominate the synthesis.
+  - **Clamping** — every individual agent's conviction delta is clamped
+    to ±10 (`MAX_CONVICTION_DELTA`) so a single agent can't dominate.
+    The orchestrator's own aggregated result has a higher cap of ±30
+    (`MAX_AGGREGATE_CONVICTION_DELTA`) so a strong-consensus signal
+    isn't quantized to ±10 by the per-agent clamp.
 - **Synthesis summary:** human-readable string of the form
   `NVDA synthesis: fundamentals: +3.1 | technical: +1.8 | sentiment: +0.4 = +5.3 total (weighted)`.
 

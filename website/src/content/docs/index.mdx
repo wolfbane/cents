@@ -1,14 +1,18 @@
 ---
 title: Cents
-description: Thesis-driven investment research, agent-orchestrated.
+description: Regime-aware, thesis-driven investment research — agent-orchestrated, autonomously operable.
 template: splash
 hero:
-  tagline: Thesis-driven investment research, agent-orchestrated.
+  tagline: An investing tool that's honest about why you bought, and tells you the moment the reason stops being true.
   actions:
     - text: Quickstart
       link: /quickstart/
       icon: right-arrow
       variant: primary
+    - text: How it thinks
+      link: /principles/
+      icon: open-book
+      variant: secondary
     - text: GitHub
       link: https://github.com/wolfbane/cents
       icon: external
@@ -17,10 +21,12 @@ hero:
 import { Card, CardGrid } from "@astrojs/starlight/components";
 import AsciinemaPlayer from "../../components/AsciinemaPlayer.astro";
 
-Cents is a CLI for the AI/finance crowd that treats investing as a
-hypothesis-testing exercise. Write down a thesis, let seven specialised
-research agents gather evidence, and track outcomes against the original
-hypothesis — so you measure thesis accuracy, not just P&L.
+Cents is a CLI for investors who want to treat investing like a
+hypothesis-testing exercise — write down a thesis, declare which regime
+variables it depends on, and let the system warn you the moment one of
+those dependencies shifts. Eight specialised research agents gather the
+evidence; an autonomous factory loop can run the whole cycle for you and
+produce a labeled outcomes dataset you can actually learn from.
 
 ```bash
 git clone https://github.com/wolfbane/cents.git
@@ -31,18 +37,42 @@ cd cents && pip install .
 
 <CardGrid>
   <Card title="Thesis-driven" icon="pencil">
-    Every position starts as a written hypothesis with valuation, time horizon,
-    and dimension expectations. Research is evaluated _against the thesis_, not
-    in the abstract.
+    Every position starts as a written hypothesis with a valuation,
+    horizon, target, and stop. Research is evaluated _against the thesis_,
+    not in the abstract.
+  </Card>
+  <Card title="Regime-aware" icon="seti:notebook">
+    Each thesis declares the policy / macro variables it depends on
+    (`tariffs.china`, `fed_policy`, `ai_capex`…). An EventAgent ingests
+    Federal Register policy events; when an event hits one of your tags,
+    you get a **premise-invalidation alert** — before the market fully
+    prices it.
   </Card>
   <Card title="Multi-agent" icon="puzzle">
-    Seven specialised agents — fundamentals, technical, macro, sentiment, moat,
-    insider, plus an orchestrator — pull from FMP, Alpaca, FRED, and NewsAPI,
-    each contributing evidence and a conviction delta.
+    Eight specialised agents — fundamentals, technical, macro, sentiment,
+    moat, insider, event, plus an orchestrator — pull from FMP, Alpaca,
+    FRED, NewsAPI, and the Federal Register; each contributes evidence
+    and a conviction delta.
+  </Card>
+  <Card title="Autonomous factory" icon="setting">
+    `cents factory run` walks a universe of symbols, opens paper theses
+    where the orchestrator clears your entry threshold (with neutral
+    twins in paired mode), closes positions on target / stop / horizon /
+    premise-invalidation, and writes a structured run log with token
+    cost per run.
   </Card>
   <Card title="Accuracy-tracking" icon="approve-check">
-    Outcomes are recorded against the thesis that opened the position, so you
-    can answer "how often is my thinking right?" — not just "did it go up?"
+    Outcomes are recorded with a closure _reason_ —
+    correct / incorrect / unclear / **invalidated** / **preempted** —
+    plus the regime snapshot captured at thesis birth, so you can
+    stratify later instead of averaging across regimes that have nothing
+    to do with each other.
+  </Card>
+  <Card title="Cost-visible" icon="seti:db">
+    Every Anthropic call is recorded to an `llm_usage` table; `cents
+    usage summary` reports input/output/cache tokens and estimated cost
+    by agent, model, day, or operation. Nothing about the cost of
+    autonomy is hidden.
   </Card>
 </CardGrid>
 
@@ -52,6 +82,11 @@ cd cents && pip install .
   <Card title="Quickstart" icon="rocket">
     A 5-step walkthrough from zero to your first scan.
     [Read the quickstart →](/quickstart/)
+  </Card>
+  <Card title="How it thinks" icon="open-book">
+    The operating principles behind regime-awareness, premise tags, and
+    the factory's labeled-outcomes goal.
+    [Read the principles →](/principles/)
   </Card>
   <Card title="Star on GitHub" icon="github">
     Source, issues, and discussions live at
