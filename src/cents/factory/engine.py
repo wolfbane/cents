@@ -17,6 +17,7 @@ from cents.db import (
     UniverseRepository,
 )
 from cents.factory.config import FactoryConfig, load_factory_config
+from cents.factory.premise import capture_regime_snapshot, classify_premise_tags
 from cents.factory.sector_map import hedge_etf_for
 from cents.factory.universe_resolver import resolve_symbols
 from cents.models import (
@@ -415,6 +416,8 @@ class FactoryEngine:
                 delta=result.conviction_delta,
                 price=price,
                 hedge_symbol=hedge_symbol,
+                research_summary=result.summary,
+                evidence_texts=[getattr(e, "content", "") for e in (result.evidence or [])],
             )
             theses_opened += new_open["theses_opened"]
             positions_opened += new_open["positions_opened"]
@@ -506,6 +509,8 @@ class FactoryEngine:
         delta: float,
         price: float | None,
         hedge_symbol: str | None,
+        research_summary: str = "",
+        evidence_texts: list[str] | None = None,
     ) -> dict:
         """Persist a new factory thesis and its position(s).
 
@@ -534,6 +539,9 @@ class FactoryEngine:
             + (f" (paired-neutral vs {hedge_symbol})" if hedge_symbol else "")
         )
 
+        premise_tags = classify_premise_tags(symbol, research_summary, evidence_texts)
+        regime_snapshot = capture_regime_snapshot(now=now)
+
         thesis = Thesis(
             title=title,
             hypothesis=hypothesis,
@@ -546,6 +554,8 @@ class FactoryEngine:
             stop_price=stop_price,
             cohort=cohort,
             hedge_symbol=hedge_symbol,
+            premise_tags=premise_tags,
+            regime_snapshot=regime_snapshot,
         )
         self.thesis_repo.create(thesis)
 

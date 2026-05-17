@@ -85,6 +85,15 @@ def _stub_event_agent(monkeypatch):
     monkeypatch.setattr(cents.agents, "EventAgent", lambda: fake)
 
 
+@pytest.fixture(autouse=True)
+def _stub_premise_classifier(monkeypatch):
+    """Prevent the factory's per-thesis premise classifier from hitting Anthropic."""
+    monkeypatch.setattr(
+        "cents.factory.engine.classify_premise_tags",
+        lambda *args, **kwargs: [],
+    )
+
+
 @pytest.fixture
 def factory_db(tmp_path, monkeypatch):
     """Backing sqlite DB for engine tests with a default universe configured."""
