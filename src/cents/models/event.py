@@ -59,7 +59,6 @@ EVENT_TAGS: frozenset[str] = frozenset({
     # Legal / regulatory
     "scotus_ruling",
     "executive_order",
-    "agency_rulemaking",
     # Macro themes (for theses that depend on these)
     "ai_capex",
     "reshoring",
