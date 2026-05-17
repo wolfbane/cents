@@ -408,6 +408,22 @@ class FactoryEngine:
                 logger.debug("Skipping %s — no hedge ETF available for paired mode", symbol)
                 continue
 
+            # Classify premise tags now (one LLM call) so we can gate on
+            # per-tag concentration before paying any further setup cost.
+            premise_tags = classify_premise_tags(
+                symbol,
+                result.summary,
+                [getattr(e, "content", "") for e in (result.evidence or [])],
+            )
+            if cfg.max_per_premise_tag > 0 and self._exceeds_premise_concentration(
+                premise_tags, open_theses, cfg.max_per_premise_tag
+            ):
+                logger.debug(
+                    "Skipping %s — premise tags %s already at concentration cap",
+                    symbol, premise_tags,
+                )
+                continue
+
             position_cost = cfg.position_size_usd * (2 if paired else 1)
             current_notional = self._current_notional(price_provider)
 
@@ -462,8 +478,7 @@ class FactoryEngine:
                 delta=result.conviction_delta,
                 price=price,
                 hedge_symbol=hedge_symbol,
-                research_summary=result.summary,
-                evidence_texts=[getattr(e, "content", "") for e in (result.evidence or [])],
+                premise_tags=premise_tags,
             )
             theses_opened += new_open["theses_opened"]
             positions_opened += new_open["positions_opened"]
@@ -547,6 +562,21 @@ class FactoryEngine:
             freed += mark * pos.size
         return freed
 
+    def _exceeds_premise_concentration(
+        self,
+        candidate_tags: list[str],
+        open_theses: list[Thesis],
+        cap: int,
+    ) -> bool:
+        """True if any candidate tag is already at the per-tag cap across open theses."""
+        if not candidate_tags:
+            return False
+        counts: dict[str, int] = {}
+        for t in open_theses:
+            for tag in t.premise_tags:
+                counts[tag] = counts.get(tag, 0) + 1
+        return any(counts.get(tag, 0) >= cap for tag in candidate_tags)
+
     def _open_new_thesis(
         self,
         *,
@@ -555,8 +585,7 @@ class FactoryEngine:
         delta: float,
         price: float | None,
         hedge_symbol: str | None,
-        research_summary: str = "",
-        evidence_texts: list[str] | None = None,
+        premise_tags: list[str] | None = None,
     ) -> dict:
         """Persist a new factory thesis and its position(s), oriented by signal sign.
 
@@ -599,7 +628,6 @@ class FactoryEngine:
             + (f" (paired-neutral vs {hedge_symbol})" if hedge_symbol else "")
         )
 
-        premise_tags = classify_premise_tags(symbol, research_summary, evidence_texts)
         regime_snapshot = capture_regime_snapshot(now=now)
 
         thesis = Thesis(
@@ -614,7 +642,7 @@ class FactoryEngine:
             stop_price=stop_price,
             cohort=cohort,
             hedge_symbol=hedge_symbol,
-            premise_tags=premise_tags,
+            premise_tags=premise_tags or [],
             regime_snapshot=regime_snapshot,
         )
         self.thesis_repo.create(thesis)

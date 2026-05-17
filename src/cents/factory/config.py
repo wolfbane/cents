@@ -24,6 +24,7 @@ default_horizon_days = 30
 default_stop_pct = -5.0        # close-position trigger as % off entry (negative)
 default_target_pct = 10.0      # close-position trigger as % off entry (positive)
 max_new_per_run = 5            # rate-limit on new theses opened per run
+max_per_premise_tag = 2        # max open theses sharing any single premise tag (0 disables)
 """
 
 
@@ -41,6 +42,7 @@ class FactoryConfig:
     default_stop_pct: float = -5.0
     default_target_pct: float = 10.0
     max_new_per_run: int = 5
+    max_per_premise_tag: int = 2
 
     def __post_init__(self) -> None:
         if self.cohort_mode not in {"paired", "directional_only"}:
@@ -55,6 +57,8 @@ class FactoryConfig:
             raise ValueError("entry_threshold must be non-negative")
         if self.max_new_per_run < 0:
             raise ValueError("max_new_per_run must be non-negative")
+        if self.max_per_premise_tag < 0:
+            raise ValueError("max_per_premise_tag must be non-negative")
 
     @property
     def position_size_usd(self) -> float:
@@ -101,6 +105,7 @@ def load_factory_config(path: Path | None = None) -> FactoryConfig:
         "default_stop_pct": float(data.get("default_stop_pct", -5.0)),
         "default_target_pct": float(data.get("default_target_pct", 10.0)),
         "max_new_per_run": int(data.get("max_new_per_run", 5)),
+        "max_per_premise_tag": int(data.get("max_per_premise_tag", 2)),
     }
     return FactoryConfig(**fields)
 

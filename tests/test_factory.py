@@ -185,6 +185,76 @@ class TestEntryThreshold:
         assert thesis.symbol == "AAPL"
 
 
+class TestPremiseConcentration:
+    def test_caps_open_theses_per_premise_tag(self, factory_db, monkeypatch):
+        """When a tag has hit the cap, new candidates with that tag must be skipped."""
+        # Two existing factory theses, both tagged 'fed_policy'
+        trepo = ThesisRepository()
+        for sym in ("A", "B"):
+            trepo.create(Thesis(
+                title=f"factory:{sym}",
+                symbol=sym,
+                tags=[TAG_FACTORY],
+                premise_tags=["fed_policy"],
+            ))
+
+        _seed_universe(["C", "D"])
+        # Make the premise classifier return 'fed_policy' for C and an unrelated tag for D
+        def fake_classify(symbol, summary, evidence_texts):
+            return ["fed_policy"] if symbol == "C" else ["semis_policy"]
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags", fake_classify
+        )
+
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                max_per_premise_tag=2,
+                budget_usd=100000.0,
+                target_positions=20,
+            ),
+            orchestrator=_orchestrator({"C": 6.0, "D": 6.0}),
+            price_provider=_price_provider({"C": 100.0, "D": 100.0}),
+        )
+        run = engine.run()
+
+        # Only D opens — C would be the 3rd fed_policy thesis (cap=2)
+        opened = [t for t in ThesisRepository().list() if t.tags == [TAG_FACTORY] and t.symbol in {"C", "D"}]
+        assert {t.symbol for t in opened} == {"D"}
+        assert run.theses_opened == 1
+
+    def test_cap_zero_disables_check(self, factory_db, monkeypatch):
+        """max_per_premise_tag=0 means the check is off."""
+        trepo = ThesisRepository()
+        for sym in ("A", "B"):
+            trepo.create(Thesis(
+                title=f"factory:{sym}",
+                symbol=sym,
+                tags=[TAG_FACTORY],
+                premise_tags=["fed_policy"],
+            ))
+
+        _seed_universe(["C"])
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **kw: ["fed_policy"],
+        )
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                max_per_premise_tag=0,
+                budget_usd=100000.0,
+                target_positions=20,
+            ),
+            orchestrator=_orchestrator({"C": 6.0}),
+            price_provider=_price_provider({"C": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 1
+
+
 class TestDirectionAwareOpening:
     def test_bearish_signal_opens_short_directional(self, factory_db):
         _seed_universe(["JPM"])
