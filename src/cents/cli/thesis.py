@@ -9,6 +9,7 @@ from cents.agents import AGENTS
 from cents.db import ThesisRepository
 from cents.models import (
     Thesis,
+    ThesisCohort,
     ThesisStatus,
     Valuation,
     TimeHorizon,
@@ -45,6 +46,8 @@ def thesis(ctx):
 @click.option("--risks", "-r", default="", help="Comma-separated key risks")
 @click.option("--target-price", type=float, help="Target price to close thesis")
 @click.option("--stop-price", type=float, help="Stop price to close thesis")
+@click.option("--cohort", type=click.Choice(["directional", "neutral"]), default="directional", help="Cohort: directional (default) or neutral (paired hedge)")
+@click.option("--hedge-with", "hedge_with", help="Hedge symbol for neutral cohort theses")
 @click.option("--from-research", "research_symbol", help="Auto-populate from research on symbol")
 def thesis_create(
     title: str,
@@ -59,6 +62,8 @@ def thesis_create(
     risks: str,
     target_price: float | None,
     stop_price: float | None,
+    cohort: str,
+    hedge_with: str | None,
     research_symbol: str | None,
 ):
     """Create a new investment thesis.
@@ -128,6 +133,11 @@ def thesis_create(
     if stop_price is not None and stop_price <= 0:
         exit_with_error(f"Stop price must be positive, got {stop_price}")
 
+    cohort_enum = ThesisCohort(cohort)
+    if cohort_enum == ThesisCohort.NEUTRAL and not hedge_with:
+        raise click.UsageError("--hedge-with is required when --cohort neutral")
+    hedge_symbol_norm = validate_symbol(hedge_with) if hedge_with else None
+
     try:
         t = Thesis(
             title=title,
@@ -143,6 +153,8 @@ def thesis_create(
             key_risks=risk_list,
             target_price=target_price,
             stop_price=stop_price,
+            cohort=cohort_enum,
+            hedge_symbol=hedge_symbol_norm,
         )
     except ValueError as e:
         exit_with_error(str(e))
@@ -237,6 +249,11 @@ def thesis_show(thesis_id: str):
         click.echo(f"Risks:      {', '.join(t.key_risks)}")
     if t.tags:
         click.echo(f"Tags:       {', '.join(t.tags)}")
+    click.echo(f"Cohort:     {t.cohort.value}")
+    if t.hedge_symbol:
+        click.echo(f"Hedge:      {t.hedge_symbol}")
+    if t.paired_thesis_id:
+        click.echo(f"Paired:     {t.paired_thesis_id}")
     click.echo(f"Created:    {t.created_at.strftime('%Y-%m-%d %H:%M')}")
     if t.closed_at:
         click.echo(f"Closed:     {t.closed_at.strftime('%Y-%m-%d %H:%M')}")
@@ -310,6 +327,52 @@ def thesis_update(
 
     repo.update(t)
     click.echo(f"Updated thesis {t.id}")
+
+
+@thesis.command("twin")
+@click.argument("thesis_id")
+@click.option("--hedge-with", "hedge_with", required=True, help="Symbol to short against the parent's long leg")
+def thesis_twin(thesis_id: str, hedge_with: str):
+    """Create a policy-neutral paired twin of an existing directional thesis.
+
+    Example: cents thesis twin abc123 --hedge-with SPY
+    """
+    repo = ThesisRepository()
+    parent = repo.get(thesis_id)
+    if parent is None:
+        exit_with_error(f"Thesis {thesis_id} not found.")
+    if parent.cohort == ThesisCohort.NEUTRAL:
+        exit_with_error(f"Thesis {thesis_id} is already neutral; cannot twin.")
+    if parent.paired_thesis_id:
+        exit_with_error(f"Thesis {thesis_id} already has a paired twin ({parent.paired_thesis_id}).")
+    if not parent.symbol:
+        exit_with_error(f"Thesis {thesis_id} has no symbol; cannot twin.")
+
+    hedge_norm = validate_symbol(hedge_with)
+    twin_hypothesis = (
+        f"Neutral twin of {parent.title}: long {parent.symbol} / short {hedge_norm}, spread thesis"
+    )
+    try:
+        twin = Thesis(
+            title=f"[NEUTRAL] {parent.title}",
+            hypothesis=twin_hypothesis,
+            symbol=parent.symbol,
+            time_horizon=parent.time_horizon,
+            horizon_end=parent.horizon_end,
+            target_price=parent.target_price,
+            stop_price=parent.stop_price,
+            cohort=ThesisCohort.NEUTRAL,
+            hedge_symbol=hedge_norm,
+            paired_thesis_id=parent.id,
+        )
+    except ValueError as e:
+        exit_with_error(str(e))
+    repo.create(twin)
+
+    parent.paired_thesis_id = twin.id
+    repo.update(parent)
+
+    click.echo(f"Created neutral twin {twin.id} of {parent.id}: long {parent.symbol} / short {hedge_norm}")
 
 
 @thesis.command("close")

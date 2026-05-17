@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS theses (
     stop_price REAL,
     outcome TEXT,
     closed_at TEXT,
+    cohort TEXT DEFAULT 'directional',
+    hedge_symbol TEXT,
+    paired_thesis_id TEXT,
     premise_tags TEXT DEFAULT '[]',
     regime_snapshot TEXT DEFAULT '{}',
     created_at TEXT NOT NULL,
@@ -230,6 +233,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         # Add regime-aware thesis fields (added in v0.8)
         ("theses", "premise_tags", "ALTER TABLE theses ADD COLUMN premise_tags TEXT DEFAULT '[]'"),
         ("theses", "regime_snapshot", "ALTER TABLE theses ADD COLUMN regime_snapshot TEXT DEFAULT '{}'"),
+        # Add cohort fields to theses for policy-neutral pairing (added in v0.8)
+        ("theses", "cohort", "ALTER TABLE theses ADD COLUMN cohort TEXT DEFAULT 'directional'"),
+        ("theses", "hedge_symbol", "ALTER TABLE theses ADD COLUMN hedge_symbol TEXT"),
+        ("theses", "paired_thesis_id", "ALTER TABLE theses ADD COLUMN paired_thesis_id TEXT"),
     ]
 
     for table, column, sql in column_migrations:

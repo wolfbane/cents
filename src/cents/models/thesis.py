@@ -31,6 +31,11 @@ class ThesisOutcome(str, Enum):
     UNCLEAR = "unclear"
 
 
+class ThesisCohort(str, Enum):
+    DIRECTIONAL = "directional"
+    NEUTRAL = "neutral"
+
+
 @dataclass
 class Thesis:
     """An investment thesis - a testable hypothesis about an investment."""
@@ -53,6 +58,10 @@ class Thesis:
     stop_price: float | None = None
     outcome: ThesisOutcome | None = None
     closed_at: datetime | None = None
+    # Cohort pairing (policy-neutral control group)
+    cohort: ThesisCohort = ThesisCohort.DIRECTIONAL
+    hedge_symbol: str | None = None
+    paired_thesis_id: str | None = None
     # Regime / premise tracking
     premise_tags: list[str] = field(default_factory=list)
     regime_snapshot: dict = field(default_factory=dict)
@@ -69,6 +78,8 @@ class Thesis:
             raise ValueError(f"target_price must be positive, got {self.target_price}")
         if self.stop_price is not None and self.stop_price <= 0:
             raise ValueError(f"stop_price must be positive, got {self.stop_price}")
+        if self.cohort == ThesisCohort.NEUTRAL and not self.hedge_symbol:
+            raise ValueError("neutral cohort theses require a hedge_symbol")
 
     def update_conviction(self, delta: float) -> None:
         """Adjust conviction score, clamping to [0, 100]."""

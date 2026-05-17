@@ -5,7 +5,7 @@ import json
 import click
 
 from cents.db import PositionRepository, ThesisRepository
-from cents.models import Position, PositionSide, PositionStatus
+from cents.models import Position, PositionSide, PositionStatus, ThesisCohort
 
 from cents.serialization import serialize
 from ._shared import (
@@ -29,6 +29,8 @@ def position(ctx):
 @click.option("--thesis", "-t", "thesis_id", help="Link to thesis ID")
 @click.option("--short", is_flag=True, help="Short position (default is long)")
 @click.option("--notes", "-n", default="", help="Position notes")
+@click.option("--hedge-price", type=float, help="Short-leg entry price (required for neutral theses)")
+@click.option("--hedge-size", type=float, help="Short-leg size (defaults to dollar-matched)")
 def position_open(
     symbol: str,
     size: float,
@@ -36,20 +38,71 @@ def position_open(
     thesis_id: str | None,
     short: bool,
     notes: str,
+    hedge_price: float | None,
+    hedge_size: float | None,
 ):
     """Open a new paper position.
 
     Example: cents position open NVDA --size 10 --price 137
+
+    For neutral theses (paired-hedge), provide --hedge-price; both legs open at once.
     """
     symbol = validate_symbol(symbol)
 
-    # Validate inputs before creating position
     if size <= 0:
         exit_with_error(f"Size must be positive, got {size}")
     if price <= 0:
         exit_with_error(f"Price must be positive, got {price}")
 
-    repo = PositionRepository()
+    pos_repo = PositionRepository()
+    thesis = None
+    if thesis_id:
+        thesis = ThesisRepository().get(thesis_id)
+        if thesis is None:
+            exit_with_error(f"Thesis {thesis_id} not found.")
+
+    if thesis and thesis.cohort == ThesisCohort.NEUTRAL:
+        if short:
+            exit_with_error("Neutral theses open both legs; do not pass --short.")
+        if hedge_price is None:
+            exit_with_error("--hedge-price is required for neutral theses.")
+        if hedge_price <= 0:
+            exit_with_error(f"Hedge price must be positive, got {hedge_price}")
+        resolved_hedge_size = hedge_size if hedge_size is not None else (size * price) / hedge_price
+        if resolved_hedge_size <= 0:
+            exit_with_error(f"Hedge size must be positive, got {resolved_hedge_size}")
+        try:
+            long_leg = Position(
+                symbol=symbol,
+                size=size,
+                entry_price=price,
+                side=PositionSide.LONG,
+                thesis_id=thesis.id,
+                notes=notes,
+                paper=True,
+            )
+            short_leg = Position(
+                symbol=thesis.hedge_symbol,
+                size=resolved_hedge_size,
+                entry_price=hedge_price,
+                side=PositionSide.SHORT,
+                thesis_id=thesis.id,
+                notes=notes,
+                paper=True,
+            )
+        except ValueError as e:
+            exit_with_error(str(e))
+        pos_repo.create(long_leg)
+        pos_repo.create(short_leg)
+        click.echo(
+            f"Opened neutral pair: long {long_leg.id} ({size} {symbol} @ ${price:.2f}) / "
+            f"short {short_leg.id} ({resolved_hedge_size:.2f} {thesis.hedge_symbol} @ ${hedge_price:.2f})"
+        )
+        return
+
+    if hedge_price is not None or hedge_size is not None:
+        exit_with_error("--hedge-price/--hedge-size only apply to neutral theses.")
+
     side = PositionSide.SHORT if short else PositionSide.LONG
     try:
         p = Position(
@@ -63,7 +116,7 @@ def position_open(
         )
     except ValueError as e:
         exit_with_error(str(e))
-    repo.create(p)
+    pos_repo.create(p)
     click.echo(f"Opened {side.value} position {p.id}: {size} {symbol} @ ${price:.2f}")
 
 
