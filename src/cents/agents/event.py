@@ -260,20 +260,23 @@ class EventAgent(BaseAgent):
 
         vocab = sorted(EVENT_TAGS)
         prompt = (
-            "Tag this US federal regulatory event for investor relevance.\n\n"
+            "Identify which regime variables this US federal action relates to.\n\n"
             f"Title: {event.title}\n"
             f"Summary: {event.summary[:1000]}\n"
             f"Type: {event.event_type}\n\n"
-            "Choose 0-5 tags from this controlled vocabulary (return tag strings exactly):\n"
+            "Choose 0-5 tags from this controlled vocabulary — a tag belongs only if a\n"
+            "thesis depending on that regime variable would be materially affected by\n"
+            "this action. Skip tags that merely describe the form of the action.\n"
             f"{', '.join(vocab)}\n\n"
-            "Also estimate the event's directional polarity for US equity markets:\n"
+            "Also estimate the directional polarity for US equity markets:\n"
             "  - 'bullish' if it materially supports equities/growth\n"
             "  - 'bearish' if it materially threatens them\n"
             "  - 'neutral' if balanced or minor\n"
             "  - 'unclear' if you cannot tell\n\n"
             'Return ONLY a JSON object: {"tags": [...], "polarity": "...", '
             '"confidence": 0.0-1.0, "affected_sectors": [...]}\n'
-            "Sectors are free-form short strings (e.g. 'semis', 'energy', 'healthcare')."
+            "Sectors are free-form short strings (e.g. 'semis', 'energy', 'healthcare').\n"
+            "Tags must come from the vocabulary verbatim. Return fewer tags rather than stretching."
         )
 
         try:

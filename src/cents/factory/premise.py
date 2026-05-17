@@ -51,13 +51,13 @@ def classify_premise_tags(
     vocab = sorted(EVENT_TAGS)
     evidence_blob = "\n".join(f"- {e[:200]}" for e in (evidence_texts or [])[:5]) or "(no evidence)"
     prompt = (
-        f"Tag the policy/regime dependencies of this US-equities investment thesis.\n\n"
+        "Identify which regime variables this US-equities investment thesis depends on.\n\n"
         f"Symbol: {symbol}\n"
         f"Agent summary: {summary[:600]}\n"
         f"Evidence:\n{evidence_blob}\n\n"
-        f"Choose 0-{_MAX_PREMISE_TAGS} tags from this controlled vocabulary that represent "
-        "regime variables the thesis materially depends on (i.e., if the regime variable "
-        "shifts, the thesis premise may be invalidated):\n"
+        f"Choose 0-{_MAX_PREMISE_TAGS} tags from this controlled vocabulary — a tag belongs\n"
+        "only if a federal action affecting that regime variable would materially shift the\n"
+        "thesis's expected outcome (i.e., the premise could be invalidated):\n"
         f"{', '.join(vocab)}\n\n"
         'Return ONLY a JSON object: {"tags": [...]}\n'
         "Tags must come from the vocabulary verbatim. Return fewer tags rather than stretching."
