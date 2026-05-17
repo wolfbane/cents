@@ -208,7 +208,7 @@ class EventAgent(BaseAgent):
             "publication_date",
             "html_url",
             "type",
-            "presidential_document_type",
+            "subtype",
             "agencies",
         ):
             params.append(("fields[]", field))
@@ -234,7 +234,7 @@ class EventAgent(BaseAgent):
         except ValueError:
             return None
 
-        event_type = raw.get("presidential_document_type") or raw.get("type") or "document"
+        event_type = raw.get("subtype") or raw.get("type") or "document"
         title = raw.get("title") or "(untitled)"
         summary = raw.get("abstract") or ""
         url = raw.get("html_url") or ""
