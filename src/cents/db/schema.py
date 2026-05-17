@@ -180,6 +180,41 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 CREATE INDEX IF NOT EXISTS idx_llm_usage_called_at ON llm_usage(called_at);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent);
+
+CREATE TABLE IF NOT EXISTS universes (
+    name TEXT PRIMARY KEY,
+    description TEXT DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'static',
+    source_config TEXT NOT NULL DEFAULT '{}',
+    symbols TEXT NOT NULL DEFAULT '[]',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_universes_default ON universes(is_default);
+
+CREATE TABLE IF NOT EXISTS factory_runs (
+    id TEXT PRIMARY KEY,
+    universe_name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    theses_opened INTEGER NOT NULL DEFAULT 0,
+    theses_closed INTEGER NOT NULL DEFAULT 0,
+    positions_opened INTEGER NOT NULL DEFAULT 0,
+    positions_closed INTEGER NOT NULL DEFAULT 0,
+    preemptions INTEGER NOT NULL DEFAULT 0,
+    events_refreshed INTEGER NOT NULL DEFAULT 0,
+    llm_input_tokens INTEGER NOT NULL DEFAULT 0,
+    llm_output_tokens INTEGER NOT NULL DEFAULT 0,
+    llm_cost_usd REAL,
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_factory_runs_started ON factory_runs(started_at);
 """
 
 

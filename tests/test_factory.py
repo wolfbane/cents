@@ -1,0 +1,479 @@
+"""Tests for the factory engine + CLI."""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
+
+import pytest
+from click.testing import CliRunner
+
+from cents.db import (
+    AlertRepository,
+    FactoryRunRepository,
+    PositionRepository,
+    ThesisRepository,
+    UniverseRepository,
+)
+from cents.factory.config import FactoryConfig, load_factory_config, scaffold_factory_config
+from cents.factory.engine import (
+    FactoryEngine,
+    TAG_FACTORY,
+    TAG_PAIRED_LONG,
+    TAG_PAIRED_SHORT,
+)
+from cents.models import (
+    Alert,
+    AlertType,
+    Position,
+    PositionSide,
+    PositionStatus,
+    Thesis,
+    ThesisOutcome,
+    ThesisStatus,
+    Universe,
+    UniverseSource,
+)
+
+
+# ---- helpers ----------------------------------------------------------
+
+
+def _orchestrator(delta_for: dict[str, float] | None = None, default: float = 0.0):
+    """Build a mock orchestrator that returns a configured delta per symbol."""
+    m = MagicMock()
+    deltas = delta_for or {}
+
+    def research(symbol: str, thesis=None):
+        d = deltas.get(symbol, default)
+        result = MagicMock()
+        result.conviction_delta = d
+        result.evidence = []
+        result.summary = f"mock {symbol}: {d}"
+        result.dimension_scores = {}
+        return result
+
+    m.research.side_effect = research
+    return m
+
+
+def _price_provider(prices: dict[str, float] | float | None = None):
+    """Build a mock price provider. Pass a dict for per-symbol prices or a scalar."""
+    m = MagicMock()
+
+    def get_latest_price(symbol: str):
+        if isinstance(prices, dict):
+            return prices.get(symbol)
+        return prices
+
+    m.get_latest_price.side_effect = get_latest_price
+    return m
+
+
+@pytest.fixture
+def factory_db(tmp_path, monkeypatch):
+    """Backing sqlite DB for engine tests with a default universe configured."""
+    from cents.db.schema import SCHEMA
+
+    db_path = tmp_path / "factory.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA)
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("CENTS_DB_PATH", str(db_path))
+    return db_path
+
+
+def _seed_universe(symbols: list[str], name: str = "test") -> None:
+    repo = UniverseRepository()
+    repo.create(Universe(name=name, symbols=symbols, is_default=True))
+
+
+def _config(**kwargs) -> FactoryConfig:
+    defaults = dict(
+        universe="default",
+        budget_usd=10000.0,
+        target_positions=10,
+        entry_threshold=5.0,
+        preemption_margin=5.0,
+        cohort_mode="directional_only",
+        default_horizon_days=30,
+        default_stop_pct=-10.0,
+        default_target_pct=10.0,
+        max_new_per_run=10,
+    )
+    defaults.update(kwargs)
+    return FactoryConfig(**defaults)
+
+
+# ---- tests ------------------------------------------------------------
+
+
+class TestFactoryConfig:
+    def test_invalid_cohort_mode_rejected(self):
+        with pytest.raises(ValueError):
+            FactoryConfig(cohort_mode="bogus")
+
+    def test_position_size_derived(self):
+        cfg = FactoryConfig(budget_usd=10000.0, target_positions=10)
+        assert cfg.position_size_usd == 1000.0
+
+    def test_scaffold_writes_default_toml(self, tmp_path, monkeypatch):
+        cfg_path = tmp_path / "factory.toml"
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg_path))
+        scaffold_factory_config()
+        assert cfg_path.exists()
+        loaded = load_factory_config()
+        assert loaded.cohort_mode in {"paired", "directional_only"}
+
+    def test_scaffold_refuses_overwrite(self, tmp_path, monkeypatch):
+        cfg_path = tmp_path / "factory.toml"
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg_path))
+        scaffold_factory_config()
+        with pytest.raises(FileExistsError):
+            scaffold_factory_config()
+
+
+class TestEntryThreshold:
+    def test_no_thesis_when_below_threshold(self, factory_db):
+        _seed_universe(["AAPL"])
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 1.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 0
+        assert ThesisRepository().list() == []
+
+    def test_opens_when_at_or_above_threshold(self, factory_db):
+        _seed_universe(["AAPL"])
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 1
+        thesis = ThesisRepository().list()[0]
+        assert TAG_FACTORY in thesis.tags
+        assert thesis.symbol == "AAPL"
+
+
+class TestMaxNewPerRun:
+    def test_rate_limit_respected(self, factory_db):
+        _seed_universe(["A", "B", "C"])
+        engine = FactoryEngine(
+            config=_config(entry_threshold=1.0, max_new_per_run=2, target_positions=100),
+            orchestrator=_orchestrator(default=5.0),
+            price_provider=_price_provider(100.0),
+        )
+        run = engine.run()
+        assert run.theses_opened == 2
+
+
+class TestBudgetAndPreemption:
+    def test_opens_when_within_budget(self, factory_db):
+        _seed_universe(["A"])
+        engine = FactoryEngine(
+            config=_config(budget_usd=1000.0, target_positions=10, entry_threshold=1.0),
+            orchestrator=_orchestrator({"A": 5.0}),
+            price_provider=_price_provider({"A": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 1
+        assert run.positions_opened == 1
+
+    def test_preempts_when_margin_exceeded(self, factory_db):
+        _seed_universe(["B"])
+        # Pre-seed a low-conviction factory-managed open thesis at full notional
+        trepo = ThesisRepository()
+        prepo = PositionRepository()
+        existing = Thesis(title="factory:OLD", symbol="OLD", conviction=40.0, tags=[TAG_FACTORY])
+        trepo.create(existing)
+        prepo.create(Position(
+            symbol="OLD", side=PositionSide.LONG, entry_price=100.0, size=10.0,
+            thesis_id=existing.id,
+        ))
+
+        engine = FactoryEngine(
+            config=_config(
+                budget_usd=1000.0,
+                target_positions=10,
+                entry_threshold=1.0,
+                preemption_margin=5.0,
+            ),
+            orchestrator=_orchestrator({"B": 10.0}),  # new conviction 60
+            price_provider=_price_provider({"OLD": 100.0, "B": 100.0}),
+        )
+        run = engine.run()
+        assert run.preemptions == 1
+        assert run.theses_opened == 1
+        # Old thesis was closed as PREEMPTED
+        reloaded = trepo.get(existing.id)
+        assert reloaded.status == ThesisStatus.CLOSED
+        assert reloaded.outcome == ThesisOutcome.PREEMPTED
+        assert "preempted" in reloaded.hypothesis.lower()
+
+    def test_no_preemption_when_margin_not_met(self, factory_db):
+        _seed_universe(["B"])
+        trepo = ThesisRepository()
+        prepo = PositionRepository()
+        existing = Thesis(title="factory:OLD", symbol="OLD", conviction=58.0, tags=[TAG_FACTORY])
+        trepo.create(existing)
+        prepo.create(Position(
+            symbol="OLD", side=PositionSide.LONG, entry_price=100.0, size=10.0,
+            thesis_id=existing.id,
+        ))
+
+        engine = FactoryEngine(
+            config=_config(
+                budget_usd=1000.0,
+                target_positions=10,
+                entry_threshold=1.0,
+                preemption_margin=5.0,
+            ),
+            orchestrator=_orchestrator({"B": 5.0}),  # new conviction 55 (NOT > 58 + 5)
+            price_provider=_price_provider({"OLD": 100.0, "B": 100.0}),
+        )
+        run = engine.run()
+        assert run.preemptions == 0
+        assert run.theses_opened == 0
+        assert trepo.get(existing.id).status == ThesisStatus.OPEN
+
+
+class TestPairedMode:
+    def test_paired_open_creates_both_legs(self, factory_db):
+        _seed_universe(["NVDA"])
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLK"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired",
+                    entry_threshold=1.0,
+                    budget_usd=10000.0,
+                    target_positions=10,
+                ),
+                orchestrator=_orchestrator({"NVDA": 5.0}),
+                price_provider=_price_provider({"NVDA": 100.0, "XLK": 200.0}),
+            )
+            run = engine.run()
+
+        assert run.theses_opened == 2
+        assert run.positions_opened == 2
+        theses = ThesisRepository().list()
+        long_leg = next(t for t in theses if TAG_PAIRED_LONG in t.tags)
+        short_leg = next(t for t in theses if TAG_PAIRED_SHORT in t.tags)
+        assert long_leg.symbol == "NVDA"
+        assert short_leg.symbol == "XLK"
+
+    def test_paired_skipped_when_pair_wont_fit(self, factory_db):
+        _seed_universe(["NVDA"])
+        trepo = ThesisRepository()
+        prepo = PositionRepository()
+        # Saturate budget with a high-conviction position that can't be preempted
+        existing = Thesis(title="factory:OLD", symbol="OLD", conviction=95.0, tags=[TAG_FACTORY])
+        trepo.create(existing)
+        prepo.create(Position(
+            symbol="OLD", side=PositionSide.LONG, entry_price=100.0, size=10.0,
+            thesis_id=existing.id,
+        ))
+
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLK"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired",
+                    entry_threshold=1.0,
+                    budget_usd=1000.0,
+                    target_positions=10,
+                    preemption_margin=5.0,
+                ),
+                orchestrator=_orchestrator({"NVDA": 5.0}),  # 55 < 95+5
+                price_provider=_price_provider({"OLD": 100.0, "NVDA": 100.0, "XLK": 200.0}),
+            )
+            run = engine.run()
+        assert run.theses_opened == 0
+        # The existing thesis is untouched
+        assert trepo.get(existing.id).status == ThesisStatus.OPEN
+
+
+class TestCloseTriggers:
+    def _seed_open_thesis(self, **kwargs) -> Thesis:
+        trepo = ThesisRepository()
+        prepo = PositionRepository()
+        t = Thesis(
+            title="factory:T",
+            symbol=kwargs.get("symbol", "T"),
+            tags=[TAG_FACTORY],
+            target_price=kwargs.get("target_price"),
+            stop_price=kwargs.get("stop_price"),
+            horizon_end=kwargs.get("horizon_end"),
+        )
+        trepo.create(t)
+        prepo.create(Position(
+            symbol=t.symbol, side=PositionSide.LONG, entry_price=100.0, size=1.0,
+            thesis_id=t.id,
+        ))
+        return t
+
+    def test_target_hit_closes_as_correct(self, factory_db):
+        _seed_universe([])
+        t = self._seed_open_thesis(target_price=110.0)
+        engine = FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider({"T": 120.0}),
+        )
+        engine.run()
+        reloaded = ThesisRepository().get(t.id)
+        assert reloaded.outcome == ThesisOutcome.CORRECT
+        assert reloaded.status == ThesisStatus.CLOSED
+
+    def test_stop_hit_closes_as_incorrect(self, factory_db):
+        _seed_universe([])
+        t = self._seed_open_thesis(stop_price=90.0)
+        engine = FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider({"T": 85.0}),
+        )
+        engine.run()
+        reloaded = ThesisRepository().get(t.id)
+        assert reloaded.outcome == ThesisOutcome.INCORRECT
+
+    def test_horizon_expired_closes_as_unclear(self, factory_db):
+        _seed_universe([])
+        t = self._seed_open_thesis(
+            horizon_end=datetime.now() - timedelta(days=1)
+        )
+        engine = FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider({"T": 100.0}),
+        )
+        engine.run()
+        reloaded = ThesisRepository().get(t.id)
+        assert reloaded.outcome == ThesisOutcome.UNCLEAR
+
+    def test_invalidation_alert_closes_as_invalidated(self, factory_db):
+        _seed_universe([])
+        t = self._seed_open_thesis()
+        # Bump alert created_at into the same window as thesis.updated_at
+        AlertRepository().create(Alert(
+            symbol="T",
+            alert_type=AlertType.THESIS_INVALIDATED,
+            message="premise broken",
+            created_at=datetime.now(),
+        ))
+        # Ensure the thesis's updated_at is also recent
+        trepo = ThesisRepository()
+        reloaded = trepo.get(t.id)
+        reloaded.updated_at = datetime.now()
+        trepo.update(reloaded)
+
+        engine = FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider({"T": 100.0}),
+        )
+        engine.run()
+        assert ThesisRepository().get(t.id).outcome == ThesisOutcome.INVALIDATED
+
+
+class TestDryRun:
+    def test_dry_run_writes_run_record_only(self, factory_db):
+        _seed_universe(["A"])
+        engine = FactoryEngine(
+            config=_config(entry_threshold=1.0),
+            orchestrator=_orchestrator({"A": 5.0}),
+            price_provider=_price_provider({"A": 100.0}),
+        )
+        run = engine.run(dry_run=True)
+        # No theses were persisted
+        assert ThesisRepository().list() == []
+        # A run row was written with dry_run=1
+        runs = FactoryRunRepository().list()
+        assert len(runs) == 1
+        assert runs[0].dry_run is True
+        # The proposed action is captured in summary_json
+        proposals = runs[0].summary_json.get("proposals", [])
+        assert any(p["symbol"] == "A" for p in proposals)
+
+
+class TestSkipHeldSymbols:
+    def test_does_not_reopen_symbol_already_open(self, factory_db):
+        _seed_universe(["AAPL"])
+        trepo = ThesisRepository()
+        trepo.create(Thesis(title="factory:AAPL", symbol="AAPL", tags=[TAG_FACTORY]))
+        engine = FactoryEngine(
+            config=_config(entry_threshold=1.0),
+            orchestrator=_orchestrator({"AAPL": 5.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 0
+
+
+class TestFactoryCli:
+    def test_help_lists_subcommands(self, factory_db):
+        from cents.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["factory", "--help"])
+        assert "init" in result.output
+        assert "run" in result.output
+        assert "status" in result.output
+        assert "analyze" in result.output
+
+    def test_init_writes_config(self, tmp_path, factory_db, monkeypatch):
+        from cents.cli import cli
+
+        cfg_path = tmp_path / "factory.toml"
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg_path))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["factory", "init"])
+        assert result.exit_code == 0, result.output
+        assert cfg_path.exists()
+
+    def test_status_runs(self, factory_db, monkeypatch, tmp_path):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        runner = CliRunner()
+        # No runs yet; status should still succeed
+        result = runner.invoke(cli, ["factory", "status"])
+        assert result.exit_code == 0, result.output
+
+    def test_analyze_separates_cohorts_and_excludes_preempted(self, factory_db, monkeypatch, tmp_path):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        # Directional: 1 correct, 1 preempted
+        good = Thesis(title="factory:A", symbol="A", tags=[TAG_FACTORY])
+        trepo.create(good)
+        good.close(ThesisOutcome.CORRECT)
+        trepo.update(good)
+
+        preempted = Thesis(title="factory:B", symbol="B", tags=[TAG_FACTORY])
+        trepo.create(preempted)
+        preempted.close(ThesisOutcome.PREEMPTED)
+        trepo.update(preempted)
+
+        # Neutral cohort: 1 incorrect
+        paired = Thesis(title="factory:C", symbol="C", tags=[TAG_FACTORY, TAG_PAIRED_LONG])
+        trepo.create(paired)
+        paired.close(ThesisOutcome.INCORRECT)
+        trepo.update(paired)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["factory", "analyze", "--output", "json"])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        # win_rate ignores preempted: directional has 1 correct / 1 judged = 1.0
+        assert payload["directional"]["win_rate"] == 1.0
+        assert payload["directional"]["preempted"] == 1
+        # neutral has 1 incorrect / 1 judged = 0.0
+        assert payload["neutral"]["win_rate"] == 0.0

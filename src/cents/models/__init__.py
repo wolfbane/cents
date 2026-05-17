@@ -9,6 +9,8 @@ from cents.models.alert import Alert, AlertType
 from cents.models.backtest import Backtest, BacktestSignal
 from cents.models.event import Event, EventPolarity, EVENT_TAGS
 from cents.models.llm_usage import LLMUsage
+from cents.models.universe import Universe, UniverseSource
+from cents.models.factory_run import FactoryRun
 
 __all__ = [
     "Thesis",
@@ -34,4 +36,7 @@ __all__ = [
     "EventPolarity",
     "EVENT_TAGS",
     "LLMUsage",
+    "Universe",
+    "UniverseSource",
+    "FactoryRun",
 ]

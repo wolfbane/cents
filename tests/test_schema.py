@@ -62,7 +62,10 @@ class TestInitDb:
         )
         tables = {row[0] for row in cursor.fetchall()}
 
-        expected_tables = {"theses", "evidence", "positions", "outcomes", "watchlist", "alerts"}
+        expected_tables = {
+            "theses", "evidence", "positions", "outcomes", "watchlist", "alerts",
+            "universes", "factory_runs",
+        }
         assert expected_tables.issubset(tables)
         conn.close()
 
@@ -90,6 +93,8 @@ class TestInitDb:
             "idx_events_source",
             "idx_llm_usage_called_at",
             "idx_llm_usage_agent",
+            "idx_universes_default",
+            "idx_factory_runs_started",
         }
         assert expected_indexes == indexes
         conn.close()

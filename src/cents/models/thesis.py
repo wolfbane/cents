@@ -29,6 +29,8 @@ class ThesisOutcome(str, Enum):
     INCORRECT = "incorrect"
     PARTIAL = "partial"
     UNCLEAR = "unclear"
+    INVALIDATED = "invalidated"
+    PREEMPTED = "preempted"
 
 
 class ThesisCohort(str, Enum):

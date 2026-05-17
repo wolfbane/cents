@@ -18,8 +18,11 @@ from cents.models import (
     EventPolarity,
     Evidence,
     EvidenceType,
+    FactoryRun,
     LLMUsage,
     ThesisDimension,
+    Universe,
+    UniverseSource,
     Outcome,
     Position,
     PositionSide,
@@ -767,3 +770,103 @@ class LLMUsageRepository(BaseRepository):
             }
             for row in rows
         ]
+
+
+class UniverseRepository(BaseRepository):
+    """CRUD operations for universes."""
+
+    _META = ModelMeta(
+        table="universes",
+        model=Universe,
+        fields=[
+            ModelField("name"),
+            ModelField("description"),
+            ModelField("source", serialize=lambda v: v.value, deserialize=UniverseSource),
+            ModelField("source_config", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "source_config")),
+            ModelField("symbols", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "symbols")),
+            ModelField("is_default", serialize=lambda v: 1 if v else 0, deserialize=lambda raw: bool(raw)),
+            ModelField("id"),
+            ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
+            ModelField("updated_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+        ],
+        default_order="name ASC",
+    )
+
+    def create(self, universe: Universe) -> Universe:
+        return self._insert(self._META, universe)
+
+    def get(self, name: str) -> Universe | None:
+        return self._get_by_id(self._META, name.strip().lower(), key_column="name")
+
+    def list(self) -> list[Universe]:
+        return self._list(self._META)
+
+    def update(self, universe: Universe) -> Universe:
+        universe.updated_at = datetime.now()
+        return self._update(self._META, universe, key_attr="name")
+
+    def delete(self, name: str) -> bool:
+        return self._delete(self._META, "name = ?", (name.strip().lower(),)) > 0
+
+    def get_default(self) -> Universe | None:
+        rows = self._list(self._META, where="is_default = 1", limit=1)
+        return rows[0] if rows else None
+
+    def set_default(self, name: str) -> Universe | None:
+        target = self.get(name)
+        if target is None:
+            return None
+        self.conn.execute("UPDATE universes SET is_default = 0")
+        self.conn.execute(
+            "UPDATE universes SET is_default = 1, updated_at = ? WHERE name = ?",
+            (datetime.now().isoformat(), target.name),
+        )
+        self.conn.commit()
+        return self.get(target.name)
+
+
+class FactoryRunRepository(BaseRepository):
+    """CRUD operations for factory run logs."""
+
+    _META = ModelMeta(
+        table="factory_runs",
+        model=FactoryRun,
+        fields=[
+            ModelField("id"),
+            ModelField("universe_name"),
+            ModelField("started_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+            ModelField("completed_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw) if raw else None),
+            ModelField("theses_opened"),
+            ModelField("theses_closed"),
+            ModelField("positions_opened"),
+            ModelField("positions_closed"),
+            ModelField("preemptions"),
+            ModelField("events_refreshed"),
+            ModelField("llm_input_tokens"),
+            ModelField("llm_output_tokens"),
+            ModelField("llm_cost_usd"),
+            ModelField("dry_run", serialize=lambda v: 1 if v else 0, deserialize=lambda raw: bool(raw)),
+            ModelField("summary_json", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "summary_json")),
+            ModelField("error"),
+        ],
+        default_order="started_at DESC",
+    )
+
+    def create(self, run: FactoryRun) -> FactoryRun:
+        return self._insert(self._META, run)
+
+    def update(self, run: FactoryRun) -> FactoryRun:
+        return self._update(self._META, run)
+
+    def get(self, run_id: str) -> FactoryRun | None:
+        return self._get_by_id(self._META, run_id)
+
+    def list(self, limit: int | None = None) -> list[FactoryRun]:
+        return self._list(self._META, limit=limit)
+
+    def latest(self) -> FactoryRun | None:
+        rows = self._list(self._META, limit=1)
+        return rows[0] if rows else None
+
+    def delete(self, run_id: str) -> bool:
+        return self._delete(self._META, "id = ?", (run_id,)) > 0

@@ -32,6 +32,8 @@ from .backtest import backtest
 from .status import status
 from .usage import usage
 from .cohort import cohort
+from .universe import universe
+from .factory import factory
 
 # Re-export shared utilities for backwards compatibility with tests
 from ._shared import (
@@ -70,6 +72,8 @@ cli.add_command(backtest)
 cli.add_command(status)
 cli.add_command(usage)
 cli.add_command(cohort)
+cli.add_command(universe)
+cli.add_command(factory)
 
 
 def main():
