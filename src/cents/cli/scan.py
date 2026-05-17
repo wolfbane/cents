@@ -6,7 +6,7 @@ from datetime import datetime as dt
 
 import click
 
-from cents.agents import OrchestratorAgent
+from cents.agents import EventAgent, OrchestratorAgent
 from cents.db import WatchlistRepository, AlertRepository, ThesisRepository, EvidenceRepository
 from cents.models import Alert, AlertType, ThesisStatus
 from cents.notify import notify
@@ -62,6 +62,16 @@ def scan(threshold: float | None, webhook: str | None, output: str | None, quiet
             quiet_message="",
         )
         return
+
+    # Pull new events once per scan so premise-invalidation alerts surface
+    # alongside the usual conviction-change ones.
+    event_summary = EventAgent().refresh()
+    if verbose and event_summary["new"]:
+        click.echo(
+            f"Events: fetched {event_summary['fetched']}, "
+            f"new {event_summary['new']}, "
+            f"premise alerts {event_summary['alerts_fired']}\n"
+        )
 
     if verbose:
         click.echo(f"Scanning {len(items)} symbols...\n")

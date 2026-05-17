@@ -53,6 +53,9 @@ class Thesis:
     stop_price: float | None = None
     outcome: ThesisOutcome | None = None
     closed_at: datetime | None = None
+    # Regime / premise tracking
+    premise_tags: list[str] = field(default_factory=list)
+    regime_snapshot: dict = field(default_factory=dict)
     # Metadata
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)

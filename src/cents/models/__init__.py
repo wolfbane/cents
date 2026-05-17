@@ -7,6 +7,8 @@ from cents.models.outcome import Outcome, ThesisAccuracy
 from cents.models.watchlist import WatchlistItem
 from cents.models.alert import Alert, AlertType
 from cents.models.backtest import Backtest, BacktestSignal
+from cents.models.event import Event, EventPolarity, EVENT_TAGS
+from cents.models.llm_usage import LLMUsage
 
 __all__ = [
     "Thesis",
@@ -27,4 +29,8 @@ __all__ = [
     "AlertType",
     "Backtest",
     "BacktestSignal",
+    "Event",
+    "EventPolarity",
+    "EVENT_TAGS",
+    "LLMUsage",
 ]

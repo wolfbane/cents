@@ -7,8 +7,14 @@ from datetime import date
 from urllib.request import urlopen, Request
 from urllib.parse import quote
 
-from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
+from cents.agents.base import (
+    AgentResult,
+    BaseAgent,
+    RECOVERABLE_EXCEPTIONS,
+    extract_json_object,
+)
 from cents.config import get_settings
+from cents.llm_usage import record_llm_usage
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 
@@ -207,31 +213,14 @@ def _extract_score_from_llm_response(text: str) -> tuple[float, str] | None:
 
     Returns (score, reasoning) tuple or None if extraction fails.
     """
-    # Try standard JSON extraction first
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start >= 0 and end > start:
-        json_str = text[start:end]
-        try:
-            result = json.loads(json_str)
-            return float(result.get("score", 0)), result.get("reasoning", "")
-        except json.JSONDecodeError:
-            # Try fixing common JSON issues
-            # Remove trailing commas before }
-            fixed = re.sub(r',\s*}', '}', json_str)
-            # Remove trailing commas before ]
-            fixed = re.sub(r',\s*]', ']', fixed)
-            try:
-                result = json.loads(fixed)
-                return float(result.get("score", 0)), result.get("reasoning", "")
-            except json.JSONDecodeError:
-                pass
+    result = extract_json_object(text)
+    if result is not None:
+        return float(result.get("score", 0)), result.get("reasoning", "")
 
-    # Fallback: extract score with regex
+    # Fallback: regex-extract a bare score field when no JSON object is present.
     score_match = re.search(r'"?score"?\s*:\s*(-?[\d.]+)', text)
     if score_match:
         score = float(score_match.group(1))
-        # Try to get reasoning too
         reasoning_match = re.search(r'"?reasoning"?\s*:\s*"([^"]*)"', text)
         reasoning = reasoning_match.group(1) if reasoning_match else ""
         return score, reasoning
@@ -361,6 +350,7 @@ Return 3-5 relevant indices, or fewer if less are relevant."""
                 max_tokens=100,
                 messages=[{"role": "user", "content": prompt}],
             )
+            record_llm_usage(response, agent="sentiment", operation="filter_articles", context=symbol)
             text = response.content[0].text.strip()
 
             # Parse indices from response
@@ -422,6 +412,7 @@ Score meaning: -1 = very bearish for thesis, 0 = neutral, +1 = very bullish for 
                 max_tokens=150,
                 messages=[{"role": "user", "content": prompt}],
             )
+            record_llm_usage(response, agent="sentiment", operation="score_article", context=symbol)
             text = response.content[0].text.strip()
 
             # Parse score from response (handles malformed JSON)

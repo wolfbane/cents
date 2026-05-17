@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS theses (
     stop_price REAL,
     outcome TEXT,
     closed_at TEXT,
+    premise_tags TEXT DEFAULT '[]',
+    regime_snapshot TEXT DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -136,6 +138,45 @@ CREATE TABLE IF NOT EXISTS api_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_api_cache_lookup ON api_cache(provider, endpoint, cache_key);
+
+CREATE TABLE IF NOT EXISTS events (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT DEFAULT '',
+    url TEXT DEFAULT '',
+    occurred_at TEXT NOT NULL,
+    affected_symbols TEXT DEFAULT '[]',
+    affected_sectors TEXT DEFAULT '[]',
+    tags TEXT DEFAULT '[]',
+    polarity TEXT DEFAULT 'unclear',
+    confidence REAL DEFAULT 0.5,
+    raw_text TEXT DEFAULT '',
+    metadata TEXT DEFAULT '{}',
+    ingested_at TEXT NOT NULL,
+    UNIQUE(source, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_occurred ON events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);
+
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+    context TEXT,
+    called_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_usage_called_at ON llm_usage(called_at);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent);
 """
 
 
@@ -186,6 +227,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("evidence", "dimension", "ALTER TABLE evidence ADD COLUMN dimension TEXT"),
         # Add symbol to evidence for standalone research (added in v0.7)
         ("evidence", "symbol", "ALTER TABLE evidence ADD COLUMN symbol TEXT"),
+        # Add regime-aware thesis fields (added in v0.8)
+        ("theses", "premise_tags", "ALTER TABLE theses ADD COLUMN premise_tags TEXT DEFAULT '[]'"),
+        ("theses", "regime_snapshot", "ALTER TABLE theses ADD COLUMN regime_snapshot TEXT DEFAULT '{}'"),
     ]
 
     for table, column, sql in column_migrations:

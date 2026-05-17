@@ -25,10 +25,12 @@ from .watch import watch
 from .alert import alert
 from .broker import broker
 from .evidence import evidence
+from .event import event
 from .portfolio import portfolio
 from .recommend import recommend
 from .backtest import backtest
 from .status import status
+from .usage import usage
 
 # Re-export shared utilities for backwards compatibility with tests
 from ._shared import (
@@ -60,10 +62,12 @@ cli.add_command(watch)
 cli.add_command(alert)
 cli.add_command(broker)
 cli.add_command(evidence)
+cli.add_command(event)
 cli.add_command(portfolio)
 cli.add_command(recommend)
 cli.add_command(backtest)
 cli.add_command(status)
+cli.add_command(usage)
 
 
 def main():

@@ -14,8 +14,11 @@ from cents.models import (
     AlertType,
     Backtest,
     BacktestSignal,
+    Event,
+    EventPolarity,
     Evidence,
     EvidenceType,
+    LLMUsage,
     ThesisDimension,
     Outcome,
     Position,
@@ -176,6 +179,8 @@ class ThesisRepository(BaseRepository):
             ModelField("stop_price"),
             ModelField("outcome", serialize=lambda v: v.value if v else None, deserialize=lambda raw: ThesisOutcome(raw) if raw else None),
             ModelField("closed_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw) if raw else None),
+            ModelField("premise_tags", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "premise_tags")),
+            ModelField("regime_snapshot", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "regime_snapshot")),
             ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
             ModelField("updated_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
         ],
@@ -586,3 +591,175 @@ class BacktestRepository(BaseRepository):
     def add_signal(self, signal: BacktestSignal) -> BacktestSignal:
         """Add a signal to a backtest."""
         return self._insert(self._SIGNAL_META, signal)
+
+
+class EventRepository(BaseRepository):
+    """CRUD operations for events."""
+
+    _META = ModelMeta(
+        table="events",
+        model=Event,
+        fields=[
+            ModelField("id"),
+            ModelField("source"),
+            ModelField("source_id"),
+            ModelField("event_type"),
+            ModelField("title"),
+            ModelField("summary"),
+            ModelField("url"),
+            ModelField("occurred_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+            ModelField("affected_symbols", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "affected_symbols")),
+            ModelField("affected_sectors", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "affected_sectors")),
+            ModelField("tags", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "tags")),
+            ModelField("polarity", serialize=lambda v: v.value, deserialize=EventPolarity),
+            ModelField("confidence"),
+            ModelField("raw_text"),
+            ModelField("metadata", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "metadata")),
+            ModelField("ingested_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+        ],
+        default_order="occurred_at DESC",
+    )
+
+    def create(self, event: Event) -> Event | None:
+        """Insert a new event. Returns None if a duplicate (same source + source_id) exists."""
+        if self.exists(event.source, event.source_id):
+            return None
+        return self._insert(self._META, event)
+
+    def exists(self, source: str, source_id: str) -> bool:
+        """Check if an event from `source` with `source_id` is already stored."""
+        cursor = self.conn.execute(
+            "SELECT 1 FROM events WHERE source = ? AND source_id = ? LIMIT 1",
+            (source, source_id),
+        )
+        return cursor.fetchone() is not None
+
+    def get(self, event_id: str) -> Event | None:
+        """Get event by ID."""
+        return self._get_by_id(self._META, event_id)
+
+    def list_recent(
+        self,
+        since: datetime | None = None,
+        tags: list[str] | None = None,
+        limit: int = 100,
+    ) -> list[Event]:
+        """List events occurring since a given time, optionally filtered by tag.
+
+        Tag filter matches if ANY of the requested tags appears in the event's tags.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if since is not None:
+            clauses.append("occurred_at >= ?")
+            params.append(since.isoformat())
+        where = " AND ".join(clauses) if clauses else None
+        events = self._list(self._META, where=where, params=params, limit=limit)
+        if not tags:
+            return events
+        tag_set = set(tags)
+        return [e for e in events if tag_set & set(e.tags)]
+
+    def latest_occurred_at(self, source: str) -> datetime | None:
+        """Most recent occurred_at for a given source — used to bound incremental pulls."""
+        row = self.conn.execute(
+            "SELECT MAX(occurred_at) AS ts FROM events WHERE source = ?",
+            (source,),
+        ).fetchone()
+        if row is None or row["ts"] is None:
+            return None
+        return datetime.fromisoformat(row["ts"])
+
+    def delete(self, event_id: str) -> bool:
+        """Delete an event by ID."""
+        return self._delete(self._META, "id = ?", (event_id,)) > 0
+
+
+class LLMUsageRepository(BaseRepository):
+    """CRUD operations for LLM usage records."""
+
+    _META = ModelMeta(
+        table="llm_usage",
+        model=LLMUsage,
+        fields=[
+            ModelField("id"),
+            ModelField("model"),
+            ModelField("agent"),
+            ModelField("operation"),
+            ModelField("input_tokens"),
+            ModelField("output_tokens"),
+            ModelField("cache_read_input_tokens"),
+            ModelField("cache_creation_input_tokens"),
+            ModelField("context"),
+            ModelField("called_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+        ],
+        default_order="called_at DESC",
+    )
+
+    def create(self, usage: LLMUsage) -> LLMUsage:
+        """Insert a new usage record."""
+        return self._insert(self._META, usage)
+
+    def get(self, usage_id: str) -> LLMUsage | None:
+        """Get a usage record by ID."""
+        return self._get_by_id(self._META, usage_id)
+
+    def list_recent(
+        self,
+        since: datetime | None = None,
+        limit: int = 100,
+    ) -> list[LLMUsage]:
+        """List usage records since a given time, newest first."""
+        if since is not None:
+            return self._list(
+                self._META, where="called_at >= ?", params=(since.isoformat(),), limit=limit
+            )
+        return self._list(self._META, limit=limit)
+
+    def aggregate(
+        self,
+        dimension: str,
+        since: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Aggregate usage by a dimension. Returns list of dicts ordered by total calls DESC.
+
+        `dimension` must be one of: "agent", "model", "operation", "day".
+        """
+        if dimension not in ("agent", "model", "operation", "day"):
+            raise ValueError(f"Unsupported dimension: {dimension}")
+
+        # SQLite stores called_at as an ISO8601 string; substr(1,10) gives YYYY-MM-DD.
+        group_expr = "substr(called_at, 1, 10)" if dimension == "day" else dimension
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        if since is not None:
+            clauses.append("called_at >= ?")
+            params.append(since.isoformat())
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        query = (
+            f"SELECT {group_expr} AS bucket, "
+            "model AS model, "
+            "COUNT(*) AS calls, "
+            "SUM(input_tokens) AS input_tokens, "
+            "SUM(output_tokens) AS output_tokens, "
+            "SUM(cache_read_input_tokens) AS cache_read, "
+            "SUM(cache_creation_input_tokens) AS cache_write "
+            f"FROM llm_usage{where} "
+            f"GROUP BY {group_expr}, model "
+            "ORDER BY calls DESC"
+        )
+        rows = self.conn.execute(query, params).fetchall()
+        return [
+            {
+                "bucket": row["bucket"],
+                "model": row["model"],
+                "calls": int(row["calls"] or 0),
+                "input_tokens": int(row["input_tokens"] or 0),
+                "output_tokens": int(row["output_tokens"] or 0),
+                "cache_read": int(row["cache_read"] or 0),
+                "cache_write": int(row["cache_write"] or 0),
+            }
+            for row in rows
+        ]

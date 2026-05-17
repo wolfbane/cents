@@ -86,6 +86,10 @@ class TestInitDb:
             "idx_backtests_symbol",
             "idx_backtest_signals_backtest",
             "idx_api_cache_lookup",
+            "idx_events_occurred",
+            "idx_events_source",
+            "idx_llm_usage_called_at",
+            "idx_llm_usage_agent",
         }
         assert expected_indexes == indexes
         conn.close()

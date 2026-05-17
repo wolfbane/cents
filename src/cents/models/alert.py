@@ -13,6 +13,7 @@ class AlertType(str, Enum):
     NEW_EVIDENCE = "new_evidence"
     THESIS_INVALIDATED = "thesis_invalidated"
     THESIS_EXPIRY = "thesis_expiry"
+    PREMISE_INVALIDATION = "premise_invalidation"
 
 
 @dataclass

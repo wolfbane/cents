@@ -1,6 +1,7 @@
 """Base agent class for research agents."""
 
 import json
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
@@ -10,6 +11,28 @@ from urllib.error import URLError
 
 
 _T = TypeVar("_T")
+
+
+def extract_json_object(text: str) -> dict | None:
+    """Best-effort extraction of a JSON object from an LLM response.
+
+    Handles common malformations (trailing commas before `}` or `]`) that
+    LLMs occasionally emit. Returns None if no recoverable object is found.
+    """
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start < 0 or end <= start:
+        return None
+    candidate = text[start:end]
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        fixed = re.sub(r",\s*}", "}", candidate)
+        fixed = re.sub(r",\s*]", "]", fixed)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            return None
 
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 from cents.db import EvidenceRepository, ThesisRepository

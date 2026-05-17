@@ -7,6 +7,7 @@ from cents.agents.macro import MacroAgent
 from cents.agents.sentiment import SentimentAgent
 from cents.agents.moat import MoatAgent
 from cents.agents.insider import InsiderAgent
+from cents.agents.event import EventAgent
 from cents.agents.orchestrator import OrchestratorAgent
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "SentimentAgent",
     "MoatAgent",
     "InsiderAgent",
+    "EventAgent",
     "OrchestratorAgent",
 ]
 
@@ -30,5 +32,6 @@ AGENTS = {
     "sentiment": SentimentAgent,
     "moat": MoatAgent,
     "insider": InsiderAgent,
+    "event": EventAgent,
     "orchestrator": OrchestratorAgent,
 }
