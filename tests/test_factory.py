@@ -20,8 +20,6 @@ from cents.factory.config import FactoryConfig, load_factory_config, scaffold_fa
 from cents.factory.engine import (
     FactoryEngine,
     TAG_FACTORY,
-    TAG_PAIRED_LONG,
-    TAG_PAIRED_SHORT,
 )
 from cents.models import (
     Alert,
@@ -30,6 +28,7 @@ from cents.models import (
     PositionSide,
     PositionStatus,
     Thesis,
+    ThesisCohort,
     ThesisOutcome,
     ThesisStatus,
     Universe,
@@ -69,6 +68,21 @@ def _price_provider(prices: dict[str, float] | float | None = None):
 
     m.get_latest_price.side_effect = get_latest_price
     return m
+
+
+def _event_agent(new: int = 0):
+    """No-op EventAgent stand-in so tests don't touch the network."""
+    m = MagicMock()
+    m.refresh.return_value = {"fetched": 0, "new": new, "alerts_fired": 0}
+    return m
+
+
+@pytest.fixture(autouse=True)
+def _stub_event_agent(monkeypatch):
+    """Prevent EventAgent.refresh from hitting Federal Register during tests."""
+    import cents.agents
+    fake = _event_agent()
+    monkeypatch.setattr(cents.agents, "EventAgent", lambda: fake)
 
 
 @pytest.fixture
@@ -260,13 +274,16 @@ class TestPairedMode:
             )
             run = engine.run()
 
-        assert run.theses_opened == 2
+        assert run.theses_opened == 1
         assert run.positions_opened == 2
         theses = ThesisRepository().list()
-        long_leg = next(t for t in theses if TAG_PAIRED_LONG in t.tags)
-        short_leg = next(t for t in theses if TAG_PAIRED_SHORT in t.tags)
-        assert long_leg.symbol == "NVDA"
-        assert short_leg.symbol == "XLK"
+        neutral = next(t for t in theses if t.cohort == ThesisCohort.NEUTRAL)
+        assert neutral.symbol == "NVDA"
+        assert neutral.hedge_symbol == "XLK"
+        positions = PositionRepository().list()
+        legs = [p for p in positions if p.thesis_id == neutral.id]
+        assert {p.symbol for p in legs} == {"NVDA", "XLK"}
+        assert {p.side for p in legs} == {PositionSide.LONG, PositionSide.SHORT}
 
     def test_paired_skipped_when_pair_wont_fit(self, factory_db):
         _seed_universe(["NVDA"])
@@ -359,11 +376,11 @@ class TestCloseTriggers:
     def test_invalidation_alert_closes_as_invalidated(self, factory_db):
         _seed_universe([])
         t = self._seed_open_thesis()
-        # Bump alert created_at into the same window as thesis.updated_at
         AlertRepository().create(Alert(
             symbol="T",
-            alert_type=AlertType.THESIS_INVALIDATED,
+            alert_type=AlertType.PREMISE_INVALIDATION,
             message="premise broken",
+            data={"thesis_id": t.id},
             created_at=datetime.now(),
         ))
         # Ensure the thesis's updated_at is also recent
@@ -462,7 +479,13 @@ class TestFactoryCli:
         trepo.update(preempted)
 
         # Neutral cohort: 1 incorrect
-        paired = Thesis(title="factory:C", symbol="C", tags=[TAG_FACTORY, TAG_PAIRED_LONG])
+        paired = Thesis(
+            title="factory:C",
+            symbol="C",
+            tags=[TAG_FACTORY],
+            cohort=ThesisCohort.NEUTRAL,
+            hedge_symbol="SPY",
+        )
         trepo.create(paired)
         paired.close(ThesisOutcome.INCORRECT)
         trepo.update(paired)

@@ -17,8 +17,8 @@ from cents.factory.config import (
     load_factory_config,
     scaffold_factory_config,
 )
-from cents.factory.engine import FactoryEngine, TAG_FACTORY, TAG_PAIRED_LONG, TAG_PAIRED_SHORT
-from cents.models import PositionStatus, ThesisOutcome, ThesisStatus
+from cents.factory.engine import FactoryEngine, TAG_FACTORY
+from cents.models import PositionStatus, ThesisCohort, ThesisOutcome, ThesisStatus
 from cents.serialization import serialize
 
 from ._shared import (
@@ -95,7 +95,7 @@ def factory_status(output: str | None):
     factory_positions = [p for p in open_positions if p.thesis_id in factory_thesis_ids]
     notional = sum(p.entry_price * p.size for p in factory_positions)
 
-    paired = sum(1 for t in open_theses if TAG_PAIRED_LONG in t.tags or TAG_PAIRED_SHORT in t.tags)
+    paired = sum(1 for t in open_theses if t.cohort == ThesisCohort.NEUTRAL)
     directional = len(open_theses) - paired
 
     latest = run_repo.latest()
@@ -152,8 +152,8 @@ def factory_analyze(since_days: int, output: str | None):
     if cutoff:
         factory_theses = [t for t in factory_theses if t.created_at >= cutoff]
 
-    directional = [t for t in factory_theses if TAG_PAIRED_LONG not in t.tags and TAG_PAIRED_SHORT not in t.tags]
-    paired = [t for t in factory_theses if TAG_PAIRED_LONG in t.tags or TAG_PAIRED_SHORT in t.tags]
+    directional = [t for t in factory_theses if t.cohort == ThesisCohort.DIRECTIONAL]
+    paired = [t for t in factory_theses if t.cohort == ThesisCohort.NEUTRAL]
 
     payload = {
         "since_days": since_days,

@@ -11,6 +11,7 @@ from cents.config import get_settings
 from cents.db import (
     AlertRepository,
     FactoryRunRepository,
+    LLMUsageRepository,
     PositionRepository,
     ThesisRepository,
     UniverseRepository,
@@ -26,19 +27,18 @@ from cents.models import (
     PositionSide,
     PositionStatus,
     Thesis,
+    ThesisCohort,
     ThesisOutcome,
     ThesisStatus,
     TimeHorizon,
 )
+from cents.pricing import estimate_cost_usd
 
 logger = logging.getLogger(__name__)
 
 
-# Tag conventions used to mark factory-managed theses and link paired legs
+# Tag marking factory-managed theses so user-created theses aren't touched.
 TAG_FACTORY = "factory"
-TAG_PAIRED_LONG = "factory_paired_long"
-TAG_PAIRED_SHORT = "factory_paired_short"
-TAG_PAIR_PREFIX = "pair:"  # tag value pair:<other_thesis_id>
 
 
 class _OrchestratorLike(Protocol):
@@ -49,15 +49,8 @@ class _PriceProvider(Protocol):
     def get_latest_price(self, symbol: str) -> float | None: ...
 
 
-def _pair_partner_id(thesis: Thesis) -> str | None:
-    for tag in thesis.tags:
-        if tag.startswith(TAG_PAIR_PREFIX):
-            return tag[len(TAG_PAIR_PREFIX):] or None
-    return None
-
-
 def _is_paired(thesis: Thesis) -> bool:
-    return TAG_PAIRED_LONG in thesis.tags or TAG_PAIRED_SHORT in thesis.tags
+    return thesis.cohort == ThesisCohort.NEUTRAL
 
 
 def _horizon_from_days(days: int) -> TimeHorizon:
@@ -89,6 +82,7 @@ class FactoryEngine:
         *,
         orchestrator: _OrchestratorLike | None = None,
         price_provider: _PriceProvider | None = None,
+        event_agent=None,
         thesis_repo: ThesisRepository | None = None,
         position_repo: PositionRepository | None = None,
         alert_repo: AlertRepository | None = None,
@@ -99,6 +93,7 @@ class FactoryEngine:
         self.config = config or load_factory_config()
         self._explicit_orchestrator = orchestrator
         self._explicit_price_provider = price_provider
+        self._explicit_event_agent = event_agent
         self.thesis_repo = thesis_repo or ThesisRepository()
         self.position_repo = position_repo or PositionRepository()
         self.alert_repo = alert_repo or AlertRepository()
@@ -183,24 +178,55 @@ class FactoryEngine:
             run.error = str(exc)
 
         run.completed_at = self._clock()
+        self._accumulate_llm_cost(run)
         self.run_repo.create(run)
         return run
 
     # ---- phases -----------------------------------------------------------
 
-    def _refresh_events(self, dry_run: bool) -> int:
-        """Refresh event ingestion. Returns event-count refreshed; 0 if no EventAgent.
+    def _accumulate_llm_cost(self, run: FactoryRun) -> None:
+        """Diff llm_usage rows in [started_at, completed_at] into the run record."""
+        usage_repo = LLMUsageRepository()
+        rows = usage_repo.list_recent(since=run.started_at, limit=10000)
+        cost = 0.0
+        any_priced = False
+        for row in rows:
+            if run.completed_at is not None and row.called_at > run.completed_at:
+                continue
+            run.llm_input_tokens += row.input_tokens or 0
+            run.llm_output_tokens += row.output_tokens or 0
+            row_cost = estimate_cost_usd(
+                row.model,
+                row.input_tokens or 0,
+                row.output_tokens or 0,
+                cache_read=row.cache_read_input_tokens or 0,
+                cache_write=row.cache_creation_input_tokens or 0,
+            )
+            if row_cost is not None:
+                cost += row_cost
+                any_priced = True
+        run.llm_cost_usd = cost if any_priced else None
 
-        The codebase does not currently ship an EventAgent — this returns 0 today
-        but the hook stays so adding events later is a one-line wire-up.
-        """
-        return 0
+    def _refresh_events(self, dry_run: bool) -> int:
+        """Pull new policy/macro events and fire premise-invalidation alerts."""
+        if dry_run:
+            return 0
+        agent = self._explicit_event_agent
+        if agent is None:
+            from cents.agents import EventAgent
+            agent = EventAgent()
+        summary = agent.refresh()
+        return int(summary.get("new", 0))
 
     def _update_and_close_phase(
         self, dry_run: bool, proposals: list[_ProposedAction]
     ) -> dict:
-        """For every open thesis: re-run orchestrator, then check close triggers."""
-        cfg = self.config
+        """For every open thesis: re-run orchestrator, then check close triggers.
+
+        Neutral-cohort theses own both legs (long on `symbol`, short on
+        `hedge_symbol`) via two positions tied to the same thesis_id, so
+        closing the thesis closes both legs naturally.
+        """
         theses_closed = 0
         positions_closed = 0
 
@@ -214,51 +240,22 @@ class FactoryEngine:
         orchestrator = self._make_orchestrator()
         price_provider = self._make_price_provider()
 
-        # Group paired theses so closes happen atomically per pair
-        handled: set[str] = set()
-
         for thesis in open_theses:
-            if thesis.id in handled:
+            self._update_conviction(thesis, orchestrator, dry_run)
+            trigger = self._evaluate_close_triggers(thesis, price_provider)
+            if not trigger:
                 continue
 
-            partner_id = _pair_partner_id(thesis) if _is_paired(thesis) else None
-            partner = self.thesis_repo.get(partner_id) if partner_id else None
+            if dry_run:
+                proposals.append(_ProposedAction(
+                    kind="close", symbol=thesis.symbol or "", detail=trigger.value,
+                ))
+                continue
 
-            # Update conviction for both legs
-            self._update_conviction(thesis, orchestrator, dry_run)
-            if partner and partner.status == ThesisStatus.OPEN:
-                self._update_conviction(partner, orchestrator, dry_run)
-
-            # Determine trigger using long-leg symbol (or the thesis's own symbol if directional)
-            trigger = self._evaluate_close_triggers(thesis, price_provider)
-            if trigger and partner and partner.status == ThesisStatus.OPEN:
-                # Confirm partner price-level triggers haven't already fired; we
-                # still close as a pair so the parent's outcome covers both.
-                pass
-
-            if trigger:
-                outcome = trigger
-                if dry_run:
-                    proposals.append(_ProposedAction(
-                        kind="close", symbol=thesis.symbol or "", detail=outcome.value,
-                    ))
-                    handled.add(thesis.id)
-                    if partner:
-                        handled.add(partner.id)
-                    continue
-
-                positions_closed += self._close_thesis_positions(thesis, price_provider)
-                thesis.close(outcome)
-                self.thesis_repo.update(thesis)
-                theses_closed += 1
-                handled.add(thesis.id)
-
-                if partner and partner.status == ThesisStatus.OPEN:
-                    positions_closed += self._close_thesis_positions(partner, price_provider)
-                    partner.close(outcome)
-                    self.thesis_repo.update(partner)
-                    theses_closed += 1
-                    handled.add(partner.id)
+            positions_closed += self._close_thesis_positions(thesis, price_provider)
+            thesis.close(trigger)
+            self.thesis_repo.update(thesis)
+            theses_closed += 1
 
         return {"theses_closed": theses_closed, "positions_closed": positions_closed}
 
@@ -275,7 +272,8 @@ class FactoryEngine:
         self, thesis: Thesis, price_provider
     ) -> ThesisOutcome | None:
         """Return the first triggered outcome for a thesis, or None."""
-        # 1. Premise invalidation via THESIS_INVALIDATED alerts since last update
+        # 1. Premise invalidation: EventAgent fires PREMISE_INVALIDATION alerts
+        #    keyed by thesis_id when a policy event hits a thesis's premise_tags.
         if self._has_invalidation_alert(thesis):
             return ThesisOutcome.INVALIDATED
 
@@ -295,14 +293,11 @@ class FactoryEngine:
         return None
 
     def _has_invalidation_alert(self, thesis: Thesis) -> bool:
-        """Check for an unread THESIS_INVALIDATED alert on this thesis's symbol."""
-        if not thesis.symbol:
-            return False
-        # Query all alerts; the table is small in practice
+        """Check for a PREMISE_INVALIDATION alert targeting this thesis."""
         for alert in self.alert_repo.list_all(limit=200):
-            if alert.alert_type != AlertType.THESIS_INVALIDATED:
+            if alert.alert_type != AlertType.PREMISE_INVALIDATION:
                 continue
-            if alert.symbol != thesis.symbol:
+            if alert.data.get("thesis_id") != thesis.id:
                 continue
             if alert.created_at < thesis.updated_at - timedelta(days=1):
                 continue
@@ -399,8 +394,6 @@ class FactoryEngine:
                 continue
 
             if preemption_target is not None:
-                pair_id = _pair_partner_id(preemption_target) if _is_paired(preemption_target) else None
-                preempted_partner = self.thesis_repo.get(pair_id) if pair_id else None
                 preempted_positions_closed += self._close_thesis_positions(
                     preemption_target, price_provider
                 )
@@ -414,16 +407,6 @@ class FactoryEngine:
                 preempted_closed += 1
                 preemptions += 1
                 open_theses = [t for t in open_theses if t.id != preemption_target.id]
-
-                if preempted_partner and preempted_partner.status == ThesisStatus.OPEN:
-                    preempted_positions_closed += self._close_thesis_positions(
-                        preempted_partner, price_provider
-                    )
-                    preempted_partner.close(ThesisOutcome.PREEMPTED)
-                    self.thesis_repo.update(preempted_partner)
-                    preempted_closed += 1
-                    open_theses = [t for t in open_theses if t.id != preempted_partner.id]
-
                 held_symbols = self._held_symbols(open_theses)
 
             new_open = self._open_new_thesis(
@@ -454,6 +437,8 @@ class FactoryEngine:
         for t in theses:
             if t.symbol:
                 held.add(t.symbol)
+            if t.hedge_symbol:
+                held.add(t.hedge_symbol)
         return held
 
     def _current_notional(self, price_provider) -> float:
@@ -500,20 +485,17 @@ class FactoryEngine:
         return None
 
     def _freeable_notional(self, thesis: Thesis, price_provider) -> float:
+        """Sum mark-to-market notional across all positions tied to this thesis.
+
+        For NEUTRAL theses this naturally includes both long and short legs since
+        both are linked via thesis_id.
+        """
         freed = 0.0
         for pos in self.position_repo.list(status=PositionStatus.OPEN):
             if pos.thesis_id != thesis.id:
                 continue
             mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
             freed += mark * pos.size
-        # If paired, partner's notional also frees
-        partner_id = _pair_partner_id(thesis) if _is_paired(thesis) else None
-        if partner_id:
-            for pos in self.position_repo.list(status=PositionStatus.OPEN):
-                if pos.thesis_id != partner_id:
-                    continue
-                mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
-                freed += mark * pos.size
         return freed
 
     def _open_new_thesis(
@@ -525,7 +507,12 @@ class FactoryEngine:
         price: float | None,
         hedge_symbol: str | None,
     ) -> dict:
-        """Persist new thesis(es) and corresponding paper position(s)."""
+        """Persist a new factory thesis and its position(s).
+
+        Directional mode (hedge_symbol is None): one DIRECTIONAL thesis + one
+        long position. Paired mode: one NEUTRAL thesis carrying both legs as
+        two positions (long on `symbol`, short on `hedge_symbol`).
+        """
         cfg = self.config
         now = self._clock()
         horizon_end = now + timedelta(days=cfg.default_horizon_days)
@@ -538,72 +525,59 @@ class FactoryEngine:
             stop_price_candidate = price * (1 + cfg.default_stop_pct / 100.0)
             stop_price = stop_price_candidate if stop_price_candidate > 0 else None
 
-        long_tags = [TAG_FACTORY]
-        if hedge_symbol:
-            long_tags.append(TAG_PAIRED_LONG)
+        cohort = ThesisCohort.NEUTRAL if hedge_symbol else ThesisCohort.DIRECTIONAL
+        title = (
+            f"factory:{symbol}/hedge:{hedge_symbol}" if hedge_symbol else f"factory:{symbol}"
+        )
+        hypothesis = (
+            f"factory open — conviction {conviction:.1f}, delta {delta:+.1f}"
+            + (f" (paired-neutral vs {hedge_symbol})" if hedge_symbol else "")
+        )
 
-        long_thesis = Thesis(
-            title=f"factory:{symbol}",
-            hypothesis=f"factory open — conviction {conviction:.1f}, delta {delta:+.1f}",
+        thesis = Thesis(
+            title=title,
+            hypothesis=hypothesis,
             symbol=symbol,
             conviction=conviction,
-            tags=list(long_tags),
+            tags=[TAG_FACTORY],
             time_horizon=time_horizon,
             horizon_end=horizon_end,
             target_price=target_price,
             stop_price=stop_price,
+            cohort=cohort,
+            hedge_symbol=hedge_symbol,
         )
-        self.thesis_repo.create(long_thesis)
+        self.thesis_repo.create(thesis)
 
         positions_opened = 0
         if price is not None and price > 0:
             shares = cfg.position_size_usd / price
             if shares > 0:
-                pos = Position(
+                self.position_repo.create(Position(
                     symbol=symbol,
                     side=PositionSide.LONG,
                     entry_price=price,
                     size=shares,
-                    thesis_id=long_thesis.id,
+                    thesis_id=thesis.id,
                     paper=True,
                     notes="opened by factory",
-                )
-                self.position_repo.create(pos)
+                ))
                 positions_opened += 1
-
-        theses_opened = 1
 
         if hedge_symbol:
             hedge_price = self._make_price_provider().get_latest_price(hedge_symbol)
-            short_tags = [TAG_FACTORY, TAG_PAIRED_SHORT, f"{TAG_PAIR_PREFIX}{long_thesis.id}"]
-            short_thesis = Thesis(
-                title=f"factory:{symbol}/hedge:{hedge_symbol}",
-                hypothesis=f"factory neutral hedge for {symbol}",
-                symbol=hedge_symbol,
-                conviction=max(0.0, min(100.0, 50.0 - delta)),
-                tags=list(short_tags),
-                time_horizon=time_horizon,
-                horizon_end=horizon_end,
-            )
-            self.thesis_repo.create(short_thesis)
-            # Back-link the long leg to the short leg
-            long_thesis.tags.append(f"{TAG_PAIR_PREFIX}{short_thesis.id}")
-            self.thesis_repo.update(long_thesis)
-
             if hedge_price is not None and hedge_price > 0:
                 shares = cfg.position_size_usd / hedge_price
                 if shares > 0:
-                    pos = Position(
+                    self.position_repo.create(Position(
                         symbol=hedge_symbol,
                         side=PositionSide.SHORT,
                         entry_price=hedge_price,
                         size=shares,
-                        thesis_id=short_thesis.id,
+                        thesis_id=thesis.id,
                         paper=True,
-                        notes="opened by factory (hedge)",
-                    )
-                    self.position_repo.create(pos)
+                        notes="opened by factory (hedge leg)",
+                    ))
                     positions_opened += 1
-            theses_opened += 1
 
-        return {"theses_opened": theses_opened, "positions_opened": positions_opened}
+        return {"theses_opened": 1, "positions_opened": positions_opened}
