@@ -683,11 +683,32 @@ class TestOrchestratorAgent:
         agent = OrchestratorAgent()
         result = agent.research("TEST")
 
-        # All 4 agents bullish = 20 total, but clamped to MAX_CONVICTION_DELTA (10.0)
-        assert result.conviction_delta == 10.0
+        # All 4 agents bullish = 20 total — under the aggregate cap (30.0), preserved exactly.
+        assert result.conviction_delta == 20.0
         # Synthesis should note agreement
         synthesis = [e for e in result.evidence if e.agent == "orchestrator"]
         assert any("agreement" in e.content.lower() for e in synthesis)
+
+    @patch.object(FundamentalsAgent, "research")
+    @patch.object(TechnicalAgent, "research")
+    @patch.object(MacroAgent, "research")
+    @patch.object(SentimentAgent, "research")
+    def test_aggregate_clamp_is_higher_than_per_agent(
+        self, mock_sentiment, mock_macro, mock_technical, mock_fundamentals
+    ):
+        """Orchestrator aggregate caps at MAX_AGGREGATE_CONVICTION_DELTA (30), not per-agent (10)."""
+        from cents.agents.base import MAX_CONVICTION_DELTA, MAX_AGGREGATE_CONVICTION_DELTA
+        # Every agent saturated bearish at the per-agent cap
+        for m in (mock_sentiment, mock_macro, mock_technical, mock_fundamentals):
+            m.return_value = AgentResult(
+                evidence=[], conviction_delta=-MAX_CONVICTION_DELTA, summary="Bearish"
+            )
+        agent = OrchestratorAgent()
+        result = agent.research("TEST")
+        # 4 agents × -10 = -40, clamped at -MAX_AGGREGATE_CONVICTION_DELTA (-30).
+        assert result.conviction_delta == -MAX_AGGREGATE_CONVICTION_DELTA
+        # Not collapsed to the per-agent cap.
+        assert result.conviction_delta != -MAX_CONVICTION_DELTA
 
     @patch.object(FundamentalsAgent, "research")
     @patch.object(TechnicalAgent, "research")

@@ -37,8 +37,11 @@ def extract_json_object(text: str) -> dict | None:
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 from cents.db import EvidenceRepository, ThesisRepository
 
-# Maximum conviction delta any single agent can return (prevents wild swings)
+# Maximum conviction delta any single agent can return (prevents wild swings
+# from one over-confident source). Orchestrator aggregates can exceed this —
+# they use MAX_AGGREGATE_CONVICTION_DELTA via AgentResult(..., aggregate=True).
 MAX_CONVICTION_DELTA = 10.0
+MAX_AGGREGATE_CONVICTION_DELTA = 30.0
 
 # Standard exceptions that agents should catch and handle gracefully.
 # These are "recoverable" errors that shouldn't crash the CLI.
@@ -59,9 +62,9 @@ RECOVERABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 
-def clamp_conviction_delta(delta: float) -> float:
-    """Clamp conviction delta to prevent extreme swings from a single agent."""
-    return max(-MAX_CONVICTION_DELTA, min(MAX_CONVICTION_DELTA, delta))
+def clamp_conviction_delta(delta: float, max_val: float = MAX_CONVICTION_DELTA) -> float:
+    """Clamp conviction delta to prevent extreme swings."""
+    return max(-max_val, min(max_val, delta))
 
 
 @dataclass
@@ -73,10 +76,14 @@ class AgentResult:
     summary: str  # Human-readable summary
     dimension_scores: dict[str, float] = field(default_factory=dict)  # Per-dimension conviction deltas
     metadata: dict = field(default_factory=dict)  # Additional info (signal mode, etc.)
+    # True for orchestrator-style results aggregating multiple agents — the
+    # clamp is loosened so a strong-consensus signal isn't quantized to ±10.
+    aggregate: bool = False
 
     def __post_init__(self):
         """Clamp conviction delta to prevent extreme values."""
-        self.conviction_delta = clamp_conviction_delta(self.conviction_delta)
+        cap = MAX_AGGREGATE_CONVICTION_DELTA if self.aggregate else MAX_CONVICTION_DELTA
+        self.conviction_delta = clamp_conviction_delta(self.conviction_delta, cap)
 
 
 class BaseAgent(ABC):

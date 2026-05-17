@@ -137,6 +137,7 @@ class OrchestratorAgent(BaseAgent):
             conviction_delta=total_conviction_delta,
             summary=summary,
             dimension_scores=aggregated_dimensions,
+            aggregate=True,
         )
 
     def _synthesize(
