@@ -406,6 +406,75 @@ class TestCloseTriggers:
         engine.run()
         assert ThesisRepository().get(t.id).outcome == ThesisOutcome.INVALIDATED
 
+    def test_invalidated_symbol_not_reopened_in_same_run(self, factory_db):
+        """After close-as-invalidated, the same-run open phase must skip the symbol."""
+        _seed_universe(["T"])
+        t = self._seed_open_thesis()
+        AlertRepository().create(Alert(
+            symbol="T",
+            alert_type=AlertType.PREMISE_INVALIDATION,
+            message="premise broken",
+            data={"thesis_id": t.id},
+            created_at=datetime.now(),
+        ))
+        trepo = ThesisRepository()
+        reloaded = trepo.get(t.id)
+        reloaded.updated_at = datetime.now()
+        trepo.update(reloaded)
+
+        engine = FactoryEngine(
+            config=_config(entry_threshold=1.0),  # would otherwise open T trivially
+            orchestrator=_orchestrator({"T": 9.0}),
+            price_provider=_price_provider({"T": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_closed == 1
+        assert run.theses_opened == 0, (
+            "factory must not reopen a symbol invalidated earlier in the same run"
+        )
+        # T thesis is closed; no new open T thesis exists.
+        open_for_T = [
+            x for x in ThesisRepository().list(status=ThesisStatus.OPEN)
+            if x.symbol == "T"
+        ]
+        assert open_for_T == []
+
+    def test_invalidated_hedge_symbol_also_skipped(self, factory_db):
+        """When a paired thesis is invalidated, its hedge symbol is also off-limits this run."""
+        _seed_universe(["T", "XLK"])
+        # Pre-open a paired (neutral) factory thesis for symbol T hedged with XLK,
+        # then mark it invalidated via a PREMISE_INVALIDATION alert.
+        trepo = ThesisRepository()
+        from cents.models import ThesisCohort
+        t = Thesis(
+            title="factory:T/hedge:XLK",
+            symbol="T",
+            tags=[TAG_FACTORY],
+            cohort=ThesisCohort.NEUTRAL,
+            hedge_symbol="XLK",
+        )
+        trepo.create(t)
+        AlertRepository().create(Alert(
+            symbol="T",
+            alert_type=AlertType.PREMISE_INVALIDATION,
+            message="premise broken",
+            data={"thesis_id": t.id},
+            created_at=datetime.now(),
+        ))
+        reloaded = trepo.get(t.id)
+        reloaded.updated_at = datetime.now()
+        trepo.update(reloaded)
+
+        engine = FactoryEngine(
+            config=_config(entry_threshold=1.0, cohort_mode="directional_only"),
+            orchestrator=_orchestrator({"T": 9.0, "XLK": 9.0}),
+            price_provider=_price_provider({"T": 100.0, "XLK": 200.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 0, (
+            "neither the invalidated symbol nor its hedge may reopen in the same run"
+        )
+
 
 class TestDryRun:
     def test_dry_run_writes_run_record_only(self, factory_db):

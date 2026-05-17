@@ -160,7 +160,12 @@ class FactoryEngine:
             run.theses_closed += closed_results["theses_closed"]
             run.positions_closed += closed_results["positions_closed"]
 
-            open_results = self._open_phase(symbols, dry_run, proposals)
+            open_results = self._open_phase(
+                symbols,
+                dry_run,
+                proposals,
+                skip_symbols=closed_results["invalidated_symbols"],
+            )
             run.theses_opened += open_results["theses_opened"]
             run.positions_opened += open_results["positions_opened"]
             run.preemptions += open_results["preemptions"]
@@ -230,13 +235,17 @@ class FactoryEngine:
         """
         theses_closed = 0
         positions_closed = 0
+        # Symbols (and hedge symbols) invalidated this run — the open phase
+        # must skip them so the invalidating event can't reopen them in the
+        # same cycle before it has aged out.
+        invalidated_symbols: set[str] = set()
 
         open_theses = [
             t for t in self.thesis_repo.list(status=ThesisStatus.OPEN)
             if TAG_FACTORY in t.tags
         ]
         if not open_theses:
-            return {"theses_closed": 0, "positions_closed": 0}
+            return {"theses_closed": 0, "positions_closed": 0, "invalidated_symbols": invalidated_symbols}
 
         orchestrator = self._make_orchestrator()
         price_provider = self._make_price_provider()
@@ -251,14 +260,28 @@ class FactoryEngine:
                 proposals.append(_ProposedAction(
                     kind="close", symbol=thesis.symbol or "", detail=trigger.value,
                 ))
+                if trigger == ThesisOutcome.INVALIDATED:
+                    if thesis.symbol:
+                        invalidated_symbols.add(thesis.symbol)
+                    if thesis.hedge_symbol:
+                        invalidated_symbols.add(thesis.hedge_symbol)
                 continue
 
             positions_closed += self._close_thesis_positions(thesis, price_provider)
             thesis.close(trigger)
             self.thesis_repo.update(thesis)
             theses_closed += 1
+            if trigger == ThesisOutcome.INVALIDATED:
+                if thesis.symbol:
+                    invalidated_symbols.add(thesis.symbol)
+                if thesis.hedge_symbol:
+                    invalidated_symbols.add(thesis.hedge_symbol)
 
-        return {"theses_closed": theses_closed, "positions_closed": positions_closed}
+        return {
+            "theses_closed": theses_closed,
+            "positions_closed": positions_closed,
+            "invalidated_symbols": invalidated_symbols,
+        }
 
     def _update_conviction(self, thesis: Thesis, orchestrator, dry_run: bool) -> None:
         if not thesis.symbol:
@@ -324,6 +347,8 @@ class FactoryEngine:
         universe_symbols: list[str],
         dry_run: bool,
         proposals: list[_ProposedAction],
+        *,
+        skip_symbols: set[str] | None = None,
     ) -> dict:
         """Open new theses where the orchestrator signals strongly enough."""
         cfg = self.config
@@ -337,7 +362,8 @@ class FactoryEngine:
             t for t in self.thesis_repo.list(status=ThesisStatus.OPEN)
             if TAG_FACTORY in t.tags
         ]
-        held_symbols = self._held_symbols(open_theses)
+        skip_symbols = set(skip_symbols or set())
+        held_symbols = self._held_symbols(open_theses) | skip_symbols
         opened_this_run = 0
 
         orchestrator = self._make_orchestrator()
@@ -408,7 +434,7 @@ class FactoryEngine:
                 preempted_closed += 1
                 preemptions += 1
                 open_theses = [t for t in open_theses if t.id != preemption_target.id]
-                held_symbols = self._held_symbols(open_theses)
+                held_symbols = self._held_symbols(open_theses) | skip_symbols
 
             new_open = self._open_new_thesis(
                 symbol=symbol,
