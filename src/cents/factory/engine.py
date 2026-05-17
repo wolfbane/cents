@@ -301,20 +301,40 @@ class FactoryEngine:
         if self._has_invalidation_alert(thesis):
             return ThesisOutcome.INVALIDATED
 
-        # 2. Price targets — only for theses with a tracked symbol
+        # 2. Price targets — direction-aware on the primary (underlying) leg.
         if thesis.symbol:
             price = price_provider.get_latest_price(thesis.symbol)
             if price is not None:
-                if thesis.target_price is not None and price >= thesis.target_price:
-                    return ThesisOutcome.CORRECT
-                if thesis.stop_price is not None and price <= thesis.stop_price:
-                    return ThesisOutcome.INCORRECT
+                direction = self._primary_direction(thesis)
+                if direction == PositionSide.SHORT:
+                    # Short thesis wins when price drops, loses when it rises.
+                    if thesis.target_price is not None and price <= thesis.target_price:
+                        return ThesisOutcome.CORRECT
+                    if thesis.stop_price is not None and price >= thesis.stop_price:
+                        return ThesisOutcome.INCORRECT
+                else:
+                    if thesis.target_price is not None and price >= thesis.target_price:
+                        return ThesisOutcome.CORRECT
+                    if thesis.stop_price is not None and price <= thesis.stop_price:
+                        return ThesisOutcome.INCORRECT
 
         # 3. Horizon expiry
         if thesis.horizon_end is not None and self._clock() > thesis.horizon_end:
             return ThesisOutcome.UNCLEAR
 
         return None
+
+    def _primary_direction(self, thesis: Thesis) -> PositionSide:
+        """Return the position side that represents the thesis's directional bet.
+
+        The primary leg is the one whose symbol matches `thesis.symbol`; for a
+        neutral-cohort thesis the hedge leg sits opposite. Falls back to LONG
+        when no positions exist yet (e.g. dry-run lookup pre-creation).
+        """
+        for pos in self.position_repo.list(status=PositionStatus.OPEN):
+            if pos.thesis_id == thesis.id and pos.symbol == thesis.symbol:
+                return pos.side
+        return PositionSide.LONG
 
     def _has_invalidation_alert(self, thesis: Thesis) -> bool:
         """Check for a PREMISE_INVALIDATION alert targeting this thesis."""
@@ -538,30 +558,44 @@ class FactoryEngine:
         research_summary: str = "",
         evidence_texts: list[str] | None = None,
     ) -> dict:
-        """Persist a new factory thesis and its position(s).
+        """Persist a new factory thesis and its position(s), oriented by signal sign.
 
-        Directional mode (hedge_symbol is None): one DIRECTIONAL thesis + one
-        long position. Paired mode: one NEUTRAL thesis carrying both legs as
-        two positions (long on `symbol`, short on `hedge_symbol`).
+        Bullish signal (delta > 0):
+          - Directional: LONG underlying.
+          - Paired: LONG underlying + SHORT hedge ETF.
+          - target_price above entry, stop_price below.
+        Bearish signal (delta < 0):
+          - Directional: SHORT underlying.
+          - Paired: SHORT underlying + LONG hedge ETF.
+          - target_price below entry (price has to drop to win), stop_price above.
         """
         cfg = self.config
         now = self._clock()
         horizon_end = now + timedelta(days=cfg.default_horizon_days)
         time_horizon = _horizon_from_days(cfg.default_horizon_days)
 
+        is_short = delta < 0
+        primary_side = PositionSide.SHORT if is_short else PositionSide.LONG
+        hedge_side = PositionSide.LONG if is_short else PositionSide.SHORT
+        direction_label = "short" if is_short else "long"
+
         target_price = None
         stop_price = None
         if price is not None and price > 0:
-            target_price = price * (1 + cfg.default_target_pct / 100.0)
-            stop_price_candidate = price * (1 + cfg.default_stop_pct / 100.0)
-            stop_price = stop_price_candidate if stop_price_candidate > 0 else None
+            tgt_mult = (1 - cfg.default_target_pct / 100.0) if is_short else (1 + cfg.default_target_pct / 100.0)
+            stp_mult = (1 - cfg.default_stop_pct / 100.0) if is_short else (1 + cfg.default_stop_pct / 100.0)
+            target_candidate = price * tgt_mult
+            stop_candidate = price * stp_mult
+            target_price = target_candidate if target_candidate > 0 else None
+            stop_price = stop_candidate if stop_candidate > 0 else None
 
         cohort = ThesisCohort.NEUTRAL if hedge_symbol else ThesisCohort.DIRECTIONAL
         title = (
-            f"factory:{symbol}/hedge:{hedge_symbol}" if hedge_symbol else f"factory:{symbol}"
+            f"factory:{direction_label} {symbol}/hedge:{hedge_symbol}"
+            if hedge_symbol else f"factory:{direction_label} {symbol}"
         )
         hypothesis = (
-            f"factory open — conviction {conviction:.1f}, delta {delta:+.1f}"
+            f"factory open — {direction_label} conviction {conviction:.1f}, delta {delta:+.1f}"
             + (f" (paired-neutral vs {hedge_symbol})" if hedge_symbol else "")
         )
 
@@ -591,12 +625,12 @@ class FactoryEngine:
             if shares > 0:
                 self.position_repo.create(Position(
                     symbol=symbol,
-                    side=PositionSide.LONG,
+                    side=primary_side,
                     entry_price=price,
                     size=shares,
                     thesis_id=thesis.id,
                     paper=True,
-                    notes="opened by factory",
+                    notes=f"opened by factory ({direction_label})",
                 ))
                 positions_opened += 1
 
@@ -607,12 +641,12 @@ class FactoryEngine:
                 if shares > 0:
                     self.position_repo.create(Position(
                         symbol=hedge_symbol,
-                        side=PositionSide.SHORT,
+                        side=hedge_side,
                         entry_price=hedge_price,
                         size=shares,
                         thesis_id=thesis.id,
                         paper=True,
-                        notes="opened by factory (hedge leg)",
+                        notes=f"opened by factory ({direction_label} hedge leg)",
                     ))
                     positions_opened += 1
 

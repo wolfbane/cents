@@ -185,6 +185,94 @@ class TestEntryThreshold:
         assert thesis.symbol == "AAPL"
 
 
+class TestDirectionAwareOpening:
+    def test_bearish_signal_opens_short_directional(self, factory_db):
+        _seed_universe(["JPM"])
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                default_target_pct=10.0,
+                default_stop_pct=-5.0,
+            ),
+            orchestrator=_orchestrator({"JPM": -8.0}),
+            price_provider=_price_provider({"JPM": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 1
+        thesis = ThesisRepository().list()[0]
+        assert thesis.target_price == pytest.approx(90.0)   # 10% drop wins a short
+        assert thesis.stop_price == pytest.approx(105.0)    # 5% rise stops the short
+        positions = PositionRepository().list()
+        assert len(positions) == 1
+        assert positions[0].side == PositionSide.SHORT
+        assert positions[0].symbol == "JPM"
+
+    def test_bearish_signal_opens_flipped_paired_legs(self, factory_db):
+        _seed_universe(["JPM"])
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLF"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired",
+                    entry_threshold=1.0,
+                    budget_usd=100000.0,
+                ),
+                orchestrator=_orchestrator({"JPM": -8.0}),
+                price_provider=_price_provider({"JPM": 100.0, "XLF": 50.0}),
+            )
+            engine.run()
+        positions = PositionRepository().list()
+        by_symbol = {p.symbol: p for p in positions}
+        # Bearish paired: short underlying, long the hedge ETF.
+        assert by_symbol["JPM"].side == PositionSide.SHORT
+        assert by_symbol["XLF"].side == PositionSide.LONG
+
+    def test_short_thesis_closes_correct_on_price_drop(self, factory_db):
+        _seed_universe(["JPM"])
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                default_target_pct=10.0,
+                default_stop_pct=-5.0,
+            ),
+            orchestrator=_orchestrator({"JPM": -8.0}),
+            price_provider=_price_provider({"JPM": 100.0}),
+        )
+        engine.run()
+        thesis = ThesisRepository().list()[0]
+        # Now price drops 12% — short thesis should resolve CORRECT.
+        engine2 = FactoryEngine(
+            config=_config(entry_threshold=999.0),  # no new opens
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider({"JPM": 88.0}),
+        )
+        engine2.run()
+        assert ThesisRepository().get(thesis.id).outcome == ThesisOutcome.CORRECT
+
+    def test_short_thesis_closes_incorrect_on_price_rise(self, factory_db):
+        _seed_universe(["JPM"])
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                default_stop_pct=-5.0,
+            ),
+            orchestrator=_orchestrator({"JPM": -8.0}),
+            price_provider=_price_provider({"JPM": 100.0}),
+        )
+        engine.run()
+        thesis = ThesisRepository().list()[0]
+        # Price climbs past stop (5% rise) — short thesis resolves INCORRECT.
+        engine2 = FactoryEngine(
+            config=_config(entry_threshold=999.0),
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider({"JPM": 107.0}),
+        )
+        engine2.run()
+        assert ThesisRepository().get(thesis.id).outcome == ThesisOutcome.INCORRECT
+
+
 class TestMaxNewPerRun:
     def test_rate_limit_respected(self, factory_db):
         _seed_universe(["A", "B", "C"])
