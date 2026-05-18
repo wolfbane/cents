@@ -1,0 +1,42 @@
+# LLM eval harness CI gate.
+#
+# Set `if: true` and add the ANTHROPIC_API_KEY repository secret to enable.
+# Stubbed because cents is a personal-use research tool, not a public CI
+# consumer — running the live API on every PR would burn budget faster
+# than the project earns insight.
+#
+# When enabled this gates merges on:
+#   - F1 must not regress by more than `tolerance-pp` (5pp default) below
+#     the locked baseline in `src/cents/eval/baseline.json`
+#   - Brier must not worsen by more than the same margin
+#
+# Workflow developers: keep the gate permissive until the baseline is
+# locked (set via `cents eval run --persist-baseline` after a known-good
+# model snapshot). Until then this workflow exits 0 on any non-error run.
+
+name: LLM eval
+
+on:
+  pull_request:
+    paths:
+      - "src/cents/agents/sentiment.py"
+      - "src/cents/factory/premise.py"
+      - "src/cents/eval/**"
+  workflow_dispatch: {}
+
+jobs:
+  eval-gate:
+    if: false  # SET TO `true` ONCE BASELINE IS LOCKED AND SECRETS CONFIGURED.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Run eval with baseline gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          cents eval run --set all --gate --tolerance-pp 5 --output json

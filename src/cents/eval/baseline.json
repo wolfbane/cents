@@ -1,0 +1,7 @@
+{
+  "premise_f1": 0.0,
+  "sentiment_brier": 1.0,
+  "locked_at": null,
+  "model_snapshot": null,
+  "note": "Run `cents eval run --persist-baseline` to lock in current metrics. Until locked, the CI gate is permissive."
+}

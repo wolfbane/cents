@@ -26,6 +26,7 @@ For a two-arm forward test, six commands run on a cadence:
 | `cents shadow backfill --horizon 30` | Daily (or weekly) | Walks the `shadow_opens` table past the 30-day horizon and fills forward returns from price history. This is what gives you a baseline against rejected candidates. |
 | `cents universe ingest-delistings` | Weekly | Keeps the delistings table current. Forward runs are unbiased today; the longer this has been running, the less retrospective survivorship bias bleeds into back-dated universe reconstructions. See [Scope](/scope/#survivorship-bias-in-universes). |
 | `cents experiment status --output json` | Daily, appended to a log | Lets you watch `verdict_ready` and `opened_by_arm` evolve over the 90 days without having to remember to check. |
+| `cents eval run --persist-history` + `cents eval drift-check` | Daily, after factory runs | Persists today's eval metrics and fires a `MODEL_DRIFT` alert if F1 falls more than 5pp below the trailing-7 median. Cheap insurance against silent classifier regressions across model snapshot bumps. |
 
 Order matters in one place: `event refresh` must complete before
 `factory run`, otherwise the day's events haven't had a chance to
@@ -95,6 +96,13 @@ TZ=America/New_York
 
 # 18:00 ET — daily experiment-status snapshot for trend-watching.
 0 18  * * 1-5  ~/.cents/bin/cents-wrap status         experiment status --output json
+
+# 18:30 ET — eval harness against golden sets + drift check.
+# Persists today's metrics, then fires MODEL_DRIFT alert if F1 fell >5pp
+# below the trailing-7 median. Cheap insurance against silent classifier
+# regressions when the upstream Haiku snapshot bumps.
+30 18 * * 1-5  ~/.cents/bin/cents-wrap eval-run       eval run --persist-history
+35 18 * * 1-5  ~/.cents/bin/cents-wrap eval-drift     eval drift-check
 ```
 
 Logs land at `~/.cents/logs/YYYY-MM-DD/<command>.log`. The per-day

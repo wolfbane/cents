@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 from dataclasses import dataclass, field
 from importlib import resources
 from typing import Iterable, Iterator
@@ -127,6 +128,76 @@ def _confusion_matrix(rows: Iterable[tuple[str, str]]) -> dict[str, dict[str, in
     return matrix
 
 
+# --- Bootstrap confidence intervals ---
+
+
+def bootstrap_ci(
+    metric_per_fixture: list[float],
+    *,
+    samples: int = 1000,
+    ci: float = 0.9,
+    seed: int | None = 17,
+) -> tuple[float, float]:
+    """Bootstrap a (low, high) confidence interval for the mean of a per-fixture metric.
+
+    Resamples ``metric_per_fixture`` with replacement ``samples`` times,
+    computes the mean of each resample, and returns the (lower, upper)
+    percentiles of those means for the requested ``ci``.
+
+    Returns (0.0, 0.0) on empty input; (value, value) on a single observation.
+    ``seed`` is fixed by default so CI output is reproducible across runs of the
+    same fixture list. Pass ``seed=None`` to use a fresh draw each call.
+    """
+    n = len(metric_per_fixture)
+    if n == 0:
+        return (0.0, 0.0)
+    if n == 1:
+        v = float(metric_per_fixture[0])
+        return (v, v)
+    rng = random.Random(seed)
+    tail = (1.0 - ci) / 2.0
+    lower_pct = tail
+    upper_pct = 1.0 - tail
+    means: list[float] = []
+    for _ in range(samples):
+        # Single-pass resample by drawing n random indices.
+        s = 0.0
+        for _i in range(n):
+            s += metric_per_fixture[rng.randrange(n)]
+        means.append(s / n)
+    means.sort()
+    lo_idx = max(0, int(lower_pct * len(means)))
+    hi_idx = min(len(means) - 1, int(upper_pct * len(means)))
+    return (means[lo_idx], means[hi_idx])
+
+
+def _per_fixture_premise_f1(fixtures: list[dict]) -> list[float]:
+    """Per-fixture F1 (TP/(TP+0.5*(FP+FN))). Empty expected+predicted = 1.0."""
+    out: list[float] = []
+    for f in fixtures:
+        tp = f.get("tp", 0)
+        fp = f.get("fp", 0)
+        fn = f.get("fn", 0)
+        # Special case: empty expected AND empty predicted is a perfect match (1.0).
+        if tp == 0 and fp == 0 and fn == 0:
+            out.append(1.0)
+            continue
+        denom = tp + 0.5 * (fp + fn)
+        out.append(tp / denom if denom > 0 else 0.0)
+    return out
+
+
+def _per_fixture_sentiment_brier(fixtures: list[dict]) -> list[float]:
+    """Per-fixture squared error vs pseudo-target."""
+    out: list[float] = []
+    for f in fixtures:
+        expected = f.get("expected_band", "neutral")
+        target = _BAND_TARGET.get(expected, 0.0)
+        score = f.get("score", 0.0)
+        out.append((score - target) ** 2)
+    return out
+
+
 # --- Result dataclasses ---
 
 
@@ -144,6 +215,8 @@ class PremiseEvalResult:
     precision: float = 0.0
     recall: float = 0.0
     f1: float = 0.0
+    # Bootstrap 90% CI on per-fixture F1 mean; (0.0, 0.0) until computed.
+    f1_ci: tuple[float, float] = (0.0, 0.0)
     skipped_reason: str | None = None
 
     def to_dict(self) -> dict:
@@ -156,6 +229,7 @@ class PremiseEvalResult:
             "precision": self.precision,
             "recall": self.recall,
             "f1": self.f1,
+            "f1_ci": list(self.f1_ci),
             "fixtures": self.fixtures,
             "skipped_reason": self.skipped_reason,
         }
@@ -169,6 +243,9 @@ class SentimentEvalResult:
     accuracy: float = 0.0
     brier_score: float = 0.0  # Mean squared error vs pseudo-target.
     confusion_matrix: dict[str, dict[str, int]] = field(default_factory=dict)
+    # Bootstrap 90% CIs on accuracy + Brier (mean per-fixture squared error).
+    accuracy_ci: tuple[float, float] = (0.0, 0.0)
+    brier_ci: tuple[float, float] = (0.0, 0.0)
     skipped_reason: str | None = None
 
     def to_dict(self) -> dict:
@@ -177,7 +254,9 @@ class SentimentEvalResult:
             "fixtures_run": self.fixtures_run,
             "correct_band": self.correct_band,
             "accuracy": self.accuracy,
+            "accuracy_ci": list(self.accuracy_ci),
             "brier_score": self.brier_score,
+            "brier_ci": list(self.brier_ci),
             "confusion_matrix": self.confusion_matrix,
             "fixtures": self.fixtures,
             "skipped_reason": self.skipped_reason,
@@ -285,6 +364,9 @@ def run_premise_eval(
     result.f1 = (
         2 * result.precision * result.recall / denom_f if denom_f else 0.0
     )
+    # Bootstrap CI on per-fixture F1 — gives the operator a sense of whether
+    # an F1 delta between runs is signal or noise.
+    result.f1_ci = bootstrap_ci(_per_fixture_premise_f1(result.fixtures))
     return result
 
 
@@ -372,6 +454,14 @@ def run_sentiment_eval(
     result.brier_score = (
         sum(squared_errors) / len(squared_errors) if squared_errors else 0.0
     )
+    # Bootstrap CIs: per-fixture correctness (1/0) for accuracy, per-fixture
+    # squared error for Brier.
+    correct_per_fixture = [
+        1.0 if f["predicted_band"] == f["expected_band"] else 0.0
+        for f in result.fixtures
+    ]
+    result.accuracy_ci = bootstrap_ci(correct_per_fixture)
+    result.brier_ci = bootstrap_ci(squared_errors)
     return result
 
 

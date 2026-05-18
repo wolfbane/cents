@@ -22,10 +22,22 @@ For now, this is a manual `cents eval run` invoked by a human looking for
 drift across model upgrades.
 """
 
+from cents.eval.baseline import (
+    detect_drift,
+    evaluate_gate,
+    load_baseline,
+    load_history,
+    load_thresholds,
+    persist_baseline,
+    persist_history_row,
+    persist_thresholds,
+)
+from cents.eval.calibrate import CalibrationResult, calibrate_thresholds
 from cents.eval.runner import (
     EvalResult,
     PremiseEvalResult,
     SentimentEvalResult,
+    bootstrap_ci,
     load_premise_golden,
     load_sentiment_golden,
     run_premise_eval,
@@ -33,11 +45,22 @@ from cents.eval.runner import (
 )
 
 __all__ = [
+    "CalibrationResult",
     "EvalResult",
     "PremiseEvalResult",
     "SentimentEvalResult",
+    "bootstrap_ci",
+    "calibrate_thresholds",
+    "detect_drift",
+    "evaluate_gate",
+    "load_baseline",
+    "load_history",
     "load_premise_golden",
     "load_sentiment_golden",
+    "load_thresholds",
+    "persist_baseline",
+    "persist_history_row",
+    "persist_thresholds",
     "run_premise_eval",
     "run_sentiment_eval",
 ]

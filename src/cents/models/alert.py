@@ -15,6 +15,7 @@ class AlertType(str, Enum):
     THESIS_EXPIRY = "thesis_expiry"
     PREMISE_INVALIDATION = "premise_invalidation"
     PORTFOLIO_RISK = "portfolio_risk"
+    MODEL_DRIFT = "model_drift"
 
 
 @dataclass

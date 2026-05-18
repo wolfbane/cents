@@ -17,6 +17,11 @@ def _fmt_pct(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def _fmt_ci(ci: tuple[float, float]) -> str:
+    lo, hi = ci
+    return f"[{lo:.3f}, {hi:.3f}]"
+
+
 def _print_premise_text(result: PremiseEvalResult) -> None:
     click.echo("Premise classifier eval")
     if result.skipped_reason:
@@ -27,7 +32,7 @@ def _print_premise_text(result: PremiseEvalResult) -> None:
     click.echo(
         f"  Precision:  {_fmt_pct(result.precision)}    "
         f"Recall:  {_fmt_pct(result.recall)}    "
-        f"F1:  {_fmt_pct(result.f1)}"
+        f"F1:  {result.f1:.3f} {_fmt_ci(result.f1_ci)}"
     )
     misses = [f for f in result.fixtures if f["fp"] > 0 or f["fn"] > 0]
     if misses:
@@ -49,9 +54,12 @@ def _print_sentiment_text(result: SentimentEvalResult) -> None:
     click.echo(f"  Fixtures:    {result.fixtures_run}")
     click.echo(
         f"  Correct band: {result.correct_band}/{result.fixtures_run} "
-        f"({_fmt_pct(result.accuracy)})"
+        f"({result.accuracy:.3f} {_fmt_ci(result.accuracy_ci)})"
     )
-    click.echo(f"  Brier score: {result.brier_score:.4f}  (lower is better)")
+    click.echo(
+        f"  Brier score: {result.brier_score:.4f} {_fmt_ci(result.brier_ci)}  "
+        f"(lower is better)"
+    )
     click.echo("  Confusion matrix (rows=expected, cols=predicted):")
     bands = ("bullish", "neutral", "bearish")
     header = "             " + "  ".join(f"{b:>8}" for b in bands)
