@@ -409,6 +409,46 @@ class TestEventAgentResearch:
         assert result.evidence == []
         assert result.conviction_delta == 0
 
+    def test_research_no_thesis_drops_untagged_events(self, db_conn, monkeypatch):
+        """Symbol-only research must not surface regime-irrelevant events.
+
+        Regression for KVYO: `cents research KVYO` (no thesis) was returning
+        rows like "Marine Mammals; Polar Bears in Beaufort Sea" tagged [~]
+        because list_recent(tags=None) returns the latest items regardless of
+        regime relevance. The LLM tagger only assigns vocabulary tags when a
+        thesis depending on that regime variable would be materially affected,
+        so an untagged event = noise and should not appear in evidence.
+        """
+        monkeypatch.setattr(
+            "cents.agents.event.EventRepository", lambda: EventRepository(db_conn)
+        )
+        repo = EventRepository(db_conn)
+        repo.create(
+            _sample_event(
+                source_id="regime-relevant",
+                occurred_at=datetime.now() - timedelta(days=1),
+                tags=["tariffs.china"],
+                polarity=EventPolarity.BEARISH,
+                confidence=0.8,
+            )
+        )
+        repo.create(
+            _sample_event(
+                source_id="noise",
+                occurred_at=datetime.now() - timedelta(days=1),
+                title="Marine Mammals; Polar Bears in Beaufort Sea",
+                tags=[],
+                polarity=EventPolarity.NEUTRAL,
+                confidence=0.5,
+            )
+        )
+
+        agent = EventAgent(anthropic_client=None)
+        result = agent.research("KVYO", thesis=None)
+        # Only the tagged event surfaces; the untagged noise row is filtered.
+        assert len(result.evidence) == 1
+        assert "Marine Mammals" not in result.evidence[0].content
+
 
 # --- Thesis schema extension ---
 

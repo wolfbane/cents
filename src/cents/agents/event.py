@@ -108,6 +108,16 @@ class EventAgent(BaseAgent):
         tags = thesis.premise_tags if thesis and thesis.premise_tags else None
         events = event_repo.list_recent(since=since, tags=tags, limit=10)
 
+        # No-thesis research path has no premise tags to filter on at the
+        # repository level, so list_recent() returns the latest items
+        # regardless of regime relevance. The LLM tagger only assigns tags
+        # when a thesis depending on that regime variable would be materially
+        # affected, so an untagged event = no regime relevance = noise (e.g.
+        # "Marine Mammals; Polar Bears in Beaufort Sea"). Drop those here so
+        # they don't pad evidence with [~] rows that look like signal.
+        if thesis is None:
+            events = [e for e in events if e.tags]
+
         if not events:
             return AgentResult(
                 evidence=[],

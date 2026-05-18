@@ -265,23 +265,68 @@ class InsiderAgent(BaseAgent):
 
         return cluster
 
+    def _aggregate_by_insider(self, trades: list[dict]) -> list[dict]:
+        """Aggregate trades by ``reportingName`` so a 10b5-1 program (one
+        decision, many filings) becomes a single row rather than N rows that
+        each get individually weighted into conviction_delta.
+
+        Returns a list of synthetic trade dicts with summed ``value`` and a
+        ``trade_count`` field. Role/owner-type is taken from the first record
+        for the insider (they don't change role mid-window).
+        """
+        if not trades:
+            return []
+        agg: dict[str, dict] = {}
+        for t in trades:
+            name = t.get("reportingName") or ""
+            if not name:
+                continue
+            value = (t.get("securitiesTransacted", 0) or 0) * (t.get("price", 0) or 0)
+            shares = t.get("securitiesTransacted", 0) or 0
+            bucket = agg.setdefault(
+                name,
+                {
+                    "reportingName": name,
+                    "typeOfOwner": t.get("typeOfOwner", ""),
+                    "value": 0.0,
+                    "shares": 0.0,
+                    "trade_count": 0,
+                },
+            )
+            bucket["value"] += value
+            bucket["shares"] += shares
+            bucket["trade_count"] += 1
+        return list(agg.values())
+
     def _analyze_significant_trades(
         self, buys: list[dict], sells: list[dict], thesis_id: str
     ) -> tuple[list, float]:
-        """Analyze individual significant trades (large value or C-suite)."""
+        """Analyze individual significant trades (large value or C-suite).
+
+        Trades are aggregated per insider before scoring so that a single
+        person executing a multi-tranche 10b5-1 program produces one
+        Evidence row, not N. Otherwise one CEO's tax-planned sales can
+        spam the orchestrator's contradicting count with rows that all
+        trace to one decision.
+        """
         evidence = []
         delta = 0.0
 
-        # Analyze purchases by role
-        for buy in buys:
+        # Analyze purchases by role (aggregated per insider)
+        for buy in self._aggregate_by_insider(buys):
             role, weight = _parse_role(buy.get("typeOfOwner", ""))
-            value = (buy.get("securitiesTransacted", 0) or 0) * (buy.get("price", 0) or 0)
+            value = buy["value"]
+            count = buy["trade_count"]
+            count_note = f" across {count} filings" if count > 1 else ""
 
             if role == "c-suite" and value >= LARGE_PURCHASE_VALUE:
                 delta += 4.0 * weight
                 evidence.append(self.create_evidence(
                     thesis_id=thesis_id,
-                    content=f"Large C-suite purchase: {buy['reportingName']} bought ${value:,.0f}",
+                    content=(
+                        f"Large C-suite purchase: {buy['reportingName']} "
+                        f"bought ${value:,.0f}{count_note}"
+                    ),
                     source="fmp",
                     evidence_type=EvidenceType.SUPPORTING,
                     confidence=0.85,
@@ -290,7 +335,8 @@ class InsiderAgent(BaseAgent):
                         "insider": buy["reportingName"],
                         "role": buy.get("typeOfOwner"),
                         "value": value,
-                        "shares": buy.get("securitiesTransacted"),
+                        "shares": buy["shares"],
+                        "trade_count": count,
                     },
                 ))
             elif role == "c-suite":
@@ -298,7 +344,7 @@ class InsiderAgent(BaseAgent):
                 delta += 2.0 * weight
                 evidence.append(self.create_evidence(
                     thesis_id=thesis_id,
-                    content=f"C-suite purchase: {buy['reportingName']} ({role})",
+                    content=f"C-suite purchase: {buy['reportingName']} ({role}){count_note}",
                     source="fmp",
                     evidence_type=EvidenceType.SUPPORTING,
                     confidence=0.75,
@@ -307,6 +353,7 @@ class InsiderAgent(BaseAgent):
                         "insider": buy["reportingName"],
                         "role": buy.get("typeOfOwner"),
                         "value": value,
+                        "trade_count": count,
                     },
                 ))
             elif role in ("vp/director", "10% owner"):
@@ -314,7 +361,7 @@ class InsiderAgent(BaseAgent):
                 delta += 1.5 * weight
                 evidence.append(self.create_evidence(
                     thesis_id=thesis_id,
-                    content=f"Insider purchase: {buy['reportingName']} ({role})",
+                    content=f"Insider purchase: {buy['reportingName']} ({role}){count_note}",
                     source="fmp",
                     evidence_type=EvidenceType.SUPPORTING,
                     confidence=0.70,
@@ -323,13 +370,16 @@ class InsiderAgent(BaseAgent):
                         "insider": buy["reportingName"],
                         "role": buy.get("typeOfOwner"),
                         "value": value,
+                        "trade_count": count,
                     },
                 ))
 
         # Check for large non-routine sales (only flag very large ones)
-        for sell in sells:
+        for sell in self._aggregate_by_insider(sells):
             role, weight = _parse_role(sell.get("typeOfOwner", ""))
-            value = (sell.get("securitiesTransacted", 0) or 0) * (sell.get("price", 0) or 0)
+            value = sell["value"]
+            count = sell["trade_count"]
+            count_note = f" across {count} filings (likely 10b5-1)" if count > 1 else ""
 
             if role == "c-suite" and value >= LARGE_SALE_VALUE:
                 # Large C-suite sale is notable but not as negative
@@ -337,7 +387,10 @@ class InsiderAgent(BaseAgent):
                 delta -= 2.0 * weight
                 evidence.append(self.create_evidence(
                     thesis_id=thesis_id,
-                    content=f"Large C-suite sale: {sell['reportingName']} sold ${value:,.0f}",
+                    content=(
+                        f"Large C-suite sale: {sell['reportingName']} "
+                        f"sold ${value:,.0f}{count_note}"
+                    ),
                     source="fmp",
                     evidence_type=EvidenceType.CONTRADICTING,
                     confidence=0.70,
@@ -346,6 +399,7 @@ class InsiderAgent(BaseAgent):
                         "insider": sell["reportingName"],
                         "role": sell.get("typeOfOwner"),
                         "value": value,
+                        "trade_count": count,
                     },
                 ))
 

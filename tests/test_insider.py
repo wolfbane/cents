@@ -168,6 +168,38 @@ class TestInsiderAgent:
         assert result.conviction_delta < 0
         assert any("Large C-suite sale" in e.content for e in result.evidence)
 
+    def test_repeated_sales_by_same_insider_aggregated(self):
+        """One CEO running a 10b5-1 program produces one row, not N rows.
+
+        Regression for the KVYO case: 14 separate Bialecki sales over recent
+        months were each emitting their own Evidence row and each penalizing
+        conviction_delta, inflating the orchestrator's contradicting count.
+        These all trace to one underlying decision (the trading plan), so
+        they should aggregate to a single row.
+        """
+        # Eight separate $3M sales by the same CEO — a typical 10b5-1 cadence.
+        trades = [
+            self._make_trade(
+                tx_type="S-Sale",
+                name="Same CEO",
+                role="officer: Chief Executive Officer",
+                shares=30000,
+                price=100,  # $3M per filing
+                date=f"2025-01-{day:02d}",
+            )
+            for day in (2, 5, 8, 11, 14, 17, 20, 23)
+        ]
+        mock_provider = self._create_mock_provider(trades=trades)
+        agent = InsiderAgent(fundamentals_provider=mock_provider)
+        result = agent.research("TEST")
+
+        large_sale_rows = [e for e in result.evidence if "Large C-suite sale" in e.content]
+        assert len(large_sale_rows) == 1
+        # Aggregated value should reflect all 8 filings ($24M)
+        assert "$24,000,000" in large_sale_rows[0].content
+        # And the content should disclose that this is a multi-filing aggregate
+        assert "8 filings" in large_sale_rows[0].content
+
     def test_research_filters_zero_price_trades(self):
         """Filters out trades with $0 price (non-market)."""
         trades = [
