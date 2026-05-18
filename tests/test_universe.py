@@ -164,6 +164,25 @@ class TestScreenerResolver:
         with pytest.raises(ValueError, match="ghost"):
             resolver_mod.resolve_symbols(screener_uni)
 
+    def test_cycle_in_parent_chain_raises(self, db_conn, monkeypatch):
+        """A → B → A parent chain must be caught at resolution time."""
+        from cents.factory import universe_resolver as resolver_mod
+
+        urepo = UniverseRepository(db_conn)
+        urepo.create(Universe(
+            name="alpha",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "value", "over": "beta"},
+        ))
+        urepo.create(Universe(
+            name="beta",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "value", "over": "alpha"},
+        ))
+        monkeypatch.setattr(resolver_mod, "UniverseRepository", lambda: urepo)
+        with pytest.raises(ValueError, match="(?i)cycle"):
+            resolver_mod.resolve_symbols(urepo.get("alpha"))
+
     def test_full_universe_gated_by_env(self, db_conn, monkeypatch):
         from cents.exceptions import ConfigurationError
         from cents.factory import universe_resolver as resolver_mod

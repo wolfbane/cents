@@ -28,8 +28,12 @@ FMP_INDEX_ENDPOINTS: dict[str, str] = {
 FULL_UNIVERSE_ENV = "CENTS_SCREENER_ALLOW_FULL_UNIVERSE"
 
 
-def resolve_symbols(universe: Universe) -> list[str]:
-    """Resolve a universe to its current symbol list."""
+def resolve_symbols(universe: Universe, _visited: frozenset[str] = frozenset()) -> list[str]:
+    """Resolve a universe to its current symbol list.
+
+    ``_visited`` carries the names of universes currently being resolved on
+    this call stack so screener parent-chains can't form a cycle.
+    """
     if universe.source == UniverseSource.STATIC:
         return list(universe.symbols)
 
@@ -41,12 +45,12 @@ def resolve_symbols(universe: Universe) -> list[str]:
         return _resolve_fmp_index(universe)
 
     if universe.source == UniverseSource.SCREENER:
-        return _resolve_screener(universe)
+        return _resolve_screener(universe, _visited)
 
     raise ValueError(f"Unsupported universe source: {universe.source}")
 
 
-def _resolve_screener(universe: Universe) -> list[str]:
+def _resolve_screener(universe: Universe, visited: frozenset[str]) -> list[str]:
     from cents.screeners import get_screener
 
     cfg = universe.source_config
@@ -61,6 +65,10 @@ def _resolve_screener(universe: Universe) -> list[str]:
 
     over = cfg.get("over")
     if over:
+        if over in visited:
+            raise ValueError(
+                f"Universe resolution cycle: {' → '.join(visited)} → {over}"
+            )
         parent = UniverseRepository().get(over)
         if parent is None:
             raise ValueError(
@@ -70,7 +78,7 @@ def _resolve_screener(universe: Universe) -> list[str]:
             raise ValueError(
                 f"Screener universe '{universe.name}' cannot reference itself as parent"
             )
-        candidates = resolve_symbols(parent)
+        candidates = resolve_symbols(parent, visited | {universe.name})
         if not candidates:
             return []
     else:

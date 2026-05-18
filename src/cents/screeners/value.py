@@ -15,8 +15,7 @@ from __future__ import annotations
 from cents.screeners._base import (
     DEFAULT_LIMIT,
     _get_fundamentals_provider,
-    rank_and_limit,
-    safe_per_symbol,
+    run_per_symbol_screen,
 )
 
 
@@ -55,16 +54,11 @@ class ValueScreener:
         }
 
     def screen(self, candidate_symbols: list[str] | None = None) -> list[str]:
-        if candidate_symbols is not None and not candidate_symbols:
-            return []
-        candidates = candidate_symbols or self._default_candidates()
-
-        scored: list[tuple[str, float]] = []
-        for symbol in candidates:
-            score = safe_per_symbol(self._score_symbol, symbol)
-            if score is not None:
-                scored.append((symbol, score))
-        return rank_and_limit(scored, self.limit)
+        return run_per_symbol_screen(
+            self._score_symbol,
+            candidate_symbols if candidate_symbols is not None else self._default_candidates(),
+            self.limit,
+        )
 
     def _score_symbol(self, symbol: str) -> float | None:
         fundamentals = self.provider.get_fundamentals(symbol)
@@ -84,13 +78,7 @@ class ValueScreener:
 
     def _latest_revenue_growth_positive(self, symbol: str) -> bool:
         """Compare the two most recent quarterly revenue prints from FMP."""
-        data = self.provider._fetch_json(
-            "income-statement",
-            symbol=symbol,
-            period="quarter",
-            limit=2,
-            use_cache=True,
-        )
+        data = self.provider.get_income_statement(symbol, period="quarter", limit=2)
         if not data or len(data) < 2:
             return False
         latest = data[0].get("revenue")

@@ -74,12 +74,9 @@ class TestValueScreener:
         """Build a provider mock returning per-symbol fundamentals + revenue history."""
         p = MagicMock()
         p.get_fundamentals.side_effect = lambda sym: fundamentals_by_symbol[sym]
-
-        def fake_fetch_json(endpoint, **kwargs):
-            sym = kwargs.get("symbol")
-            return revenue_pairs.get(sym)
-
-        p._fetch_json.side_effect = fake_fetch_json
+        p.get_income_statement.side_effect = (
+            lambda sym, **kw: revenue_pairs.get(sym)
+        )
         return p
 
     def test_passes_when_all_filters_met(self):
@@ -126,11 +123,11 @@ class TestValueScreener:
 
         def get_fundamentals(sym):
             if sym == "FAIL":
-                raise RuntimeError("boom")
+                raise ConnectionError("boom")  # recoverable: realistic provider failure
             return _fundamentals(sym, pe_ratio=10.0, debt_to_equity=0.3, return_on_equity=0.20)
 
         provider.get_fundamentals.side_effect = get_fundamentals
-        provider._fetch_json.side_effect = lambda endpoint, **kwargs: [{"revenue": 120}, {"revenue": 100}]
+        provider.get_income_statement.side_effect = lambda sym, **kw: [{"revenue": 120}, {"revenue": 100}]
         s = ValueScreener(fundamentals_provider=provider)
         assert s.screen(["FAIL", "OK"]) == ["OK"]
 
@@ -139,7 +136,7 @@ class TestValueScreener:
         provider.get_fundamentals.side_effect = lambda sym: _fundamentals(
             sym, pe_ratio=10.0, debt_to_equity=0.3, return_on_equity=0.20
         )
-        provider._fetch_json.side_effect = lambda endpoint, **kwargs: [{"revenue": 120}, {"revenue": 100}]
+        provider.get_income_statement.side_effect = lambda sym, **kw: [{"revenue": 120}, {"revenue": 100}]
         syms = [f"S{i:03d}" for i in range(50)]
         result = ValueScreener(fundamentals_provider=provider, limit=10).screen(syms)
         assert len(result) == 10
@@ -151,7 +148,9 @@ class TestValueScreener:
 class TestGrowthScreener:
     def _provider(self, history_by_symbol):
         p = MagicMock()
-        p._fetch_json.side_effect = lambda endpoint, **kwargs: history_by_symbol.get(kwargs.get("symbol"))
+        p.get_income_statement.side_effect = (
+            lambda sym, **kw: history_by_symbol.get(sym)
+        )
         return p
 
     def test_passes_with_strong_cagr_and_margins(self):
@@ -230,7 +229,7 @@ class TestMomentumScreener:
 
         def get_history(sym, **kwargs):
             if sym == "FAIL":
-                raise RuntimeError("boom")
+                raise ConnectionError("boom")  # recoverable: realistic provider failure
             closes = [100 + i * 0.5 for i in range(80)]
             volumes = [1_000_000] * 75 + [5_000_000] * 5
             return _history(closes, volumes)

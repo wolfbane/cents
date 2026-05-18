@@ -151,11 +151,21 @@ def _print_universe(uni: Universe) -> None:
     if uni.source_config:
         click.echo(f"Config:      {uni.source_config}")
     click.echo(f"Default:     {'yes' if uni.is_default else 'no'}")
-    click.echo(f"Symbols:     {len(uni.symbols)}")
+    # Cached resolved-symbol count. Dynamic sources (watchlist, fmp_index,
+    # screener) resolve on demand at factory run time, so an empty cache here
+    # doesn't mean an empty universe — hint the user toward `refresh`.
     if uni.symbols:
+        click.echo(f"Symbols:     {len(uni.symbols)}")
         click.echo("  " + ", ".join(uni.symbols[:20]))
         if len(uni.symbols) > 20:
             click.echo(f"  ... and {len(uni.symbols) - 20} more")
+    elif uni.source == UniverseSource.STATIC:
+        click.echo("Symbols:     0")
+    else:
+        click.echo(
+            f"Symbols:     0 cached (resolves at run time; "
+            f"`cents universe refresh {uni.name}` to populate)"
+        )
 
 
 @universe.command("refresh")

@@ -44,7 +44,7 @@ class FMPFundamentalsProvider:
             )
 
     def _fetch_json(
-        self, endpoint: str, use_cache: bool = False, **params
+        self, endpoint: str, use_cache: bool = False, daily_key: bool = False, **params
     ) -> dict | list | None:
         """Fetch JSON from FMP API.
 
@@ -53,11 +53,16 @@ class FMPFundamentalsProvider:
 
         Args:
             endpoint: API endpoint
-            use_cache: If True, use caching for this request (for historical data)
+            use_cache: If True, use caching for this request
+            daily_key: If True (and use_cache), include today's date in the cache
+                key so daily-mutable endpoints (TTM ratios, profile) refresh once
+                per day instead of persisting indefinitely.
             **params: Query parameters
         """
         # Build cache params (exclude apikey)
         cache_params = {"endpoint": endpoint, **params}
+        if use_cache and daily_key:
+            cache_params["_day"] = date.today().isoformat()
 
         def do_fetch():
             params["apikey"] = self._api_key
@@ -117,16 +122,16 @@ class FMPFundamentalsProvider:
 
     def _get_current_fundamentals(self, symbol: str) -> FundamentalsData:
         """Get current/TTM fundamentals."""
-        # Fetch company profile for basic info and some metrics
-        profile_data = self._fetch_json("profile", symbol=symbol)
+        # Profile + TTM ratios/metrics are stable within a trading day —
+        # cache them with a daily key so screener / orchestrator repeats hit
+        # cache without serving stale data across days.
+        profile_data = self._fetch_json("profile", symbol=symbol, use_cache=True, daily_key=True)
         profile = profile_data[0] if profile_data and len(profile_data) > 0 else {}
 
-        # Fetch TTM ratios for detailed financial ratios
-        ratios_data = self._fetch_json("ratios-ttm", symbol=symbol)
+        ratios_data = self._fetch_json("ratios-ttm", symbol=symbol, use_cache=True, daily_key=True)
         ratios = ratios_data[0] if ratios_data and len(ratios_data) > 0 else {}
 
-        # Fetch key metrics for growth data
-        metrics_data = self._fetch_json("key-metrics-ttm", symbol=symbol)
+        metrics_data = self._fetch_json("key-metrics-ttm", symbol=symbol, use_cache=True, daily_key=True)
         metrics = metrics_data[0] if metrics_data and len(metrics_data) > 0 else {}
 
         # Fetch analyst estimates for forward metrics (if enabled)
@@ -316,6 +321,33 @@ class FMPFundamentalsProvider:
             })
 
         return result
+
+    def get_income_statement(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 4,
+        as_of: date | None = None,
+    ) -> list[dict]:
+        """Fetch historical income-statement records (annual or quarterly).
+
+        Args:
+            symbol: Ticker symbol
+            period: 'annual' or 'quarter'
+            limit: Maximum number of periods (most recent first)
+            as_of: Only include periods up to this date (for backtesting)
+
+        Returns:
+            List of income-statement dicts, newest first.
+        """
+        data = self._fetch_json(
+            "income-statement", symbol=symbol, period=period, limit=limit, use_cache=True
+        )
+        records = data if data else []
+        if as_of:
+            as_of_str = as_of.isoformat()
+            records = [r for r in records if r.get("date", "") <= as_of_str]
+        return records
 
     def get_insider_trades(
         self, symbol: str, limit: int = 100, as_of: date | None = None

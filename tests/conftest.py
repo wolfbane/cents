@@ -18,6 +18,13 @@ def reset_db_connection():
     close_connection()
 
 
+@pytest.fixture(autouse=True)
+def isolate_api_cache(tmp_path, monkeypatch):
+    """Point every test at a throwaway DB so cached external responses
+    (FMP/Alpaca/etc.) from prior runs can't leak across tests."""
+    monkeypatch.setenv("CENTS_DB_PATH", str(tmp_path / "test.db"))
+
+
 @pytest.fixture
 def db_conn():
     """In-memory SQLite connection for testing."""

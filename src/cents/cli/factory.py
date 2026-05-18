@@ -138,8 +138,23 @@ def _print_status(payload: dict) -> None:
     click.echo(f"Recent runs:   {len(payload['recent_runs'])}")
 
 
-VALID_ANALYZE_AXES = ("cohort", "discovery", "regime")
+from enum import Enum
+
+
+class AnalyzeAxis(str, Enum):
+    COHORT = "cohort"
+    DISCOVERY = "discovery"
+    REGIME = "regime"
+
+
 LOW_N_THRESHOLD = 5
+
+# Per-axis bucketing — extending the analyze surface = add a case here.
+_AXIS_BUCKET = {
+    AnalyzeAxis.COHORT: lambda t: t.cohort.value,
+    AnalyzeAxis.DISCOVERY: lambda t: t.discovery_source or "unspecified",
+    AnalyzeAxis.REGIME: lambda t: _regime_bucket(t.regime_snapshot),
+}
 
 
 @factory.command("analyze")
@@ -157,14 +172,14 @@ LOW_N_THRESHOLD = 5
 def factory_analyze(since_days: int, by_axes: str, output: str | None):
     """Outcomes stratified by one or more discovery / cohort / regime axes."""
     output = resolve_output_format(output)
-    axes = [a.strip() for a in by_axes.split(",") if a.strip()]
-    if not axes:
+    axis_strs = [a.strip() for a in by_axes.split(",") if a.strip()]
+    if not axis_strs:
         exit_with_error("--by requires at least one axis")
-    for axis in axes:
-        if axis not in VALID_ANALYZE_AXES:
-            exit_with_error(
-                f"Unknown axis '{axis}'. Valid: {', '.join(VALID_ANALYZE_AXES)}"
-            )
+    try:
+        axes = [AnalyzeAxis(a) for a in axis_strs]
+    except ValueError as exc:
+        valid = ", ".join(a.value for a in AnalyzeAxis)
+        exit_with_error(f"{exc}. Valid axes: {valid}")
 
     thesis_repo = ThesisRepository()
     cutoff = datetime.now() - timedelta(days=since_days)
@@ -173,50 +188,43 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
     factory_theses = [t for t in thesis_repo.list() if TAG_FACTORY in t.tags]
     factory_theses = [t for t in factory_theses if t.created_at >= cutoff]
 
-    # Pre-load all positions once to avoid quadratic queries.
-    all_positions = position_repo.list()
+    # Pre-build positions index once (was: O(G × P) scan per cell).
+    positions_by_thesis: dict[str, list] = {}
+    for pos in position_repo.list():
+        if pos.thesis_id:
+            positions_by_thesis.setdefault(pos.thesis_id, []).append(pos)
 
-    if axes == ["cohort"]:
+    if axes == [AnalyzeAxis.COHORT]:
         directional = [t for t in factory_theses if t.cohort == ThesisCohort.DIRECTIONAL]
         paired = [t for t in factory_theses if t.cohort == ThesisCohort.NEUTRAL]
         payload = {
             "since_days": since_days,
             "by": ["cohort"],
-            "directional": _cohort_metrics(directional, all_positions),
-            "neutral": _cohort_metrics(paired, all_positions),
+            "directional": _cohort_metrics(directional, positions_by_thesis),
+            "neutral": _cohort_metrics(paired, positions_by_thesis),
         }
         respond_with_output(output, payload, lambda: _print_analyze_legacy(payload))
         return
 
     groups: dict[tuple[str, ...], list] = {}
     for t in factory_theses:
-        key = tuple(_axis_bucket(t, axis) for axis in axes)
+        key = tuple(_AXIS_BUCKET[axis](t) for axis in axes)
         groups.setdefault(key, []).append(t)
 
     cells: list[dict] = []
     for key, theses in sorted(groups.items(), key=lambda kv: kv[0]):
-        cell = {axis: key[i] for i, axis in enumerate(axes)}
-        metrics = _cohort_metrics(theses, all_positions)
+        cell = {axis.value: key[i] for i, axis in enumerate(axes)}
+        metrics = _cohort_metrics(theses, positions_by_thesis)
         metrics["low_n"] = metrics["opened"] < LOW_N_THRESHOLD
         cell["metrics"] = metrics
         cells.append(cell)
 
     payload = {
         "since_days": since_days,
-        "by": axes,
+        "by": [a.value for a in axes],
         "cells": cells,
     }
     respond_with_output(output, payload, lambda: _print_analyze_crosstab(payload))
-
-
-def _axis_bucket(thesis, axis: str) -> str:
-    if axis == "cohort":
-        return thesis.cohort.value
-    if axis == "discovery":
-        return thesis.discovery_source or "unspecified"
-    if axis == "regime":
-        return _regime_bucket(thesis.regime_snapshot)
-    return "unknown"
 
 
 def _regime_bucket(snapshot: dict) -> str:
@@ -249,7 +257,7 @@ def _regime_bucket(snapshot: dict) -> str:
     return f"{pol_label}:{vol_label}"
 
 
-def _cohort_metrics(theses, all_positions) -> dict:
+def _cohort_metrics(theses, positions_by_thesis: dict) -> dict:
     opened = len(theses)
     closed = [t for t in theses if t.status == ThesisStatus.CLOSED]
     preempted = [t for t in closed if t.outcome == ThesisOutcome.PREEMPTED]
@@ -259,14 +267,12 @@ def _cohort_metrics(theses, all_positions) -> dict:
 
     pnl_values: list[float] = []
     held_days_values: list[float] = []
-    thesis_ids = {t.id for t in theses}
-    for pos in all_positions:
-        if pos.thesis_id not in thesis_ids:
-            continue
-        if pos.pnl is not None:
-            pnl_values.append(pos.pnl)
-        if pos.exit_date and pos.entry_date:
-            held_days_values.append((pos.exit_date - pos.entry_date).days)
+    for t in theses:
+        for pos in positions_by_thesis.get(t.id, ()):
+            if pos.pnl is not None:
+                pnl_values.append(pos.pnl)
+            if pos.exit_date and pos.entry_date:
+                held_days_values.append((pos.exit_date - pos.entry_date).days)
 
     avg_pnl = sum(pnl_values) / len(pnl_values) if pnl_values else None
     avg_held_days = sum(held_days_values) / len(held_days_values) if held_days_values else None

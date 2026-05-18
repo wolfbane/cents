@@ -66,11 +66,12 @@ class AlpacaPriceProvider:
         Returns:
             PriceHistory with daily OHLCV bars
         """
-        # Cache key params
+        # Cache key params — keying current-day requests by today's date so
+        # same-day repeats hit the cache without serving stale bars tomorrow.
         cache_params = {
             "symbol": symbol,
             "days": days,
-            "as_of": as_of.isoformat() if as_of else "latest",
+            "as_of": (as_of or date.today()).isoformat(),
         }
 
         def do_fetch():
@@ -103,13 +104,9 @@ class AlpacaPriceProvider:
                     })
             return bars_data
 
-        # Only cache historical data (when as_of is in the past)
-        use_cache = as_of is not None and as_of < date.today()
-
-        if use_cache:
-            bars_data = cached_request("alpaca", "bars", cache_params, do_fetch)
-        else:
-            bars_data = do_fetch()
+        # Always cache — same-day key prevents stale data across days, and
+        # repeated current-day requests (screeners, factory runs) hit cache.
+        bars_data = cached_request("alpaca", "bars", cache_params, do_fetch)
 
         # Convert cached data back to PriceBar objects
         bars = [

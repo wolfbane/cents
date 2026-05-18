@@ -13,8 +13,7 @@ from cents.screeners._base import (
     DEFAULT_LIMIT,
     _get_fundamentals_provider,
     _get_price_provider,
-    rank_and_limit,
-    safe_per_symbol,
+    run_per_symbol_screen,
 )
 
 RSI_PERIOD = 14
@@ -77,16 +76,7 @@ class MeanReversionScreener:
         }
 
     def screen(self, candidate_symbols: list[str] | None = None) -> list[str]:
-        if candidate_symbols is not None and not candidate_symbols:
-            return []
-        candidates = candidate_symbols or []
-
-        scored: list[tuple[str, float]] = []
-        for symbol in candidates:
-            score = safe_per_symbol(self._score_symbol, symbol)
-            if score is not None:
-                scored.append((symbol, score))
-        return rank_and_limit(scored, self.limit)
+        return run_per_symbol_screen(self._score_symbol, candidate_symbols, self.limit)
 
     def _score_symbol(self, symbol: str) -> float | None:
         history = self.price_provider.get_history(symbol, days=HISTORY_DAYS)

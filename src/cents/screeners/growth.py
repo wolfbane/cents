@@ -13,8 +13,7 @@ from __future__ import annotations
 from cents.screeners._base import (
     DEFAULT_LIMIT,
     _get_fundamentals_provider,
-    rank_and_limit,
-    safe_per_symbol,
+    run_per_symbol_screen,
 )
 
 
@@ -50,25 +49,10 @@ class GrowthScreener:
         }
 
     def screen(self, candidate_symbols: list[str] | None = None) -> list[str]:
-        if candidate_symbols is not None and not candidate_symbols:
-            return []
-        candidates = candidate_symbols or []
-
-        scored: list[tuple[str, float]] = []
-        for symbol in candidates:
-            score = safe_per_symbol(self._score_symbol, symbol)
-            if score is not None:
-                scored.append((symbol, score))
-        return rank_and_limit(scored, self.limit)
+        return run_per_symbol_screen(self._score_symbol, candidate_symbols, self.limit)
 
     def _score_symbol(self, symbol: str) -> float | None:
-        data = self.provider._fetch_json(
-            "income-statement",
-            symbol=symbol,
-            period="annual",
-            limit=4,
-            use_cache=True,
-        )
+        data = self.provider.get_income_statement(symbol, period="annual", limit=4)
         if not data or len(data) < 4:
             return None
 
