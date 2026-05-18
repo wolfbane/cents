@@ -152,6 +152,7 @@ Transversal: cents/finance/ — UTILITIES, not gates
 - **`Thesis.discovery_source = <universe_name>`** is the link between the discovery layer and outcome analytics. Without it, `cents factory analyze --by discovery` has nothing to stratify on. The factory engine sets it automatically; manually-created theses leave it `None`.
 - **`factory analyze` low-N flag gates on `judged`, not `opened`.** A cohort with 50 opened but only 2 closed-and-judged is still low-N. Threshold is `LOW_N_THRESHOLD = 30` in `cents/cli/_disclosures.py`.
 - **The api_cache table has no TTL.** Daily-mutable endpoints (FMP TTM ratios, profile) use `daily_key=True` in `_fetch_json` to inject today's date into the cache key. Alpaca `get_history` is keyed by `today` (or supplied `as_of`) for the same reason. Don't cache TTM data with a stable key — it will go stale.
+- **Alpaca bars are split-adjusted, NOT dividend-adjusted.** `cents/data/alpaca.py` passes `adjustment=Adjustment.SPLIT` so historical bars are comparable across split boundaries. Without this, NVDA's June 2024 10:1 split produced a phantom -87.7% 20d return in backtest reports. Dividends are intentionally not adjusted — that would shift absolute price levels relative to live quotes (MA20 / 52W range / target prices). The bars cache namespace is `bars_split_v1`; if the adjustment basis ever changes again, bump the namespace to invalidate stale entries rather than serving mixed-basis data.
 
 ### Repository + persistence
 

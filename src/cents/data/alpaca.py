@@ -12,6 +12,7 @@ from cents.exceptions import ConfigurationError
 logger = logging.getLogger(__name__)
 
 try:
+    from alpaca.data.enums import Adjustment
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
     from alpaca.data.timeframe import TimeFrame
@@ -81,11 +82,19 @@ class AlpacaPriceProvider:
                 end = datetime.now()
             start = end - timedelta(days=days)
 
+            # adjustment=SPLIT corrects for stock splits so historical bars
+            # are comparable across split boundaries. Without this, NVDA's
+            # June-2024 10:1 split (and similar) produces ~-90% nominal
+            # discontinuities that contaminate forward returns, technical
+            # levels (MA20/50, 52W range), and position P&L. Dividends are
+            # intentionally not adjusted — that would shift absolute price
+            # levels relative to live quotes.
             request = StockBarsRequest(
                 symbol_or_symbols=symbol,
                 timeframe=TimeFrame.Day,
                 start=start,
                 end=end,
+                adjustment=Adjustment.SPLIT,
             )
 
             bars_response = self._client.get_stock_bars(request)
@@ -106,7 +115,9 @@ class AlpacaPriceProvider:
 
         # Always cache — same-day key prevents stale data across days, and
         # repeated current-day requests (screeners, factory runs) hit cache.
-        bars_data = cached_request("alpaca", "bars", cache_params, do_fetch)
+        # Endpoint namespace bumped to bars_split_v1 to bypass legacy
+        # unadjusted (RAW) cache entries from prior versions.
+        bars_data = cached_request("alpaca", "bars_split_v1", cache_params, do_fetch)
 
         # Convert cached data back to PriceBar objects
         bars = [
@@ -132,6 +143,7 @@ class AlpacaPriceProvider:
                 timeframe=TimeFrame.Day,
                 start=datetime.now() - timedelta(days=5),
                 end=datetime.now(),
+                adjustment=Adjustment.SPLIT,
             )
             bars = self._client.get_stock_bars(request)
             for sym in symbols:

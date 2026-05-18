@@ -1,6 +1,6 @@
 """Tests for data providers."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -402,6 +402,118 @@ class TestAlpacaPriceProvider:
         assert len(history.bars) == 1
         assert history.bars[0].close == 154.0
         assert history.bars[0].volume == 1000000
+
+    @patch("cents.data.alpaca.StockBarsRequest")
+    @patch("cents.data.alpaca.StockHistoricalDataClient")
+    @patch("cents.data.alpaca.get_settings")
+    def test_get_history_requests_split_adjusted_bars(
+        self, mock_settings, mock_client_class, mock_request_class
+    ):
+        """Regression: bars must be requested with adjustment=SPLIT.
+
+        Without split adjustment, tickers that split during the requested
+        window (e.g. NVDA Jun-2024 10:1) produce nominal ~-90% bar-to-bar
+        discontinuities that contaminate forward returns, MA20/50 levels,
+        52W range, and Position P&L. See bug report 2026-05-18.
+        """
+        from alpaca.data.enums import Adjustment
+
+        mock_settings.return_value.alpaca_api_key = "test_key"
+        mock_settings.return_value.alpaca_secret_key = "test_secret"
+
+        mock_response = MagicMock()
+        mock_response.data = {}
+        mock_client = MagicMock()
+        mock_client.get_stock_bars.return_value = mock_response
+        mock_client_class.return_value = mock_client
+
+        provider = AlpacaPriceProvider()
+        provider.get_history("NVDA", days=30, as_of=date(2024, 6, 30))
+
+        assert mock_request_class.call_count >= 1
+        kwargs = mock_request_class.call_args.kwargs
+        assert kwargs.get("adjustment") == Adjustment.SPLIT, (
+            "get_history must request split-adjusted bars; "
+            f"got adjustment={kwargs.get('adjustment')!r}"
+        )
+
+    @patch("cents.data.alpaca.StockBarsRequest")
+    @patch("cents.data.alpaca.StockHistoricalDataClient")
+    @patch("cents.data.alpaca.get_settings")
+    def test_get_last_closes_requests_split_adjusted_bars(
+        self, mock_settings, mock_client_class, mock_request_class
+    ):
+        """Regression: last-close fallback path must also request split-adjusted bars."""
+        from alpaca.data.enums import Adjustment
+
+        mock_settings.return_value.alpaca_api_key = "test_key"
+        mock_settings.return_value.alpaca_secret_key = "test_secret"
+
+        mock_bars_response = MagicMock()
+        mock_bars_response.data = {}
+        mock_client = MagicMock()
+        mock_client.get_stock_bars.return_value = mock_bars_response
+        mock_client_class.return_value = mock_client
+
+        provider = AlpacaPriceProvider()
+        provider._get_last_closes(["NVDA"])
+
+        assert mock_request_class.call_count >= 1
+        kwargs = mock_request_class.call_args.kwargs
+        assert kwargs.get("adjustment") == Adjustment.SPLIT
+
+
+class TestForwardReturnsContinuity:
+    """Regression: forward-return math must not show ~-90% artifacts
+    when prices are consistently adjusted across a synthetic split window.
+
+    This is the consumer-side guard for the NVDA Jun-2024 10:1 bug.
+    With split-adjusted bars, the bar at signal_date and the bar at
+    signal_date + 20d share the same adjustment basis, so the computed
+    return reflects real market move, not the split ratio."""
+
+    def test_no_phantom_drop_across_synthetic_split(self):
+        """Synthetic NVDA-shaped bars: 10:1 split midway through window,
+        but post-split bars retroactively adjusted (as Alpaca returns
+        them when adjustment=SPLIT). Forward return must be near zero,
+        not ~-90%."""
+        from cents.cli.backtest import _calculate_forward_returns
+
+        signal_date = date(2024, 5, 26)
+
+        # Build 70 bars of split-adjusted data: pre-split prices divided
+        # by 10 retroactively, so the series is continuous around the split.
+        # Real NVDA on 2024-05-26 ≈ $113 (pre-split nominal ~$1130).
+        # Real NVDA on 2024-06-25 ≈ $118.
+        bars = []
+        for i in range(70):
+            d = signal_date - timedelta(days=10) + timedelta(days=i)
+            # Smooth ramp 110 -> 120 across the window (no split artifact)
+            close = 110.0 + (i / 70.0) * 10.0
+            bars.append(
+                PriceBar(
+                    timestamp=datetime.combine(d, datetime.min.time()),
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=10_000_000,
+                )
+            )
+
+        history = PriceHistory(symbol="NVDA", bars=bars)
+
+        provider = MagicMock()
+        provider.get_history.return_value = history
+
+        returns = _calculate_forward_returns("NVDA", signal_date, provider)
+
+        # Bug surfaced as -87.7%. Adjusted data should be <10% over 20d.
+        assert "20d" in returns
+        assert abs(returns["20d"]) < 0.20, (
+            f"20d return {returns['20d']:.2%} suggests a split-adjustment "
+            "regression — adjusted bars should never show ~-90% artifacts"
+        )
 
     @patch("cents.data.alpaca.StockHistoricalDataClient")
     @patch("cents.data.alpaca.get_settings")
