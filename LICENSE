@@ -19,3 +19,23 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+-------------------------------------------------------------------------------
+
+ADDITIONAL DISCLAIMERS
+
+This software is a research experiment, not an investment adviser.
+The authors and contributors:
+- do NOT provide investment advice
+- have NO advisory relationship with any user
+- accept NO fiduciary duty
+- make NO warranty as to the accuracy, completeness, timeliness, or
+  suitability of any output for any purpose
+
+Any output of this software (signals, theses, premise tags, evidence,
+backtest tables, cohort analytics) is MODEL-GENERATED and may be wrong.
+Users are solely responsible for any investment decisions they make,
+with or without reference to this software.
+
+Real-money trading is explicitly out of scope. See
+https://dollars-and-cents.ai/scope/ for the project's stated boundaries.

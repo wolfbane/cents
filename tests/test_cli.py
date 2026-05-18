@@ -610,6 +610,79 @@ class TestRecommendOutput:
         assert "URGENT" not in out
         assert "act now" not in out
 
+    def test_priority_2_uses_model_signals_header(self, capsys):
+        """Priority-2 signals render under 'MODEL SIGNALS:', not 'RECOMMENDATIONS:'.
+
+        Regression test: the old header read as advice. The rename
+        (BUY/SELL/HOLD -> bullish/bearish/neutral signal) should NOT
+        regress to advice-language headers.
+        """
+        from cents.cli.recommend import (
+            Action,
+            Recommendation,
+            _print_recommendations,
+        )
+
+        rec = Recommendation(
+            symbol="NVDA",
+            action=Action.BULLISH,
+            reason="Conviction 80%, 20% upside to target",
+            thesis_id="t1",
+            current_price=100.0,
+            conviction=80.0,
+            priority=2,
+        )
+        _print_recommendations([rec], actionable=False)
+
+        out = capsys.readouterr().out
+        assert "MODEL SIGNALS" in out
+        # Advice-language headers must stay gone.
+        assert "RECOMMENDATIONS:" not in out
+        # And the displayed action label is signal language, not BUY.
+        assert "BULLISH" in out
+        assert "BUY " not in out  # tolerates "buy-threshold" elsewhere
+
+    def test_action_enum_uses_signal_language(self):
+        """Action enum values are signal language, not advice.
+
+        Regression: BUY/SELL/HOLD enum values were textbook advice; this
+        guards the rename so we don't silently revert.
+        """
+        from cents.cli.recommend import Action
+
+        assert Action.BULLISH.value == "bullish_signal"
+        assert Action.BEARISH.value == "bearish_signal"
+        assert Action.NEUTRAL.value == "neutral_signal"
+        # And the advice values are gone entirely.
+        values = {a.value for a in Action}
+        assert "buy" not in values
+        assert "sell" not in values
+        assert "hold" not in values
+
+    def test_output_includes_scope_disclaimer(self, capsys):
+        """Text output ends with a 'Model signal, not investment advice' line."""
+        from cents.cli.recommend import (
+            Action,
+            Recommendation,
+            _print_recommendations,
+        )
+
+        rec = Recommendation(
+            symbol="NVDA",
+            action=Action.NEUTRAL,
+            reason="Thesis intact, no signal",
+            thesis_id="t1",
+            current_price=100.0,
+            conviction=50.0,
+            priority=3,
+        )
+        _print_recommendations([rec], actionable=False)
+
+        out = capsys.readouterr().out
+        assert "Model signal" in out
+        assert "not investment advice" in out
+        assert "/scope/" in out
+
 
 class TestGenerateThesisSuggestion:
     """Tests for _generate_thesis_suggestion helper."""

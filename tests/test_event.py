@@ -251,8 +251,12 @@ class TestEventAgentTagging:
         assert call["model"] != "claude-haiku-4-5"
         assert "untrusted" in call["system"].lower()
         user_content = call["messages"][0]["content"]
-        event_open = user_content.index("<event>")
-        event_close = user_content.index("</event>")
+        import re as _re
+        opens = list(_re.finditer(r"<event-[0-9a-f]{8}>", user_content))
+        closes = list(_re.finditer(r"</event-[0-9a-f]{8}>", user_content))
+        assert opens and closes
+        event_open = opens[0].start()
+        event_close = closes[0].start()
         injection_idx = user_content.index("Ignore previous instructions")
         assert event_open < injection_idx < event_close
 

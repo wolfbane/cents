@@ -399,7 +399,7 @@ class FactoryEngine:
         """Record an alert when the portfolio kill switch trips."""
         alert = Alert(
             symbol="PORTFOLIO",
-            alert_type=AlertType.PRICE_TRIGGER,
+            alert_type=AlertType.PORTFOLIO_RISK,
             message=f"factory kill switch tripped: {state.gate_reason}",
             data={
                 "unrealized_drawdown_pct": state.unrealized_drawdown_pct,
@@ -520,6 +520,7 @@ class FactoryEngine:
             open_positions=factory_open_positions,
             closed_today=closed_today,
             price_provider=price_provider,
+            budget_usd=cfg.budget_usd,
         )
         dd_state = check_kill_switch(
             dd_state,
@@ -574,8 +575,12 @@ class FactoryEngine:
                 continue
 
             # ---- per-symbol gates + sizing (v0.10) ----
-            # Compute sizing BEFORE budget/preemption math so the budget check
-            # reflects the realistic position size, not the equal-dollar fiction.
+            # Compute sizing BEFORE the liquidity/budget/preemption math so
+            # each check reflects the realistic position size, not the
+            # equal-dollar fiction. Vol-scaled sizing can shrink a position
+            # by 5-10x against the equal-dollar fallback — making the gate
+            # see the same number means it can actually let small-cap names
+            # through when the position is sized appropriately.
             primary_side = PositionSide.SHORT if result.conviction_delta < 0 else PositionSide.LONG
             history_supported = self._history_supported()
 
@@ -583,22 +588,6 @@ class FactoryEngine:
                 self._get_history(symbol, cfg.vol_lookback_days * 2)
                 if history_supported else (None, None)
             )
-
-            # Liquidity gate is conservative when history IS supported (skip if
-            # we can't characterize the symbol's depth) and disabled when the
-            # provider can't give us history at all (test stubs, paper-only).
-            if history_supported and cfg.min_adv_multiple > 0:
-                liq = passes_liquidity_gate(
-                    symbol=symbol,
-                    position_size_usd=cfg.position_size_usd,
-                    closes=primary_closes,
-                    volumes=primary_volumes,
-                    adv_multiple=cfg.min_adv_multiple,
-                    lookback=cfg.liquidity_lookback_days,
-                )
-                if not liq.passes:
-                    logger.debug("Liquidity gate failed for %s: %s", symbol, liq.reason)
-                    continue
 
             borrow = passes_borrow_gate(
                 symbol=symbol,
@@ -632,6 +621,28 @@ class FactoryEngine:
                 primary_notional * cfg.default_beta if paired and hedge_symbol else 0.0
             )
             position_cost = primary_notional + hedge_notional_estimate
+
+            # Liquidity gate sees the actual sized notional (primary + hedge
+            # in paired mode) — not the equal-dollar fiction. We skip the
+            # gate entirely when history isn't supported (test stubs) or
+            # when sizing collapsed to zero (no price).
+            if (
+                history_supported
+                and cfg.min_adv_multiple > 0
+                and primary_notional > 0
+            ):
+                gate_notional = primary_notional + hedge_notional_estimate
+                liq = passes_liquidity_gate(
+                    symbol=symbol,
+                    position_size_usd=gate_notional,
+                    closes=primary_closes,
+                    volumes=primary_volumes,
+                    adv_multiple=cfg.min_adv_multiple,
+                    lookback=cfg.liquidity_lookback_days,
+                )
+                if not liq.passes:
+                    logger.debug("Liquidity gate failed for %s: %s", symbol, liq.reason)
+                    continue
             current_notional = self._current_notional(price_provider)
 
             preemption_target: Thesis | None = None
@@ -910,6 +921,7 @@ class FactoryEngine:
                         beta = estimate_beta(
                             primary_closes, hedge_closes,
                             lookback=cfg.beta_lookback_days,
+                            min_r_squared=cfg.beta_min_r_squared,
                         )
                 ratio = beta_match_ratio(
                     beta=beta,

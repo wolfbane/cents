@@ -19,7 +19,7 @@ budget_usd = 100000.0          # max gross notional across open positions
 target_positions = 30          # informs default per-position sizing (budget / target_positions)
 entry_threshold = 7.0          # |conviction_delta| required to open a new thesis
 preemption_margin = 5.0        # new thesis must beat lowest open conviction by this margin to preempt
-cohort_mode = "directional_only"  # "paired" (long + sector ETF short twin) or "directional_only"
+cohort_mode = "paired"          # "paired" (long + sector ETF short twin) or "directional_only"
 default_horizon_days = 30
 default_stop_pct = -5.0        # close-position trigger as % off entry (negative)
 default_target_pct = 10.0      # close-position trigger as % off entry (positive)
@@ -45,8 +45,9 @@ borrow_rate_pa_pct = 3.0            # synthetic annual borrow rate applied to sh
 beta_match_hedge = true
 default_beta = 1.0
 beta_lookback_days = 60
-beta_min = 0.25
-beta_max = 3.0
+beta_min = 0.10
+beta_max = 5.0
+beta_min_r_squared = 0.5   # reject beta estimate when fit R² falls below this
 
 # Liquidity + borrow gates (v0.10).
 min_adv_multiple = 50.0        # require median daily $-volume >= this x position size
@@ -67,7 +68,7 @@ class FactoryConfig:
     target_positions: int = 30
     entry_threshold: float = 7.0
     preemption_margin: float = 5.0
-    cohort_mode: str = "directional_only"
+    cohort_mode: str = "paired"
     default_horizon_days: int = 30
     default_stop_pct: float = -5.0
     default_target_pct: float = 10.0
@@ -87,8 +88,9 @@ class FactoryConfig:
     beta_match_hedge: bool = True
     default_beta: float = 1.0
     beta_lookback_days: int = 60
-    beta_min: float = 0.25
-    beta_max: float = 3.0
+    beta_min: float = 0.10
+    beta_max: float = 5.0
+    beta_min_r_squared: float = 0.5
     # Liquidity (v0.10).
     min_adv_multiple: float = 50.0
     liquidity_lookback_days: int = 20
@@ -125,6 +127,8 @@ class FactoryConfig:
             raise ValueError("borrow_rate_pa_pct must be non-negative")
         if self.beta_min < 0 or self.beta_max <= self.beta_min:
             raise ValueError("beta_min must be >=0 and beta_max must exceed beta_min")
+        if not 0.0 <= self.beta_min_r_squared <= 1.0:
+            raise ValueError("beta_min_r_squared must be within [0, 1]")
         if self.min_adv_multiple < 0:
             raise ValueError("min_adv_multiple must be non-negative")
         if self.max_portfolio_drawdown_pct < 0 or self.max_daily_loss_pct < 0:
@@ -170,7 +174,7 @@ def load_factory_config(path: Path | None = None) -> FactoryConfig:
         "target_positions": int(data.get("target_positions", 30)),
         "entry_threshold": float(data.get("entry_threshold", 7.0)),
         "preemption_margin": float(data.get("preemption_margin", 5.0)),
-        "cohort_mode": str(data.get("cohort_mode", "directional_only")),
+        "cohort_mode": str(data.get("cohort_mode", "paired")),
         "default_horizon_days": int(data.get("default_horizon_days", 30)),
         "default_stop_pct": float(data.get("default_stop_pct", -5.0)),
         "default_target_pct": float(data.get("default_target_pct", 10.0)),
@@ -188,8 +192,9 @@ def load_factory_config(path: Path | None = None) -> FactoryConfig:
         "beta_match_hedge": bool(data.get("beta_match_hedge", True)),
         "default_beta": float(data.get("default_beta", 1.0)),
         "beta_lookback_days": int(data.get("beta_lookback_days", 60)),
-        "beta_min": float(data.get("beta_min", 0.25)),
-        "beta_max": float(data.get("beta_max", 3.0)),
+        "beta_min": float(data.get("beta_min", 0.10)),
+        "beta_max": float(data.get("beta_max", 5.0)),
+        "beta_min_r_squared": float(data.get("beta_min_r_squared", 0.5)),
         "min_adv_multiple": float(data.get("min_adv_multiple", 50.0)),
         "liquidity_lookback_days": int(data.get("liquidity_lookback_days", 20)),
         "max_portfolio_drawdown_pct": float(data.get("max_portfolio_drawdown_pct", 10.0)),

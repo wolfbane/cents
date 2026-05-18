@@ -1,4 +1,11 @@
-"""Recommend command - rule-based decision engine."""
+"""Recommend command - rule-based decision engine.
+
+Emits a *model signal* (bullish / bearish / neutral), not investment advice.
+The signal is a function of the user-authored thesis (conviction, target,
+stop, expiry, status) and the current price. It is not calibrated, not
+backtested at this level of granularity, and not suitable for execution
+without human review. See /scope/ for the project's stated boundaries.
+"""
 
 import logging
 from dataclasses import dataclass
@@ -16,16 +23,16 @@ logger = logging.getLogger(__name__)
 
 
 class Action(str, Enum):
-    BUY = "buy"
-    SELL = "sell"
-    HOLD = "hold"
+    BULLISH = "bullish_signal"
+    BEARISH = "bearish_signal"
+    NEUTRAL = "neutral_signal"
     CLOSE = "close"
     REVIEW = "review"
 
 
 @dataclass
 class Recommendation:
-    """A recommended action for a thesis/position."""
+    """A signal-tagged action for a thesis/position."""
 
     symbol: str
     action: Action
@@ -33,7 +40,7 @@ class Recommendation:
     thesis_id: str | None
     current_price: float | None
     conviction: float
-    priority: int  # 1=urgent, 2=normal, 3=hold
+    priority: int  # 1=action review, 2=normal, 3=neutral
     target_price: float | None = None
     stop_price: float | None = None
     position_id: str | None = None
@@ -62,7 +69,7 @@ def evaluate_thesis(
     buy_threshold: float,
     sell_threshold: float,
 ) -> Recommendation:
-    """Apply rules to generate a recommendation for a thesis."""
+    """Apply rules to generate a signal for a thesis."""
 
     symbol = thesis.symbol or "UNKNOWN"
     base = {
@@ -129,23 +136,23 @@ def evaluate_thesis(
             **base,
         )
 
-    # RULE 5: Low conviction with position - sell signal
+    # RULE 5: Low conviction with position - bearish signal
     if position and thesis.conviction < sell_threshold:
         return Recommendation(
-            action=Action.SELL,
+            action=Action.BEARISH,
             reason=f"Conviction {thesis.conviction:.0f}% below {sell_threshold:.0f}% threshold",
             priority=2,
             **base,
         )
 
-    # RULE 6: High conviction without position - buy signal
+    # RULE 6: High conviction without position - bullish signal
     if not position and thesis.conviction >= buy_threshold:
         # Check if there's still upside
         if thesis.target_price and current_price:
             upside = (thesis.target_price - current_price) / current_price * 100
             if upside > 5:  # At least 5% upside
                 return Recommendation(
-                    action=Action.BUY,
+                    action=Action.BULLISH,
                     reason=f"Conviction {thesis.conviction:.0f}%, {upside:.0f}% upside to target",
                     priority=2,
                     **base,
@@ -159,16 +166,16 @@ def evaluate_thesis(
                 )
         else:
             return Recommendation(
-                action=Action.BUY,
+                action=Action.BULLISH,
                 reason=f"Conviction {thesis.conviction:.0f}% (no target set)",
                 priority=2,
                 **base,
             )
 
-    # RULE 7: Default - hold
+    # RULE 7: Default - neutral
     return Recommendation(
-        action=Action.HOLD,
-        reason="Thesis intact, no action needed",
+        action=Action.NEUTRAL,
+        reason="Thesis intact, no signal",
         priority=3,
         **base,
     )
@@ -178,7 +185,7 @@ def get_recommendations(
     buy_threshold: float = 70.0,
     sell_threshold: float = 30.0,
 ) -> list[Recommendation]:
-    """Generate recommendations for all open theses."""
+    """Generate signals for all open theses."""
 
     thesis_repo = ThesisRepository()
     position_repo = PositionRepository()
@@ -216,10 +223,28 @@ def get_recommendations(
         recommendations.append(rec)
 
     # Sort by priority, then by action importance
-    action_order = {Action.CLOSE: 0, Action.SELL: 1, Action.BUY: 2, Action.REVIEW: 3, Action.HOLD: 4}
+    action_order = {
+        Action.CLOSE: 0,
+        Action.BEARISH: 1,
+        Action.BULLISH: 2,
+        Action.REVIEW: 3,
+        Action.NEUTRAL: 4,
+    }
     recommendations.sort(key=lambda r: (r.priority, action_order.get(r.action, 5)))
 
     return recommendations
+
+
+# Human-readable labels for the signal column in text output. Keeping the
+# textbook BUY/SELL/HOLD verbs out of the display is the whole point of the
+# rename; these labels are neutral signal language only.
+_ACTION_LABELS: dict[Action, str] = {
+    Action.BULLISH: "BULLISH",
+    Action.BEARISH: "BEARISH",
+    Action.NEUTRAL: "NEUTRAL",
+    Action.CLOSE: "CLOSE",
+    Action.REVIEW: "REVIEW",
+}
 
 
 @click.command("recommend")
@@ -227,13 +252,13 @@ def get_recommendations(
     "--buy-threshold",
     type=float,
     default=70.0,
-    help="Minimum conviction to recommend BUY (default: 70)",
+    help="Minimum conviction to emit a bullish signal (default: 70)",
 )
 @click.option(
     "--sell-threshold",
     type=float,
     default=30.0,
-    help="Maximum conviction to recommend SELL (default: 30)",
+    help="Maximum conviction to emit a bearish signal (default: 30)",
 )
 @click.option(
     "--output",
@@ -244,7 +269,7 @@ def get_recommendations(
 @click.option(
     "--actionable",
     is_flag=True,
-    help="Only show actionable recommendations (exclude HOLD)",
+    help="Only show actionable signals (exclude neutral)",
 )
 def recommend(
     buy_threshold: float,
@@ -252,19 +277,20 @@ def recommend(
     output: str | None,
     actionable: bool,
 ):
-    """Generate buy/sell/hold recommendations based on thesis rules.
+    """Emit model signals (bullish / bearish / neutral) for open theses.
 
-    Evaluates all open theses against current prices and conviction levels
-    to produce actionable recommendations.
+    Evaluates each open thesis against current prices, conviction, and
+    target/stop/expiry to produce a *model signal*. Signals are not
+    investment advice — see /scope/ for the project's stated boundaries.
 
     Rules (in priority order):
-      1. Stop loss triggered → CLOSE
-      2. Target price reached → CLOSE
-      3. Thesis invalidated → CLOSE/REVIEW
-      4. Thesis expired → REVIEW
-      5. Low conviction with position → SELL
-      6. High conviction without position → BUY
-      7. Otherwise → HOLD
+      1. Stop loss triggered          → CLOSE
+      2. Target price reached         → CLOSE
+      3. Thesis invalidated           → CLOSE / REVIEW
+      4. Thesis expired               → REVIEW
+      5. Low conviction w/ position   → bearish signal
+      6. High conviction, no position → bullish signal
+      7. Otherwise                    → neutral signal
     """
     output = resolve_output_format(output)
 
@@ -280,7 +306,7 @@ def recommend(
 def _print_recommendations(recommendations: list[Recommendation], actionable: bool) -> None:
     """Render recommendations in text form."""
     if actionable:
-        recommendations = [r for r in recommendations if r.action != Action.HOLD]
+        recommendations = [r for r in recommendations if r.action != Action.NEUTRAL]
 
     if not recommendations:
         click.echo("No open theses to evaluate.")
@@ -289,12 +315,12 @@ def _print_recommendations(recommendations: list[Recommendation], actionable: bo
     # Group by priority
     urgent = [r for r in recommendations if r.priority == 1]
     normal = [r for r in recommendations if r.priority == 2]
-    holds = [r for r in recommendations if r.priority == 3 and r.action == Action.HOLD]
+    neutrals = [r for r in recommendations if r.priority == 3 and r.action == Action.NEUTRAL]
     reviews = [r for r in recommendations if r.priority == 3 and r.action == Action.REVIEW]
 
     def format_rec(r: Recommendation) -> str:
         price_str = f"${r.current_price:.2f}" if r.current_price else "N/A"
-        action_str = r.action.value.upper().ljust(6)
+        action_str = _ACTION_LABELS.get(r.action, r.action.value.upper()).ljust(8)
         return f"  {action_str} {r.symbol.ljust(6)} {price_str.rjust(10)}  {r.reason}"
 
     if urgent:
@@ -304,7 +330,7 @@ def _print_recommendations(recommendations: list[Recommendation], actionable: bo
         click.echo()
 
     if normal:
-        click.echo(click.style("RECOMMENDATIONS:", fg="yellow", bold=True))
+        click.echo(click.style("MODEL SIGNALS:", fg="yellow", bold=True))
         for r in normal:
             click.echo(format_rec(r))
         click.echo()
@@ -315,15 +341,20 @@ def _print_recommendations(recommendations: list[Recommendation], actionable: bo
             click.echo(format_rec(r))
         click.echo()
 
-    if holds and not actionable:
-        click.echo(click.style("HOLD (no action):", fg="green"))
-        for r in holds:
+    if neutrals and not actionable:
+        click.echo(click.style("NEUTRAL (no signal):", fg="green"))
+        for r in neutrals:
             click.echo(format_rec(r))
 
     # Summary
-    action_counts = {}
+    action_counts: dict[str, int] = {}
     for r in recommendations:
-        action_counts[r.action.value] = action_counts.get(r.action.value, 0) + 1
+        label = _ACTION_LABELS.get(r.action, r.action.value).lower()
+        action_counts[label] = action_counts.get(label, 0) + 1
 
     summary = ", ".join(f"{v} {k}" for k, v in action_counts.items())
     click.echo(f"\nSummary: {summary}")
+    click.echo(
+        "\nModel signal, not investment advice. See "
+        "https://dollars-and-cents.ai/scope/"
+    )

@@ -132,7 +132,7 @@ class _PriceProviderStub:
         return self._p.get(symbol)
 
 
-def _make_pos(symbol, side_value, entry_price, size, pnl=None):
+def _make_pos(symbol, side_value, entry_price, size, pnl=None, thesis_id=None):
     """Minimal duck-typed Position for the compute_drawdown tests."""
     class _Pos:
         pass
@@ -142,6 +142,7 @@ def _make_pos(symbol, side_value, entry_price, size, pnl=None):
     p.size = size
     p.side = type("S", (), {"value": side_value})()
     p.pnl = pnl
+    p.thesis_id = thesis_id
     return p
 
 
@@ -150,16 +151,19 @@ class TestKillSwitch:
         state = compute_drawdown(
             open_positions=[], closed_today=[],
             price_provider=_PriceProviderStub({}),
+            budget_usd=100_000.0,
         )
         assert state.gate_open is True
         assert state.unrealized_drawdown_pct == 0.0
 
     def test_unrealized_loss_trips_gate(self):
-        # Long 100 @ 50 → cost basis 5000; mark @ 40 → MV 4000 → -20% DD.
+        # Long 100 @ 50 → cost basis 5000; mark @ 40 → unrealized PnL -1000.
+        # Against a $5k budget that is -20% — trips a 10% cap.
         pos = _make_pos("AAA", "long", entry_price=50.0, size=100)
         state = compute_drawdown(
             open_positions=[pos], closed_today=[],
             price_provider=_PriceProviderStub({"AAA": 40.0}),
+            budget_usd=5_000.0,
         )
         gated = check_kill_switch(
             state, max_portfolio_drawdown_pct=10.0, max_daily_loss_pct=3.0,
@@ -167,12 +171,48 @@ class TestKillSwitch:
         assert gated.gate_open is False
         assert "drawdown" in (gated.gate_reason or "")
 
+    def test_small_loss_against_large_budget_does_not_trip(self):
+        """Regression: a -$50 loss on a $1k position against a $100k budget
+        is -0.05% DD, not -5% — must NOT trip a 3% daily cap.
+
+        Pre-fix the denominator was open cost basis, so the gate became more
+        sensitive as the book shrank; this asserts the new budget-based math.
+        """
+        # Long 10 @ 100 (cost basis $1,000); mark @ 95 → unrealized -$50.
+        pos = _make_pos("AAA", "long", entry_price=100.0, size=10)
+        state = compute_drawdown(
+            open_positions=[pos], closed_today=[],
+            price_provider=_PriceProviderStub({"AAA": 95.0}),
+            budget_usd=100_000.0,
+        )
+        assert state.unrealized_drawdown_pct == pytest.approx(-0.05)
+        gated = check_kill_switch(
+            state, max_portfolio_drawdown_pct=3.0, max_daily_loss_pct=3.0,
+        )
+        assert gated.gate_open is True
+        assert gated.gate_reason is None
+
+    def test_paired_legs_are_netted_in_cost_basis(self):
+        """A neutral-cohort thesis owns long + short on the same thesis_id —
+        their cost basis should net, not double-count."""
+        long_leg = _make_pos("AAA", "long", entry_price=50.0, size=100, thesis_id="t1")
+        short_leg = _make_pos("XLK", "short", entry_price=100.0, size=45, thesis_id="t1")
+        state = compute_drawdown(
+            open_positions=[long_leg, short_leg], closed_today=[],
+            price_provider=_PriceProviderStub({"AAA": 50.0, "XLK": 100.0}),
+            budget_usd=100_000.0,
+        )
+        # Gross would be $5,000 + $4,500 = $9,500.
+        # Netted: abs(5000 - 4500) = $500.
+        assert state.open_cost_basis_usd == pytest.approx(500.0)
+
     def test_daily_realized_loss_trips_gate(self):
-        # closed today with -10% realized loss
-        closed = _make_pos("BBB", "long", entry_price=100.0, size=10, pnl=-100.0)
+        # closed today with -$1000 realized loss against a $10k budget → -10%.
+        closed = _make_pos("BBB", "long", entry_price=100.0, size=10, pnl=-1000.0)
         state = compute_drawdown(
             open_positions=[], closed_today=[closed],
             price_provider=_PriceProviderStub({}),
+            budget_usd=10_000.0,
         )
         gated = check_kill_switch(
             state, max_portfolio_drawdown_pct=50.0, max_daily_loss_pct=3.0,
@@ -252,3 +292,38 @@ class TestHedging:
 
     def test_nan_beta_uses_default(self):
         assert beta_match_ratio(beta=float("nan"), default_beta=1.0) == 1.0
+
+    def test_low_r_squared_returns_none(self):
+        """When R² of the underlying-on-hedge regression is below the
+        threshold the relationship is too weak to hedge with, so we refuse
+        the estimate entirely (rather than clamp it)."""
+        import random
+
+        # Independent random walks: the regression should explain almost
+        # nothing, R² ≈ 0.
+        rng = random.Random(7)
+        hedge = [100.0]
+        under = [100.0]
+        for _ in range(80):
+            hedge.append(hedge[-1] * (1 + rng.uniform(-0.01, 0.01)))
+            under.append(under[-1] * (1 + rng.uniform(-0.01, 0.01)))
+        # Without the gate, a beta would be returned — just probably small.
+        unguarded = estimate_beta(under, hedge, lookback=60)
+        assert unguarded is not None
+        # With a strict R² gate it must return None.
+        assert estimate_beta(under, hedge, lookback=60, min_r_squared=0.5) is None
+
+    def test_high_r_squared_passes_gate(self):
+        """A tightly-coupled series passes a strict R² gate."""
+        # underlying = 1.5 * hedge with tiny additive noise — R² near 1.
+        import random
+        rng = random.Random(13)
+        hedge = [100.0]
+        under = [100.0]
+        for _ in range(80):
+            step = rng.uniform(-0.01, 0.01)
+            hedge.append(hedge[-1] * (1 + step))
+            # Co-moving with small idiosyncratic noise.
+            under.append(under[-1] * (1 + 1.5 * step + rng.uniform(-1e-5, 1e-5)))
+        beta = estimate_beta(under, hedge, lookback=60, min_r_squared=0.5)
+        assert beta is not None and beta > 1.0

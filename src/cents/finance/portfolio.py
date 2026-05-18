@@ -5,10 +5,14 @@ textbook tail-risk profile." This module computes current portfolio
 drawdown and daily realized loss, and exposes a single ``check_kill_switch``
 hook for the factory engine to gate its open phase.
 
-The drawdown is measured against the peak cost-basis of currently-open
-positions (a simple definition that works for paper, where there is no
-external cash account). Realized daily loss sums P&L of positions closed
-today against their cost basis.
+The drawdown is measured against ``budget_usd`` — the configured total
+capital. Measuring against currently-open cost basis instead makes the gate
+*more* sensitive as the book shrinks, which is exactly backwards. Realized
+daily loss sums P&L of positions closed today, also normalized to budget.
+
+Paired-cohort theses own both a long and short leg under the same
+``thesis_id``. Their cost-basis is netted (``abs(long_notional - short_notional)``)
+so a $5k long + $5k short doesn't double-count as $10k of risk.
 """
 
 from __future__ import annotations
@@ -31,44 +35,76 @@ class DrawdownState:
     gate_reason: str | None = None
 
 
+def _net_paired_cost_basis(open_positions: list) -> float:
+    """Sum cost-basis with paired legs netted by ``thesis_id``.
+
+    Positions without a ``thesis_id`` (or whose ``thesis_id`` is unique among
+    open positions) contribute their full cost basis. Positions sharing a
+    ``thesis_id`` are netted: ``abs(long_notional - short_notional)``.
+    """
+    by_thesis: dict[str, dict[str, float]] = {}
+    unattached = 0.0
+    for pos in open_positions:
+        cb = pos.entry_price * pos.size
+        tid = getattr(pos, "thesis_id", None)
+        if not tid:
+            unattached += cb
+            continue
+        bucket = by_thesis.setdefault(tid, {"long": 0.0, "short": 0.0})
+        side_value = getattr(pos.side, "value", pos.side)
+        if side_value == "short":
+            bucket["short"] += cb
+        else:
+            bucket["long"] += cb
+    netted = unattached
+    for bucket in by_thesis.values():
+        netted += abs(bucket["long"] - bucket["short"])
+    return netted
+
+
 def compute_drawdown(
     *,
     open_positions: list,
     closed_today: list,
     price_provider,
+    budget_usd: float,
 ) -> DrawdownState:
     """Compute portfolio drawdown state from raw positions + a price provider.
 
     Pure function — does not gate. Use ``check_kill_switch`` to apply config thresholds.
+
+    Drawdown percentages are normalized to ``budget_usd`` (the configured
+    total capital), not to currently-open cost basis. This keeps the gate's
+    sensitivity tied to the size of the book the operator has committed to,
+    not to whatever's currently deployed.
     """
-    cost_basis = 0.0
+    gross_cost_basis = 0.0
     market_value = 0.0
     for pos in open_positions:
         cb = pos.entry_price * pos.size
         mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
         mv = mark * pos.size
-        cost_basis += cb
+        gross_cost_basis += cb
         if getattr(pos.side, "value", pos.side) == "short":
             # Short P&L flips sign — market value contributes inversely.
             market_value += cb + (cb - mv)
         else:
             market_value += mv
 
-    unrealized_pnl = market_value - cost_basis
-    unrealized_dd_pct = (unrealized_pnl / cost_basis * 100.0) if cost_basis > 0 else 0.0
+    # Netted cost basis is what we display; the budget is what we divide by.
+    netted_cost_basis = _net_paired_cost_basis(open_positions)
+
+    unrealized_pnl = market_value - gross_cost_basis
+    unrealized_dd_pct = (unrealized_pnl / budget_usd * 100.0) if budget_usd > 0 else 0.0
 
     realized_today = 0.0
-    realized_cost_basis = 0.0
     for pos in closed_today:
         pnl = pos.pnl if pos.pnl is not None else 0.0
         realized_today += pnl
-        realized_cost_basis += pos.entry_price * pos.size
-    realized_pct = (
-        realized_today / realized_cost_basis * 100.0 if realized_cost_basis > 0 else 0.0
-    )
+    realized_pct = (realized_today / budget_usd * 100.0) if budget_usd > 0 else 0.0
 
     return DrawdownState(
-        open_cost_basis_usd=cost_basis,
+        open_cost_basis_usd=netted_cost_basis,
         open_market_value_usd=market_value,
         unrealized_pnl_usd=unrealized_pnl,
         unrealized_drawdown_pct=unrealized_dd_pct,

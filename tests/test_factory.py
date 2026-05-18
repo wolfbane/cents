@@ -654,6 +654,62 @@ class TestDryRun:
         assert any(p["symbol"] == "A" for p in proposals)
 
 
+class TestLiquidityGateSeesSizedNotional:
+    """The liquidity gate must see the actual vol-scaled position size, not
+    the equal-dollar fiction. A tiny vol-scaled position on an illiquid name
+    should pass a gate that the equal-dollar size would fail.
+    """
+
+    def test_vol_scaled_tiny_position_passes_gate(self, factory_db):
+        from datetime import datetime as _dt, timedelta as _td
+
+        from cents.data.providers import PriceBar, PriceHistory
+
+        # Equal-dollar would be $100k / 10 = $10k. Required ADV at 5x = $50k.
+        # ADV in the stub is ~$30k → equal-dollar gate FAILS.
+        # Vol-scaled (huge annualized vol) collapses sized notional to <$1k
+        # → required ADV < $5k. Gate PASSES.
+        class _Provider:
+            def get_latest_price(self, symbol):
+                return 100.0
+
+            def get_history(self, symbol, days):
+                base = _dt.now()
+                bars = []
+                price = 100.0
+                # 40 bars with ~10% daily swings → enormous annualized vol →
+                # vol-scaled sizing collapses to far below equal-dollar.
+                for i in range(40):
+                    price = price * (1.10 if i % 2 == 0 else 1 / 1.10)
+                    bars.append(PriceBar(
+                        timestamp=base - _td(days=40 - i),
+                        open=price, high=price * 1.01, low=price * 0.99,
+                        close=price, volume=300,  # ADV ≈ $30k (below pre-fix req)
+                    ))
+                return PriceHistory(symbol=symbol, bars=bars)
+
+        _seed_universe(["ILLIQ"])
+        engine = FactoryEngine(
+            config=_config(
+                entry_threshold=1.0,
+                cohort_mode="directional_only",
+                budget_usd=100_000.0,
+                target_positions=10,
+                sizing_mode="vol_scaled",
+                target_vol_pct_per_position=0.5,
+                max_position_pct=5.0,
+                min_adv_multiple=5.0,  # require ADV >= 5x sized notional
+                liquidity_lookback_days=20,
+            ),
+            orchestrator=_orchestrator({"ILLIQ": 7.0}),
+            price_provider=_Provider(),
+        )
+        run = engine.run()
+        # Pre-fix this would have been gated out (sized vs $10k equal-dollar).
+        # Post-fix the actual sized notional dwarfs the ADV requirement.
+        assert run.theses_opened == 1, run.summary_json
+
+
 class TestSkipHeldSymbols:
     def test_does_not_reopen_symbol_already_open(self, factory_db):
         _seed_universe(["AAPL"])

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,12 +11,13 @@ import pytest
 from click.testing import CliRunner
 
 from cents.agents.base import make_provenance
+from cents.agents.event import EventAgent
 from cents.agents.sentiment import SentimentAgent, clear_sentiment_cache
 from cents.cli import cli
-from cents.db import EvidenceRepository, LLMUsageRepository
+from cents.db import AlertRepository, EventRepository, EvidenceRepository, LLMUsageRepository, ThesisRepository
 from cents.db.schema import SCHEMA, _migrate_schema
 from cents.llm_usage import blob_path_for, persist_call_blob
-from cents.models import Evidence, EvidenceType, LLMUsage
+from cents.models import Event, EventPolarity, Evidence, EvidenceType, LLMUsage
 
 
 # --- make_provenance --------------------------------------------------------
@@ -305,3 +306,197 @@ class TestBlobPathHelpers:
         p = blob_path_for("abc123", when=when)
         assert "20260517" in str(p)
         assert p.name == "abc123.json.gz"
+
+
+# --- End-to-end: producer wiring through to persisted Evidence rows --------
+#
+# These tests cover the second-round finding that the provenance pipeline was
+# built but disconnected — `create_evidence(...)` had no `provenance` param,
+# Sentiment was discarding the dict as `_provenance`, and EventAgent put it on
+# `event.metadata["llm_provenance"]` instead of the Evidence row. After the
+# fix, end-to-end runs against mocked Anthropic responses must persist
+# Evidence rows with non-null provenance reachable via `cents evidence trace`.
+
+
+def _mock_anthropic_response(text: str, model: str = "claude-haiku-4-5"):
+    """Minimal anthropic Response stand-in matching what record_llm_usage reads."""
+
+    class _Content:
+        def __init__(self, t):
+            self.text = t
+
+    class _Response:
+        pass
+
+    r = _Response()
+    r.model = model
+    r.content = [_Content(text)]
+    r.usage = SimpleNamespace(
+        input_tokens=100,
+        output_tokens=20,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
+    return r
+
+
+class TestSentimentAgentEndToEndProvenance:
+    def setup_method(self):
+        clear_sentiment_cache()
+
+    def test_persisted_evidence_carries_provenance_and_trace_recovers_call(
+        self, db_conn, monkeypatch, tmp_path
+    ):
+        """SentimentAgent _analyze_articles must persist Evidence with full provenance,
+        and `cents evidence trace <id>` must reconstruct the prompt + output."""
+        # Wire repositories at the in-memory DB.
+        monkeypatch.setattr(
+            "cents.llm_usage.LLMUsageRepository", lambda: LLMUsageRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.db.repository.EvidenceRepository", lambda: EvidenceRepository(db_conn)
+        )
+        # Point the blob store at a per-test tmp dir.
+        blob_root = tmp_path / "llm_calls"
+        monkeypatch.setenv("CENTS_LLM_BLOB_DIR", str(blob_root))
+
+        mock_client = MagicMock()
+        # filter_articles call + per-article score call — return same shape; the
+        # filter response is parsed for numeric indices, the score is JSON.
+        mock_client.messages.create.side_effect = [
+            _mock_anthropic_response("0"),  # filter: pick index 0
+            _mock_anthropic_response('{"score": 0.8, "reasoning": "bullish"}'),
+        ]
+
+        monkeypatch.setattr(
+            "cents.agents.sentiment.get_settings",
+            lambda: SimpleNamespace(
+                news_api_key="x", anthropic_api_key="y", default_api_timeout=10
+            ),
+        )
+
+        agent = SentimentAgent(anthropic_client=mock_client)
+        # Force evidence persistence into our test DB.
+        agent._evidence_repo = EvidenceRepository(db_conn)
+
+        articles = [
+            {
+                "title": "NVDA earnings beat",
+                "description": "Strong growth",
+                "url": "https://example.com/p1",
+                "source": {"name": "TestWire"},
+            }
+        ]
+        result = agent._analyze_articles(articles, "NVDA", None, None)
+        assert result.evidence, "expected at least one Evidence row"
+
+        # Persist the produced evidence as the agent's research() would.
+        agent.save_evidence(result.evidence)
+
+        # Round-trip from the DB — provenance must be non-null with all 5 fields.
+        repo = EvidenceRepository(db_conn)
+        for ev in result.evidence:
+            stored = repo.get(ev.id)
+            assert stored is not None
+            assert stored.provenance is not None, "Evidence row missing provenance"
+            for key in (
+                "llm_call_id",
+                "model_snapshot",
+                "prompt_sha256",
+                "input_sha256",
+                "output_sha256",
+            ):
+                assert stored.provenance.get(key), f"missing {key} on provenance"
+            # The blob persisted by _score_with_llm must be loadable by call_id.
+            from cents.llm_usage import load_call_blob
+
+            blob = load_call_blob(stored.provenance["llm_call_id"])
+            assert blob is not None
+            assert "score" in blob.get("output", "")
+            # Prompt body must include the per-call delimiter (the nonce keeps
+            # an attacker from forging a closing tag inside the article).
+            assert "<article-" in blob.get("prompt", "")
+
+
+class TestEventAgentEndToEndProvenance:
+    def test_event_research_evidence_carries_tagging_call_provenance(
+        self, db_conn, monkeypatch, tmp_path
+    ):
+        """EventAgent.research() Evidence rows must carry the LLM provenance that
+        was stamped when the underlying Event was tagged."""
+        monkeypatch.setattr(
+            "cents.llm_usage.LLMUsageRepository", lambda: LLMUsageRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.agents.event.EventRepository", lambda: EventRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.agents.event.ThesisRepository", lambda: ThesisRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.agents.event.AlertRepository", lambda: AlertRepository(db_conn)
+        )
+        blob_root = tmp_path / "llm_calls"
+        monkeypatch.setenv("CENTS_LLM_BLOB_DIR", str(blob_root))
+
+        # Tag-event LLM call returns one controlled-vocab tag.
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response(
+            '{"tags": ["tariffs.china"], "polarity": "bearish", '
+            '"confidence": 0.9, "affected_sectors": ["semis"]}'
+        )
+
+        agent = EventAgent(anthropic_client=mock_client)
+        # Build an event by hand and tag it (mimics what refresh() does).
+        ev = Event(
+            source="federal_register",
+            source_id="doc-1",
+            event_type="executive_order",
+            title="EO on china tariffs",
+            summary="placeholder",
+            url="https://example.gov/doc-1",
+            occurred_at=datetime.now() - timedelta(days=1),
+        )
+        tagged = agent._tag_event(ev)
+        # Sanity: provenance was stamped on event.metadata at tag time.
+        assert isinstance(tagged.metadata.get("llm_provenance"), dict)
+        EventRepository(db_conn).create(tagged)
+
+        # Research path: the Evidence row built from this Event should pick
+        # up that provenance.
+        from cents.models import Thesis
+
+        thesis = Thesis(
+            title="Hedge china exposure",
+            hypothesis="...",
+            symbol="NVDA",
+            premise_tags=["tariffs.china"],
+        )
+        # Persist the thesis so the Evidence row's FK doesn't trip.
+        ThesisRepository(db_conn).create(thesis)
+        result = agent.research("NVDA", thesis=thesis)
+        assert result.evidence, "expected at least one Evidence row"
+        for ev_row in result.evidence:
+            assert ev_row.provenance is not None
+            for key in (
+                "llm_call_id",
+                "model_snapshot",
+                "prompt_sha256",
+                "input_sha256",
+                "output_sha256",
+            ):
+                assert ev_row.provenance.get(key), f"missing {key} on provenance"
+
+        # Persist & confirm trace CLI can recover the original prompt/output.
+        repo = EvidenceRepository(db_conn)
+        for e in result.evidence:
+            repo.create(e)
+            stored = repo.get(e.id)
+            assert stored.provenance is not None
+            from cents.llm_usage import load_call_blob
+
+            blob = load_call_blob(stored.provenance["llm_call_id"])
+            assert blob is not None
+            assert "tariffs.china" in blob.get("output", "")
+            # The wrapped event body must use the nonce-tagged delimiters.
+            assert "<event-" in blob.get("prompt", "")

@@ -518,9 +518,13 @@ class TestPromptInjectionHardening:
         assert kwargs["model"] != "claude-haiku-4-5"
         assert "untrusted" in kwargs["system"].lower()
         user_content = kwargs["messages"][0]["content"]
-        # Injection payload lives INSIDE the <article> delimiters.
-        article_open = user_content.index("<article>")
-        article_close = user_content.index("</article>")
+        # Injection payload lives INSIDE the nonce-tagged <article-XXXX> delimiters.
+        import re as _re
+        opens = list(_re.finditer(r"<article-[0-9a-f]{8}>", user_content))
+        closes = list(_re.finditer(r"</article-[0-9a-f]{8}>", user_content))
+        assert opens and closes
+        article_open = opens[0].start()
+        article_close = closes[0].start()
         injection_idx = user_content.index("Ignore previous instructions")
         assert article_open < injection_idx < article_close
 
@@ -546,5 +550,6 @@ class TestPromptInjectionHardening:
         assert kwargs["temperature"] == 0.0
         assert "untrusted" in kwargs["system"].lower()
         user_content = kwargs["messages"][0]["content"]
-        assert "<article>" in user_content
-        assert "</article>" in user_content
+        import re as _re
+        assert _re.search(r"<article-[0-9a-f]{8}>", user_content)
+        assert _re.search(r"</article-[0-9a-f]{8}>", user_content)

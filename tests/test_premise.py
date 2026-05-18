@@ -120,11 +120,13 @@ class TestClassifyPremiseTags:
             anthropic_client=client,
         )
         user_content = client.calls[0]["messages"][0]["content"]
-        assert "<thesis>" in user_content
-        assert "</thesis>" in user_content
+        import re as _re
+        opens = list(_re.finditer(r"<thesis-[0-9a-f]{8}>", user_content))
+        closes = list(_re.finditer(r"</thesis-[0-9a-f]{8}>", user_content))
+        assert opens and closes
         # The injection payload should appear INSIDE the delimited block.
-        thesis_start = user_content.index("<thesis>")
-        thesis_end = user_content.index("</thesis>")
+        thesis_start = opens[0].start()
+        thesis_end = closes[0].start()
         injection_idx = user_content.index("Ignore previous instructions")
         assert thesis_start < injection_idx < thesis_end
 

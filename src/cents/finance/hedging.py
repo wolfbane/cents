@@ -25,10 +25,13 @@ def estimate_beta(
     hedge_closes: list[float],
     *,
     lookback: int = 60,
+    min_r_squared: float | None = None,
 ) -> float | None:
     """OLS beta of log returns: underlying ~ hedge over the last ``lookback`` bars.
 
-    Returns None when fewer than lookback+1 paired bars are available.
+    Returns None when fewer than lookback+1 paired bars are available, when
+    the regression is degenerate, or when ``min_r_squared`` is supplied and
+    the fit R² falls below it (the relationship is too weak to hedge with).
     """
     n = min(len(underlying_closes), len(hedge_closes))
     if n < lookback + 1:
@@ -46,24 +49,37 @@ def estimate_beta(
     mu_h = mean(hr)
     mu_u = mean(ur)
     cov = sum((x - mu_h) * (y - mu_u) for x, y in zip(hr, ur)) / len(ur)
-    var = sum((x - mu_h) ** 2 for x in hr) / len(hr)
-    if var <= 0:
+    var_h = sum((x - mu_h) ** 2 for x in hr) / len(hr)
+    var_u = sum((y - mu_u) ** 2 for y in ur) / len(ur)
+    if var_h <= 0:
         return None
-    return cov / var
+    beta = cov / var_h
+    if min_r_squared is not None:
+        # R² of underlying-on-hedge regression = corr² = cov² / (var_h * var_u).
+        # When the underlying is itself flat (var_u == 0), the regression
+        # carries no information — treat as failing the gate.
+        if var_u <= 0:
+            return None
+        r_squared = (cov * cov) / (var_h * var_u)
+        if r_squared < min_r_squared:
+            return None
+    return beta
 
 
 def beta_match_ratio(
     *,
     beta: float | None,
     default_beta: float,
-    min_beta: float = 0.25,
-    max_beta: float = 3.0,
+    min_beta: float = 0.10,
+    max_beta: float = 5.0,
 ) -> float:
     """Return a sanitized hedge-ratio multiplier from an estimated beta.
 
     Clamps to [min_beta, max_beta] to bound the hedge-leg notional. Falls back
-    to ``default_beta`` when beta is None. The clamp is deliberately wide —
-    too aggressive a clamp would just reintroduce the dollar-matched bug.
+    to ``default_beta`` when beta is None. The defaults are deliberately wide
+    — a tight clamp re-introduces dollar-mismatch on low-correlation single
+    names (forcing fake net-short hedge) and leaves residual net-long beta on
+    high-vol names.
     """
     if beta is None or not math.isfinite(beta):
         return max(min_beta, min(max_beta, default_beta))

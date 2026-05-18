@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
@@ -100,6 +101,29 @@ def make_provenance(
         "input_sha256": _sha256(input_text),
         "output_sha256": _sha256(output_text),
     }
+
+
+def safe_delimit(text: str, tag: str) -> tuple[str, str, str]:
+    """Wrap untrusted ``text`` in delimiters that include a per-call nonce.
+
+    Prompt-injection defence in two layers:
+
+    1. **Nonce**: open/close tags become ``<{tag}-{nonce}>`` / ``</{tag}-{nonce}>``
+       where ``nonce`` is freshly generated each call via
+       :func:`secrets.token_hex`. An attacker writing literal ``</article>``
+       in a news headline cannot guess the nonce, so the closing tag the
+       model sees still belongs to the wrapper, not the payload.
+    2. **Escaping**: any literal ``<{tag}`` or ``</{tag}`` substring in the
+       text (case-insensitive) is replaced with ``[redacted-delim]`` before
+       wrapping. This neutralises naive `"</article>\\n\\nHuman: ..."` payloads
+       even against a model that ignores the nonce.
+
+    Returns ``(opening_tag, escaped_text, closing_tag)`` so call sites can
+    assemble the wrapped block however they want (with or without newlines).
+    """
+    nonce = secrets.token_hex(4)  # 8 hex chars
+    safe_text = re.sub(rf"</?{re.escape(tag)}", "[redacted-delim]", text or "", flags=re.IGNORECASE)
+    return f"<{tag}-{nonce}>", safe_text, f"</{tag}-{nonce}>"
 
 
 @dataclass
@@ -205,8 +229,14 @@ class BaseAgent(ABC):
         dimension: ThesisDimension | None = None,
         metadata: dict | None = None,
         symbol: str | None = None,
+        provenance: dict | None = None,
     ) -> Evidence:
-        """Helper to create evidence with this agent's name."""
+        """Helper to create evidence with this agent's name.
+
+        Pass ``provenance`` (from :func:`make_provenance`) for evidence rows
+        produced by an LLM call so ``cents evidence trace <id>`` can later
+        reconstruct the originating prompt + output from the blob store.
+        """
         return Evidence(
             thesis_id=thesis_id,
             symbol=symbol,
@@ -217,6 +247,7 @@ class BaseAgent(ABC):
             confidence=confidence,
             dimension=dimension,
             metadata=metadata or {},
+            provenance=provenance,
         )
 
     def _error_result(self, symbol: str, error: Exception) -> AgentResult:

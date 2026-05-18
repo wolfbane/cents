@@ -10,13 +10,20 @@ A research experiment in agent-orchestrated investment hypothesis tracking. **No
 > ⚠️ **Research tool, not an investing tool — and not financial advice.**
 > Cents is an open-source experiment in multi-agent LLM orchestration applied
 > to investment research. It is **not** an investment adviser, broker, or
-> recommendation engine. Outputs (conviction scores, premise tags, BUY/SELL/HOLD
-> strings) are model-generated, uncalibrated, and may be wrong. There is no KYC,
-> no suitability check, no portfolio risk controls, no slippage/borrow modeling,
-> no reconciliation or audit trail. **Real-money trading is technically possible
-> but explicitly out of scope** — the autonomous loop is hard-coded to paper.
-> If you point this at a live account, you are doing so against the documented
-> intent of the project. Read the [scope statement](https://dollars-and-cents.ai/scope/) before going further.
+> recommendation engine. Outputs (conviction scores, premise tags, model
+> signals) are model-generated, uncalibrated, and may be wrong. There is no
+> KYC, no suitability check, no portfolio risk controls, no slippage/borrow
+> modeling, no reconciliation or audit trail. **Real-money trading is
+> technically possible but explicitly out of scope** — the autonomous loop is
+> hard-coded to paper. If you point this at a live account, you are doing so
+> against the documented intent of the project. Read the
+> [scope statement](https://dollars-and-cents.ai/scope/) before going further.
+>
+> The authors and contributors of this software do not provide investment
+> advice, have no advisory relationship with any user, accept no fiduciary
+> duty, and make no warranty as to the accuracy, completeness, or
+> suitability of any output for any purpose. See the [LICENSE](LICENSE)
+> rider for the full disclaimer.
 
 ## What is Cents?
 
@@ -71,7 +78,7 @@ cents alert list
 | `alert` | View and manage alerts |
 | `position` | Track positions linked to theses |
 | `outcome` | Record and review investment outcomes |
-| `recommend` | Generate buy/sell/hold recommendations from thesis rules |
+| `recommend` | Emit model signals (bullish/bearish/neutral) for open theses |
 | `portfolio` | Manage portfolios (separate database files) |
 | `broker` | Alpaca broker integration (positions, orders) |
 | `backtest` | Run and analyze agent backtests |
