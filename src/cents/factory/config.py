@@ -28,7 +28,7 @@ max_per_premise_tag = 2        # max open theses sharing any single premise tag 
 
 # Vol-scaled sizing (v0.10). When enabled, replaces equal-dollar sizing with
 # inverse-vol scaling toward a target per-position daily $-vol fraction.
-sizing_mode = "vol_scaled"     # "vol_scaled" (default) or "equal_dollar"
+sizing_mode = "equal_dollar"   # "equal_dollar" (research default) or "vol_scaled"
 target_vol_pct_per_position = 0.5   # per-position annual $-vol as % of budget
 max_position_pct = 5.0         # hard cap on single-position dollar weight as % of budget
 vol_lookback_days = 20
@@ -42,7 +42,7 @@ borrow_rate_pa_pct = 3.0            # synthetic annual borrow rate applied to sh
 
 # Paired-hedge beta matching (v0.10). When enabled, hedge leg notional is
 # scaled by a 60-day historical beta vs the hedge ETF rather than dollar-matched.
-beta_match_hedge = true
+beta_match_hedge = false       # equal-dollar hedge by default (research mode)
 default_beta = 1.0
 beta_lookback_days = 60
 beta_min = 0.10
@@ -75,7 +75,7 @@ class FactoryConfig:
     max_new_per_run: int = 5
     max_per_premise_tag: int = 2
     # Sizing (v0.10).
-    sizing_mode: str = "vol_scaled"
+    sizing_mode: str = "equal_dollar"
     target_vol_pct_per_position: float = 0.5
     max_position_pct: float = 5.0
     vol_lookback_days: int = 20
@@ -85,7 +85,7 @@ class FactoryConfig:
     gap_slippage_bps: float = 25.0
     borrow_rate_pa_pct: float = 3.0
     # Hedging (v0.10).
-    beta_match_hedge: bool = True
+    beta_match_hedge: bool = False
     default_beta: float = 1.0
     beta_lookback_days: int = 60
     beta_min: float = 0.10

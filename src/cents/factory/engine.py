@@ -600,38 +600,13 @@ class FactoryEngine:
         orchestrator = self._make_orchestrator()
         price_provider = self._make_price_provider()
 
-        # ---- portfolio-level kill switch (cents-59r) ---------------------
-        # Drawdown and daily-loss caps are evaluated once per open phase.
-        # If breached, we skip the entire phase (no new opens) and emit an
-        # alert. Closes still happen in the prior phase regardless.
-        all_open_positions = self.position_repo.list(status=PositionStatus.OPEN)
-        factory_thesis_ids = {t.id for t in open_theses}
-        factory_open_positions = [
-            p for p in all_open_positions if p.thesis_id in factory_thesis_ids
-        ]
-        closed_today = self._positions_closed_today()
-        dd_state = compute_drawdown(
-            open_positions=factory_open_positions,
-            closed_today=closed_today,
-            price_provider=price_provider,
-            budget_usd=cfg.budget_usd,
-        )
-        dd_state = check_kill_switch(
-            dd_state,
-            max_portfolio_drawdown_pct=cfg.max_portfolio_drawdown_pct,
-            max_daily_loss_pct=cfg.max_daily_loss_pct,
-        )
-        if not dd_state.gate_open and not dry_run:
-            self._emit_kill_switch_alert(dd_state)
-            logger.warning("Factory kill switch tripped: %s", dd_state.gate_reason)
-            return {
-                "theses_opened": 0,
-                "positions_opened": 0,
-                "preemptions": 0,
-                "preempted_closed": 0,
-                "preempted_positions_closed": 0,
-                "kill_switch": dd_state.gate_reason,
-            }
+        # Note (research-mode): we intentionally do NOT gate the open phase
+        # on portfolio drawdown. The point of cents is to *record* what
+        # happens to a labeled outcomes dataset, not to halt trading at
+        # arbitrary thresholds. compute_drawdown / check_kill_switch in
+        # cents/finance/portfolio.py remain available as analytic utilities
+        # for callers who want to study drawdown behaviour, but the engine
+        # itself never refuses to open on their account.
 
         for symbol in universe_symbols:
             if opened_this_run >= cfg.max_new_per_run:
@@ -722,24 +697,10 @@ class FactoryEngine:
             # Liquidity gate sees the actual sized notional (primary + hedge
             # in paired mode) — not the equal-dollar fiction. We skip the
             # gate entirely when history isn't supported (test stubs) or
-            # when sizing collapsed to zero (no price).
-            if (
-                history_supported
-                and cfg.min_adv_multiple > 0
-                and primary_notional > 0
-            ):
-                gate_notional = primary_notional + hedge_notional_estimate
-                liq = passes_liquidity_gate(
-                    symbol=symbol,
-                    position_size_usd=gate_notional,
-                    closes=primary_closes,
-                    volumes=primary_volumes,
-                    adv_multiple=cfg.min_adv_multiple,
-                    lookback=cfg.liquidity_lookback_days,
-                )
-                if not liq.passes:
-                    logger.debug("Liquidity gate failed for %s: %s", symbol, liq.reason)
-                    continue
+            # Research-mode: we don't skip symbols on liquidity. ADV checks
+            # in cents/finance/liquidity.py remain available as utilities for
+            # callers who want to study illiquidity as a feature of the
+            # outcomes dataset, but the engine doesn't filter on them.
             current_notional = self._current_notional(price_provider)
 
             preemption_target: Thesis | None = None
@@ -1008,23 +969,10 @@ class FactoryEngine:
         )
         self.thesis_repo.create(thesis)
 
-        # Bug B (PM/Risk r3): Kelly is a GATE, not a sizing multiplier.
-        # Vol-scaled shares pass through unchanged when the calibrated
-        # probability clears the payoff-adjusted break-even + margin.
-        # We've already persisted the thesis with calibrated_p_correct so
-        # the gating decision is auditable; we just won't open positions.
-        if not _calibration_passes_gate(
-            calibrated_p,
-            target_pct=cfg.default_target_pct,
-            stop_pct=cfg.default_stop_pct,
-        ):
-            logger.debug(
-                "Skipping %s positions: calibrated_p=%.3f below break-even+margin "
-                "(target=%.1f stop=%.1f)",
-                symbol, calibrated_p or 0.0,
-                cfg.default_target_pct, cfg.default_stop_pct,
-            )
-            return {"theses_opened": 1, "positions_opened": 0}
+        # Research-mode: calibrated_p_correct is RECORDED on the thesis row
+        # (above) so analytics can stratify outcomes by predicted edge, but
+        # we never skip an open on it. The cohort table will show what
+        # happened at every p value, which is the research question.
 
         positions_opened = 0
         # ---- Primary leg (cents-wiz vol-scaled sizing + cents-5s7 open cost) ----

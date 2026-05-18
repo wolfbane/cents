@@ -38,11 +38,20 @@ audit-grade.
 - **Not a fiduciary product.** No KYC, no suitability check, no risk
   tolerance intake, no investor profiling. The system will happily
   open paper shorts on a retiree's behalf if asked.
-- **Not a trading system.** Position sizing is equal-dollar. There is
-  no portfolio-level kill switch, no max-drawdown gate, no
-  vol-targeting, no factor or correlation cap, no slippage or
-  borrow-cost modeling, no intraday stop monitoring. The "paired
-  hedge" is dollar-matched, not beta-matched.
+- **Not a trading system.** Position sizing defaults to equal-dollar.
+  There is no portfolio-level kill switch, no max-drawdown gate, no
+  vol-targeting (off by default; opt-in via `sizing_mode = "vol_scaled"`),
+  no factor or correlation cap, no liquidity or borrow filtering, no
+  intraday stop monitoring. The "paired hedge" is dollar-matched, not
+  beta-matched (`beta_match_hedge` defaults to false).
+
+  Vol-scaled sizing, beta-matched hedging, transaction cost modeling,
+  and portfolio drawdown computation are all available as **utilities**
+  in `cents/finance/`, but the engine deliberately does not use them as
+  gating decisions in the default research configuration. They exist so
+  callers writing their own analytics can study these dimensions of the
+  outcomes dataset; the engine itself records what happened, it doesn't
+  filter what gets to happen.
 - **Not a fund accounting system.** SQLite at `~/.cents/data/cents.db`
   is a single-user file with no encryption, no WORM-compliant audit
   trail, no broker reconciliation, no lot accounting, no wash-sale

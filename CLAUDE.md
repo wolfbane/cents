@@ -88,20 +88,31 @@ cents is structured as **four cooperating layers** + a transversal **finance sub
 4. Autonomous loop + analytics
    FactoryEngine (cents/factory/engine.py) walks a universe, runs the
    close phase (target/stop/expiry/INVALIDATED/PREEMPTED), then open phase
-   (drawdown kill-switch → liquidity gate → borrow gate → vol-scaled
-   sizing → premise classification → concentration cap → budget /
-   conviction-weighted preemption → beta-matched hedge leg). Records
-   discovery_source + regime_snapshot + calibrated_p_correct +
-   premise_direction on every thesis.
+   (entry threshold → premise classification (with direction) → per-tag
+   concentration cap → budget / conviction-weighted preemption → open).
+   Records discovery_source + regime_snapshot + calibrated_p_correct +
+   premise_direction on every thesis. **The engine records, it does not
+   gate** — drawdown, liquidity, borrow, and calibrated-p are computed
+   and stored but never block an open. The point is the labeled outcomes
+   dataset, not trading controls.
    cents factory analyze --by {cohort,discovery,regime} stratifies outcomes.
 
-Transversal: cents/finance/
-   - sizing.py: vol_scaled_shares (inverse-vol toward target_vol_pct_per_position)
-   - costs.py: apply_open_cost / apply_close_cost (commission + slippage + short borrow + gap penalty)
-   - hedging.py: estimate_beta + beta_match_ratio (60d OLS, R² gate, clamped)
-   - liquidity.py: passes_liquidity_gate (median 20d $-ADV) + passes_borrow_gate
-   - portfolio.py: compute_drawdown + check_kill_switch (budget_usd denominator)
-   - calibration.py: CalibrationModel + fit_calibration + Kelly fraction sizing
+Transversal: cents/finance/ — UTILITIES, not gates
+   These modules exist so analytics can stratify outcomes and so callers
+   writing their own pipelines can opt into trading-shaped behaviour.
+   The default engine config does not use them as gating decisions.
+   - sizing.py: vol_scaled_shares (opt-in via sizing_mode="vol_scaled";
+     default is equal_dollar)
+   - costs.py: apply_open_cost / apply_close_cost — applied so cohort
+     numbers are net of realistic frictions (research honesty, not gating)
+   - hedging.py: estimate_beta + beta_match_ratio — opt-in via
+     beta_match_hedge=true; default is equal-dollar hedge match
+   - liquidity.py: passes_liquidity_gate, passes_borrow_gate — utilities;
+     the engine never skips on them
+   - portfolio.py: compute_drawdown + check_kill_switch — utilities;
+     the engine never halts on them
+   - calibration.py: CalibrationModel + fit_calibration — used to record
+     calibrated_p_correct on every thesis; engine never skips on it
 ```
 
 ### Things that aren't obvious from a single file
@@ -111,13 +122,14 @@ Transversal: cents/finance/
 - **Premise invalidation is polarity-aware.** `Event.matches_premise(tags, direction)` requires (a) tag overlap AND (b) event polarity opposite the thesis's `premise_direction` on a shared tag. A bullish event on a "positive"-direction thesis does NOT invalidate it (it confirms). Neutral/unclear polarities never invalidate. Empty `premise_direction` falls back to legacy unsigned intersection for back-compat.
 - **`classify_premise_tags` returns a 2-tuple `(tags, direction)`** — `direction` is `{tag: "positive"|"negative"}`. The factory engine uses `_coerce_premise_classification` to accept legacy bare-list stubs from older tests.
 - **A neutral-cohort thesis owns BOTH legs** as two `Position` rows on the same `thesis_id` (one LONG on `symbol`, one SHORT on `hedge_symbol`). It is NOT two linked theses. Closing the thesis closes both legs naturally.
-- **The hedge leg is beta-matched, not dollar-matched.** `cents/finance/hedging.py:estimate_beta` does 60-day OLS of log returns vs the hedge ETF (default `XL*` from sector_map; falls back to SPY). Beta is clamped to `[beta_min, beta_max]` (default `[0.10, 5.0]`) and the R² gate (`beta_min_r_squared`, default 0.5) returns None when the fit is poor — caller falls back to `default_beta`.
+- **The hedge leg is dollar-matched by default.** `beta_match_hedge=false` in the scaffolded TOML and the FactoryConfig default. When opted in, `cents/finance/hedging.py:estimate_beta` does 60-day OLS of log returns vs the hedge ETF, clamps to `[beta_min, beta_max]` (default `[0.10, 5.0]`), and refuses estimation when R² is below `beta_min_r_squared` (default 0.5) — in which case the engine **skips the hedge leg** rather than silently falling back to dollar-match.
 - **Direction follows signal sign.** Bullish `conviction_delta` opens LONG underlying (+ SHORT hedge in paired mode); bearish opens SHORT underlying (+ LONG hedge). Target/stop semantics flip — short theses' target sits *below* entry, stop above.
-- **`cohort_mode=paired` is the factory default** for measurement reasons (the neutral cohort is the control group for separating skill from regime beta). Both the scaffolded `factory init` config and `FactoryConfig` ship `paired`. Switch to `directional_only` only when you don't want a hedge leg per thesis.
-- **Sizing is vol-scaled, not equal-dollar.** `vol_scaled_shares` targets `target_vol_pct_per_position` (% of `budget_usd`) of annualized $-volatility, capped at `max_position_pct` of budget. When historical vol is unavailable (test stubs / missing data), falls back to equal-dollar via `fallback_position_usd`. **When a calibration model exists**, primary_shares is then multiplied by Kelly fraction `f = 2p - 1` (clamped `[0, 1]`) for `p` in `[0.5, 0.95]`; otherwise passthrough at 1.0.
+- **`cohort_mode=paired` is the factory default** for measurement reasons (the neutral cohort is the control group for separating skill from regime beta). Both the scaffolded `factory init` config and `FactoryConfig` ship `paired`. The hedge leg is dollar-matched by default; flip `beta_match_hedge=true` to opt into beta-matched sizing.
+- **Sizing is equal-dollar by default** — `budget_usd / target_positions` shared between primary and hedge legs. Flip `sizing_mode = "vol_scaled"` to opt into inverse-vol sizing targeting `target_vol_pct_per_position` of annualized $-volatility, capped at `max_position_pct` of budget.
+- **Calibration is RECORDED, never gates an open.** `calibrated_p_correct` lands on every Thesis row when a model exists, but the engine deliberately doesn't skip opens at low p. The point is to study what actually happened at every p value — that's the research question. `cents/finance/calibration.py` is a utility.
 - **`Position.pnl` is NET of costs.** `Position.gross_pnl` is the pre-cost figure. `costs_applied_usd` accumulates commission + slippage + short borrow + gap penalty across both open and close. Cohort analytics should always use `pnl`, not `gross_pnl`.
 - **Stop fills are gap-aware.** When closing on a stop trigger (`ThesisOutcome.INCORRECT`), `realized_exit_price = min/max(mark, stop_price)` (worst-for-position direction) plus `gap_slippage_bps`. Position stores both the signal `exit_price` and the modeled `realized_exit_price`.
-- **The portfolio kill switch normalizes to `budget_usd`, not cost basis.** `compute_drawdown(open_positions, closed_today, price_provider, budget_usd=...)` divides both `unrealized_drawdown_pct` and `realized_loss_today_pct` by budget; paired legs sharing a `thesis_id` are netted via `abs(long_notional - short_notional)` so a $5k long + $5k short doesn't double-count as $10k.
+- **The engine does NOT gate on drawdown, liquidity, or borrow** in the default research configuration. `compute_drawdown` / `passes_liquidity_gate` / `passes_borrow_gate` are utilities in `cents/finance/` for callers writing their own analytics. Research mode records what happened; it doesn't filter what gets to happen.
 - **Live (non-paper) trading is hard-gated.** `AlpacaClient(paper=False)` raises `BrokerError` unless BOTH `CENTS_ALLOW_LIVE_TRADING=1` AND `CENTS_LIVE_TRADING_ACK` matches `LIVE_TRADING_ACK_PHRASE` verbatim (27 words). All factory + CLI broker callers hard-code `paper=True`. See `/scope/` — real-money trading is explicitly out of scope.
 - **LLM call provenance is reproducibility, not audit-grade.** Every Anthropic call writes a gzipped JSONL blob to `~/.cents/data/llm_calls/YYYYMMDD/<call_id>.json.gz` plus a row in `llm_usage`. Evidence rows persist `llm_call_id` + model + 3 SHA256 hashes (prompt/input/output). `cents evidence trace <id>` reconstructs the call. **Files are user-writable** — this is a research log, not Rule 204-2 recordkeeping. See `cents/llm_usage.py:persist_call_blob`.
 - **Pre-flight LLM cost cap.** `cents factory run --max-cost-usd N` and the `max_llm_spend_usd_per_day` config knob are enforced PRE-call via `check_cost_cap` in `cents/llm_usage.py`. Estimate uses a 4-chars/token heuristic on `max_tokens` + message content; raises `CostCapExceeded` before the offending API call is made.
