@@ -35,6 +35,7 @@ export default defineConfig({
           label: "Concepts",
           items: [
             { label: "The factory", link: "/factory/" },
+            { label: "Screeners", link: "/screeners/" },
             { label: "Universes", link: "/universe/" },
             { label: "Cohorts", link: "/cohort/" },
             { label: "Events & invalidation", link: "/events/" },

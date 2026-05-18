@@ -23,6 +23,9 @@ A `Universe` has:
 
 ## Sources
 
+The four sources sit on a spectrum from "you bring everything" to
+"the system populates from external data":
+
 ### `static`
 
 Explicit symbol list. Symbols come from `--symbols A,B,C` or
@@ -57,6 +60,29 @@ handles index reconstitutions on the next `cents universe refresh`.
 cents universe create sp500 --source fmp_index --index sp500
 cents universe refresh sp500   # re-pull constituents
 ```
+
+### `screener`
+
+Runs one of the built-in [screener strategies](/screeners/) (`value`,
+`growth`, `momentum`, `mean_reversion`, `insider_cluster`) against a
+parent universe. The output is the symbols that pass the screen; the
+parent universe is the input set.
+
+```bash
+cents universe create cheap_sp500 --source screener \
+  --strategy value --over sp500
+
+cents universe create momo_watch --source screener \
+  --strategy momentum --over my-watchlist
+
+cents universe refresh cheap_sp500   # re-run the screen
+```
+
+Full-market scans (no `--over`) are gated behind
+`CENTS_SCREENER_ALLOW_FULL_UNIVERSE=1` to prevent accidental
+5,000-symbol queries. The constrained form (`--over <parent>`) is the
+intended default. See [Screeners](/screeners/) for the strategy
+catalog and tuning.
 
 ## CLI
 

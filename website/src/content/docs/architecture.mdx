@@ -136,7 +136,42 @@ flowchart LR
 
 See [Events & premise invalidation](/events/) for the full mechanics.
 
-## The autonomous factory
+## Discovery → factory: the full loop
+
+The factory walks a universe of symbols. Where does that universe come
+from? In v1 it can be supplied four ways — and the most interesting one
+is a [screener](/screeners/), which makes discovery a measurable,
+swappable component instead of a hard-coded list:
+
+```mermaid
+flowchart LR
+  S1[Screener<br/>value / growth / momentum / ...]
+  S2[Index<br/>sp500 / nasdaq / ...]
+  S3[Watchlist<br/>manual]
+  S4[Static list<br/>your basket]
+  U[(Universe)]
+  Factory[cents factory run]
+  T[(Theses<br/>discovery_source = universe.name)]
+
+  S1 --> U
+  S2 --> U
+  S3 --> U
+  S4 --> U
+  U --> Factory
+  Factory --> T
+
+  T -.-> Analyze[factory analyze --by discovery,regime,cohort]
+  Analyze -.->|outcomes ranked by<br/>discovery strategy| S1
+```
+
+The dashed feedback loop is what makes the discovery layer *learnable*.
+Every thesis records the universe (and hence the screener) that
+produced its symbol; `cents factory analyze --by discovery` later
+stratifies outcomes by that source. After enough closes, the system can
+tell you which discovery strategies actually produce winning theses in
+which regimes.
+
+## The factory loop in detail
 
 The factory walks a universe of symbols, opens paper theses where the
 orchestrator clears the entry threshold (paired with sector-ETF twins

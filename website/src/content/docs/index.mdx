@@ -24,9 +24,10 @@ import AsciinemaPlayer from "../../components/AsciinemaPlayer.astro";
 Cents is a CLI for investors who want to treat investing like a
 hypothesis-testing exercise — write down a thesis, declare which regime
 variables it depends on, and let the system warn you the moment one of
-those dependencies shifts. Eight specialised research agents gather the
-evidence; an autonomous factory loop can run the whole cycle for you and
-produce a labeled outcomes dataset you can actually learn from.
+those dependencies shifts. Pluggable screeners discover candidate
+universes, eight specialised research agents gather the evidence, and
+an autonomous factory loop runs the whole cycle for you — producing a
+labeled outcomes dataset you can actually learn from.
 
 ```bash
 git clone https://github.com/wolfbane/cents.git
@@ -60,6 +61,13 @@ cd cents && pip install .
     twins in paired mode), closes positions on target / stop / horizon /
     premise-invalidation, and writes a structured run log with token
     cost per run.
+  </Card>
+  <Card title="Pluggable screeners" icon="seti:search">
+    Five built-in discovery strategies — value, growth, momentum,
+    mean-reversion, insider-cluster — that turn a parent universe into
+    a candidate list the factory walks. Every thesis records which
+    screener produced it, so `cents factory analyze --by discovery`
+    surfaces which discovery strategy wins in which regime.
   </Card>
   <Card title="Accuracy-tracking" icon="approve-check">
     Outcomes are recorded with a closure _reason_ —

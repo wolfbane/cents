@@ -1,0 +1,179 @@
+---
+title: Screeners
+description: The discovery layer — pluggable strategies that turn the whole market into a candidate universe.
+---
+
+A **screener** is a filtering strategy that turns the broad market into a
+short list of candidate symbols based on numerical criteria — financial
+ratios, price patterns, insider activity. It's the **discovery layer** of
+cents: where the candidate universe comes from before the orchestrator
+evaluates any of it.
+
+This page covers the five starter strategies, how to use them, and the
+operating model. For the philosophical backdrop — why the discovery
+layer is a measurable, swappable component rather than a hard-coded
+worldview — see [Operating principles](/principles/).
+
+## Why a screener matters
+
+Without a screener, your universe is whichever symbols you happen to
+have heard of — a tiny biased sample of the ~5,000 US-listed stocks.
+Big-cap retail-attention names (AAPL, NVDA, TSLA) dominate; everything
+else is invisible. A screener lets the system systematically discover
+names you'd never have thought to research, *that match a hypothesis you
+can articulate*.
+
+The classic flow is:
+
+1. **Hypothesis** — "oversold quality companies bounce"
+2. **Screen** — `RSI(14) < 30 AND positive TTM ROE`
+3. **Output** — 5 to 15 names you've never heard of
+4. **Research** — what the orchestrator does for each candidate
+5. **Position** — what the factory opens for the qualifying ones
+
+Without step 2, you can't handle the volume — so you ignore most of the
+market. With it, the system can comb the universe systematically.
+
+## The five starter strategies
+
+Each strategy maps to a recognizable school of stock-picking with
+decades of academic literature behind it. Default thresholds are
+intentionally selective — you'll see what each one returns and tune
+from there.
+
+### value
+
+**Rule:** `P/E < 15 AND debt_equity < 0.5 AND ROE > 10% AND latest quarterly revenue growth > 0`
+
+Classic Graham value with quality and growth guards. In a market where
+the S&P 500 trades around 20-25× earnings, P/E < 15 is intentionally
+strict — typically returns 30-50 names across the S&P 500, heavily
+tilted toward financials, energy, and some healthcare. The ROE and
+revenue-growth gates prevent "value trap" names.
+
+### growth
+
+**Rule:** `3y revenue CAGR > 15% AND latest gross margin > 40% AND gross margin nondecreasing over 3y`
+
+Real growth bar: about 10% of the S&P 500 clears 15% CAGR consistently.
+The 40% gross margin tilts toward software, brands, and pharma. The
+"nondecreasing margin" gate is the smart part — it strips out cyclicals
+masquerading as growth.
+
+### momentum
+
+**Rule:** `latest close > 50d SMA AND 3m price change > 10% AND recent 5d volume avg > 1.5× trailing 50d avg`
+
+Trend-following with volume confirmation. 3m at +10% catches sustained
+movers but misses early breakouts. Volume gate separates real moves from
+drift.
+
+### mean_reversion
+
+**Rule:** `RSI(14) < 30 AND positive TTM ROE`
+
+Textbook oversold *quality*, not raw oversold. The RSI threshold is
+rare — typically returns 0-5 names on any given day across the S&P 500.
+The quality gate is essential: without it, this becomes "buy falling
+knives."
+
+### insider_cluster
+
+**Rule:** `≥3 distinct insiders bought in last 30 days AND net insider dollar flow > 0`
+
+Cluster buying with net positive insider conviction. The "net positive"
+condition (rather than "zero offsetting sells") tolerates routine
+10b5-1 scheduled sales while still requiring genuine buying weight.
+
+## Universe scope: `--over` is the right default
+
+Two ways to point a screener at the market:
+
+```bash
+# Constrained — runs the screen against a parent universe
+cents universe create cheap_sp500 --source screener \
+  --strategy value --over sp500
+
+# Full-market — opt-in, env-flag gated
+CENTS_SCREENER_ALLOW_FULL_UNIVERSE=1 cents universe create deep_value \
+  --source screener --strategy value
+```
+
+**The constrained form is what you'll use 90% of the time** — it's
+faster, cheaper, more interpretable, and lets you compare screeners on
+the *same* parent set. The full-market form is gated behind an env flag
+so a cron job can't accidentally launch a 5,000-symbol scan.
+
+Common parent-universe patterns:
+
+```bash
+# Value within the S&P 500
+cents universe create value_lc --source screener --strategy value --over sp500
+
+# Momentum within your watchlist
+cents universe create momo_watch --source screener --strategy momentum --over my-watchlist
+
+# Multiple thematic baskets, screened differently
+cents universe create energy_value --source screener --strategy value --over energy_basket
+cents universe create semis_momentum --source screener --strategy momentum --over semis_basket
+```
+
+## CLI
+
+```bash
+cents screener list                          # show all registered strategies
+cents screener describe value                # print the rule set
+cents screener preview value --over sp500    # dry-run, show what it'd produce
+
+cents universe create <name> --source screener --strategy <s> [--over <parent>] [--limit N]
+cents universe refresh <name>                # re-run the screen, update symbols
+```
+
+## How screeners close the loop
+
+Every thesis the factory opens records its **`discovery_source`** —
+the universe name (and hence the screener) that produced its symbol.
+That's what enables the second feedback loop:
+
+```bash
+cents factory analyze --by discovery              # win rate, avg P&L by screener
+cents factory analyze --by discovery,cohort       # 2D cross-tab
+cents factory analyze --by discovery,regime       # regime-conditional
+```
+
+With this in place, the **winning algorithm** isn't "which stocks to
+buy" — it's a *map*:
+
+> *"In regime R, use screener S to populate a universe of N candidates,
+> evaluate them with the orchestrator, open paired theses with premise
+> tags T, and manage with target / stop / horizon parameters P."*
+
+That map gets sharper as outcomes accumulate. The screener layer is
+what makes the discovery half of it learnable instead of fixed.
+
+## Tuning defaults
+
+Thresholds live in `source_config.params`, configurable per-universe:
+
+```bash
+cents universe create value_loose --source screener --strategy value \
+  --over sp500 --params 'pe_max=20,roe_min=0.08'
+```
+
+You can have `value_strict` (P/E < 15) and `value_normal` (P/E < 20)
+running in parallel and let outcome data tell you which produces theses
+that actually win.
+
+## What it deliberately doesn't do (yet)
+
+- **No custom screener DSL** — start with the 5 built-ins; see what's
+  missing; design a DSL once we know what's actually needed.
+- **No auto-refresh schedule** — `cents universe refresh` is manual or
+  cron.
+- **No multi-screener composition** — no `intersect(value, momentum)`
+  yet; separate universes do the same job at v1 scale.
+- **No backtest mode** — point-in-time fundamentals is gnarly; current
+  screeners run against current data only.
+- **No performance benchmarking against indices** — you can compare
+  screener-cohort outcomes via `factory analyze`, which is the
+  meaningful comparison anyway.

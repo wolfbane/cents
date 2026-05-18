@@ -134,12 +134,14 @@ tape. With it, you can.
 ## The autonomous factory
 
 The [factory](/factory/) is the loop that runs all of this
-autonomously. It walks a universe of symbols, asks the orchestrator who
+autonomously. It walks a [universe](/universe/) of symbols (often
+produced by a [screener](/screeners/)), asks the orchestrator who
 looks interesting, opens paper theses (paired by default) for those
-that clear an entry threshold, watches them, and closes them on target /
-stop / horizon / premise-invalidation. Every thesis it creates gets the
-full regime-aware treatment: premise tags, regime snapshot, sector-ETF
-hedge.
+that clear an entry threshold, watches them, and closes them on
+target / stop / horizon / premise-invalidation. Every thesis it
+creates gets the full regime-aware treatment: premise tags, regime
+snapshot, sector-ETF hedge, **and a record of the discovery source**
+(the universe — and hence the screener — that produced its symbol).
 
 **The factory's goal is not P&L.** It's to produce a labeled outcomes
 dataset, stratified by cohort and regime, so that after enough resolved
