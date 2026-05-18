@@ -392,14 +392,19 @@ class TestMacroAgent:
         assert delta < 0
         assert metadata["signal"] == "rising"
 
-    def test_interpret_low_stable_unemployment(self):
-        """Low stable unemployment is bullish."""
+    def test_interpret_low_level_unemployment(self):
+        """Low unemployment level (absolute, regardless of direction) is bullish."""
         agent = MacroAgent()
         ev_type, delta, note, metadata = agent._interpret_with_change("UNRATE", 3.5, change=0.0)
 
         assert ev_type == EvidenceType.SUPPORTING
         assert delta > 0
-        assert metadata["signal"] == "low_stable"
+        assert metadata["signal"] == "low_level"
+        # Note must surface that this is a level-based signal, not a direction
+        # claim — historically the note read "Low unemployment (3.5%)" which a
+        # reader could conflate with "falling unemployment" when paired with
+        # the 3mo change shown in evidence content.
+        assert "level" in note.lower()
 
     def test_interpret_falling_unemployment(self):
         """Falling unemployment is bullish."""

@@ -120,25 +120,37 @@ class TechnicalAgent(BaseAgent):
         change_1m = (current_price - price_1m) / price_1m * 100 if price_1m and price_1m > 0 else 0
         change_3m = (current_price - price_3m) / price_3m * 100 if price_3m and price_3m > 0 else 0
 
-        # Momentum signal (TECHNICAL dimension)
+        # Momentum signal (TECHNICAL dimension) — rule checks 1M change only.
         ev_type = EvidenceType.NEUTRAL
         tech_delta = 0.0
+        rule_note = None
         if change_1m > MOMENTUM_STRONG_PCT:
             ev_type = EvidenceType.SUPPORTING
             tech_delta = 3
             summaries.append(f"Strong momentum (+{change_1m:.1f}% 1M)")
+            rule_note = f"1M change +{change_1m:.1f}% > +{MOMENTUM_STRONG_PCT}% threshold"
         elif change_1m < -MOMENTUM_STRONG_PCT:
             ev_type = EvidenceType.CONTRADICTING
             tech_delta = -3
             summaries.append(f"Weak momentum ({change_1m:.1f}% 1M)")
+            rule_note = f"1M change {change_1m:.1f}% < -{MOMENTUM_STRONG_PCT}% threshold"
 
         conviction_delta += tech_delta
         dimension_scores["technical"] = dimension_scores.get("technical", 0) + tech_delta
 
+        # Surface the driving window so readers don't read all three changes as
+        # a composite signal — the rule fires on 1M alone.
+        momentum_content = (
+            f"Price: ${current_price:.2f} | 1W: {change_1w:+.1f}% | "
+            f"1M: {change_1m:+.1f}% | 3M: {change_3m:+.1f}%"
+        )
+        if rule_note:
+            momentum_content = f"{momentum_content} — {rule_note}"
+
         evidence.append(
             self.create_evidence(
                 thesis_id=thesis_id,
-                content=f"Price: ${current_price:.2f} | 1W: {change_1w:+.1f}% | 1M: {change_1m:+.1f}% | 3M: {change_3m:+.1f}%",
+                content=momentum_content,
                 source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.7,
@@ -189,20 +201,37 @@ class TechnicalAgent(BaseAgent):
         recent_volume = sum(volumes[-VOLUME_RECENT_PERIOD:]) / min(VOLUME_RECENT_PERIOD, len(volumes))
         volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
 
+        # Volume is a directional amplifier — the same high-volume row is
+        # bullish on an up week and bearish on a down week. Carry both pieces
+        # into the content so the [+]/[-] tag isn't unexplained.
         ev_type = EvidenceType.NEUTRAL
         vol_delta = 0.0
+        vol_rule_note = None
         if volume_ratio > VOLUME_HIGH_RATIO:
-            ev_type = EvidenceType.SUPPORTING if change_1w > 0 else EvidenceType.CONTRADICTING
-            vol_delta = 2 if change_1w > 0 else -2
+            if change_1w > 0:
+                ev_type = EvidenceType.SUPPORTING
+                vol_delta = 2
+                vol_rule_note = f"high volume on a +{change_1w:.1f}% 1W move"
+            else:
+                ev_type = EvidenceType.CONTRADICTING
+                vol_delta = -2
+                vol_rule_note = f"high volume on a {change_1w:.1f}% 1W move"
             summaries.append(f"High volume ({volume_ratio:.1f}x avg)")
 
         conviction_delta += vol_delta
         dimension_scores["technical"] = dimension_scores.get("technical", 0) + vol_delta
 
+        volume_content = (
+            f"Volume: {recent_volume/1e6:.1f}M avg (last 5d) | "
+            f"{volume_ratio:.1f}x 20d average"
+        )
+        if vol_rule_note:
+            volume_content = f"{volume_content} — {vol_rule_note}"
+
         evidence.append(
             self.create_evidence(
                 thesis_id=thesis_id,
-                content=f"Volume: {recent_volume/1e6:.1f}M avg (last 5d) | {volume_ratio:.1f}x 20d average",
+                content=volume_content,
                 source="alpaca",
                 evidence_type=ev_type,
                 confidence=0.6,

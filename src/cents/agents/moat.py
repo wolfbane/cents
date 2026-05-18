@@ -163,18 +163,22 @@ class MoatAgent(BaseAgent):
         avg_return = statistics.mean(capital_returns)
         std_return = statistics.stdev(capital_returns) if len(capital_returns) > 1 else 0
 
-        # Determine evidence type based on average return level
+        # Determine evidence type based on average return level. Surface the
+        # threshold band that fired so readers don't assume a negative value
+        # is what made it [-] — the rule is "below 10% cost-of-capital floor",
+        # which fires on a positive 8% too.
         if avg_return > 0.15:
             ev_type = EvidenceType.SUPPORTING
             delta = 4.0
+            band = "excellent (>15%)"
         elif avg_return > 0.10:
             ev_type = EvidenceType.SUPPORTING
             delta = 2.0
-        elif avg_return < 0.10:
+            band = "above 10% threshold"
+        else:
             ev_type = EvidenceType.CONTRADICTING
             delta = -2.0
-        else:
-            ev_type = EvidenceType.NEUTRAL
+            band = "below 10% threshold (cost-of-capital floor)"
 
         dims["moat"] = delta
         # High ROIC also indicates quality
@@ -183,7 +187,10 @@ class MoatAgent(BaseAgent):
         evidence.append(
             self.create_evidence(
                 thesis_id=thesis_id,
-                content=f"{len(capital_returns)}-year avg {metric_name}: {avg_return:.1%}",
+                content=(
+                    f"{len(capital_returns)}-year avg {metric_name}: "
+                    f"{avg_return:.1%} — {band}"
+                ),
                 source="fmp",
                 evidence_type=ev_type,
                 confidence=0.85,

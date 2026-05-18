@@ -341,21 +341,28 @@ class FundamentalsAgent(BaseAgent):
             ev_type = EvidenceType.NEUTRAL
             quality_delta = 0.0
             sector_note = f" [vs {data.sector}]" if data.sector else ""
+            margin_rule_note = None
 
             if margin_decimal > margin_high:
                 ev_type = EvidenceType.SUPPORTING
                 quality_delta = 2
+                margin_rule_note = f"above sector high ({margin_high*100:.0f}%)"
             elif margin_decimal < margin_low:
                 ev_type = EvidenceType.CONTRADICTING
                 quality_delta = -2
+                margin_rule_note = f"below sector low ({margin_low*100:.0f}%)"
 
             conviction_delta += quality_delta
             dimension_scores["quality"] = dimension_scores.get("quality", 0) + quality_delta
 
+            margin_content = f"Profit Margin: {margin_pct:.1f}%{sector_note}"
+            if margin_rule_note:
+                margin_content = f"{margin_content} — {margin_rule_note}"
+
             evidence.append(
                 self.create_evidence(
                     thesis_id=thesis_id,
-                    content=f"Profit Margin: {margin_pct:.1f}%{sector_note}",
+                    content=margin_content,
                     source="fmp",
                     evidence_type=ev_type,
                     confidence=0.8,
@@ -372,22 +379,29 @@ class FundamentalsAgent(BaseAgent):
             ev_type = EvidenceType.NEUTRAL
             risk_delta = 0.0
             sector_note = f" [vs {data.sector}]" if data.sector else ""
+            de_rule_note = None
 
             if d_e < de_low:
                 ev_type = EvidenceType.SUPPORTING
                 risk_delta = 2
+                de_rule_note = f"below sector low ({de_low:.0f}%)"
             elif d_e > de_high:
                 ev_type = EvidenceType.CONTRADICTING
                 risk_delta = -3
                 summaries.append(f"High debt ({d_e:.0f}% D/E){sector_note}")
+                de_rule_note = f"above sector high ({de_high:.0f}%)"
 
             conviction_delta += risk_delta
             dimension_scores["risk"] = dimension_scores.get("risk", 0) + risk_delta
 
+            de_content = f"Debt/Equity: {d_e:.1f}%{sector_note}"
+            if de_rule_note:
+                de_content = f"{de_content} — {de_rule_note}"
+
             evidence.append(
                 self.create_evidence(
                     thesis_id=thesis_id,
-                    content=f"Debt/Equity: {d_e:.1f}%{sector_note}",
+                    content=de_content,
                     source="fmp",
                     evidence_type=ev_type,
                     confidence=0.75,

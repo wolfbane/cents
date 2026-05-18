@@ -93,11 +93,11 @@ MACRO_SIGNAL_CONFIG = {
                 "note": lambda value, change: f"Falling unemployment ({change:+.1f}%)",
             },
             {
-                "signal": "low_stable",
+                "signal": "low_level",
                 "condition": lambda value, change, t: value < t["low"],
                 "evidence": EvidenceType.SUPPORTING,
                 "delta": 2,
-                "note": lambda value, change: f"Low unemployment ({value:.1f}%)",
+                "note": lambda value, change: f"Low unemployment level ({value:.1f}%, level-based signal)",
             },
         ],
         "fallback": {
@@ -218,6 +218,12 @@ class MacroAgent(BaseAgent):
                     content = f"{name}: {current:.2f} ({change_str} over 3mo)"
                 else:
                     content = f"{name}: {current:.2f}"
+                # Append the fired-rule reason so the [+]/[-]/[~] tag is self-
+                # explanatory — without this, readers see the change figure and
+                # assume that's what drove the signal, even when the rule fired
+                # on absolute level (e.g. UNRATE low_level, T10Y2Y deep_inversion).
+                if note:
+                    content = f"{content} — {note}"
 
                 evidence.append(
                     self.create_evidence(
