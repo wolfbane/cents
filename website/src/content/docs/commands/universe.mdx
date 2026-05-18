@@ -1,0 +1,214 @@
+---
+title: "cents universe"
+description: "Manage symbol universes for the factory."
+---
+
+
+Manage symbol universes for the factory.
+
+## Synopsis
+
+```bash
+cents universe <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents universe create` — Create a new universe.
+- `cents universe delete` — Delete a universe.
+- `cents universe ingest-delistings` — Pull recent delistings from FMP and persist them.
+- `cents universe list` — List universes.
+- `cents universe refresh` — Re-resolve a universe's symbols (no-op for static unless symbols are provided).
+- `cents universe set-default` — Mark a universe as the default for `cents factory run`.
+- `cents universe show` — Show a universe's details and resolved symbols.
+
+### `cents universe create`
+
+Create a new universe.
+
+**Synopsis**
+
+```bash
+cents universe create [OPTIONS] NAME
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--source [static|watchlist|fmp_index|screener]` | `[static \| watchlist \| fmp_index \| screener]` | `static` |  |
+| `--symbols TEXT` | `text` |  | Comma-separated symbols (for static) |
+| `--from-file PATH` | `path` |  | Read symbols from file (one per line) |
+| `--index TEXT` | `text` |  | Index key for fmp_index source (e.g. sp500) |
+| `--strategy TEXT` | `text` |  | Screener strategy name (required when --source=screener) |
+| `--over TEXT` | `text` |  | Parent universe for screener to filter |
+| `--limit INTEGER` | `integer` | `30` | Max symbols a screener universe returns |
+| `--description TEXT` | `text` |  | Free-form description |
+
+**Example**
+
+```bash
+cents universe create [OPTIONS] NAME
+```
+
+### `cents universe delete`
+
+Delete a universe.
+
+**Synopsis**
+
+```bash
+cents universe delete [OPTIONS] NAME
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--force` | `boolean` | `false` | Skip confirmation prompt |
+
+**Example**
+
+```bash
+cents universe delete [OPTIONS] NAME
+```
+
+### `cents universe ingest-delistings`
+
+Pull recent delistings from FMP and persist them.
+
+    Stored delistings are used by ``cents universe show --as-of`` and by
+    point-in-time backtests to reconstruct universes without survivorship
+    bias. Without an FMP API key, the command no-ops with a clear message.
+
+**Synopsis**
+
+```bash
+cents universe ingest-delistings [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--since TEXT` | `text` |  | Pull delistings dated on/after this YYYY-MM-DD (default: 1 year ago). |
+| `--dry-run` | `boolean` | `false` | Fetch and report counts without writing to the delistings table. |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents universe ingest-delistings [OPTIONS]
+```
+
+### `cents universe list`
+
+List universes.
+
+**Synopsis**
+
+```bash
+cents universe list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents universe list [OPTIONS]
+```
+
+### `cents universe refresh`
+
+Re-resolve a universe's symbols (no-op for static unless symbols are provided).
+
+**Synopsis**
+
+```bash
+cents universe refresh NAME
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+
+**Example**
+
+```bash
+cents universe refresh NAME
+```
+
+### `cents universe set-default`
+
+Mark a universe as the default for `cents factory run`.
+
+**Synopsis**
+
+```bash
+cents universe set-default NAME
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+
+**Example**
+
+```bash
+cents universe set-default NAME
+```
+
+### `cents universe show`
+
+Show a universe's details and resolved symbols.
+
+    With ``--as-of YYYY-MM-DD``, screener universes are reconstructed at
+    that point in time: the current screener output is augmented with
+    symbols whose tracked delisting date is on/after the requested date
+    (those were members on that day even though they aren't today).
+
+**Synopsis**
+
+```bash
+cents universe show [OPTIONS] NAME
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--as-of TEXT` | `text` |  | Resolve point-in-time membership as of YYYY-MM-DD (screener universes only). |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents universe show [OPTIONS] NAME
+```

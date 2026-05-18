@@ -26,18 +26,27 @@ cents universe create my_value --source screener --strategy value --over sp500
 cents universe set-default my_value
 cents factory init
 cents factory run --dry-run
-cents factory run                       # vol-scaled, beta-hedged, cost-aware, kill-switch-gated
-cents factory run --max-cost-usd 5.00   # abort if cumulative LLM spend would exceed this
+cents factory run                              # LLM arm (the real multi-agent stack)
+cents factory run --orchestrator random        # control arm (uniform conviction_delta, no LLM calls)
+cents factory run --orchestrator random --orchestrator-seed 42   # reproducible control arm
+cents factory run --max-cost-usd 5.00          # abort if cumulative LLM spend would exceed this
 cents factory status
 cents factory analyze --by discovery,cohort,regime
+
+# Pre-registered experiments (makes the pipeline falsifiable)
+cents experiment register <spec.yaml>   # freezes factory.toml SHA; stamps every opened thesis
+cents experiment list
+cents experiment status                 # progress against minimum_n_per_arm
+cents experiment finalize <name> --verdict verdict.json
 
 # Cost tracking + reproducibility
 cents usage summary --by agent
 cents evidence trace <evidence_id>      # reconstruct the original LLM call from prompt/output hashes
 
 # Calibration (Layer 2 #3)
-cents calibration refit                 # fit logistic regression on closed-thesis outcomes
-cents calibration report                # coefficients + Brier + AUC + reliability buckets
+cents calibration refit                          # fit logistic regression on closed-thesis outcomes
+cents calibration refit --holdout-pct 0.2        # honest generalisation metrics via held-out split
+cents calibration report                         # coefficients + Brier + AUC + reliability buckets
 
 # Evals (Layer 2 #4)
 cents eval golden show --set premise
@@ -54,7 +63,7 @@ Use `--output json` for machine-readable output. Run `cents --help` or `cents <c
 ```bash
 pip install -e ".[dev]"       # Install with test deps
 pip install -e ".[broker]"    # Add Alpaca trading (paper only — see /scope/)
-pytest                        # Full suite (~700 tests, ~30s)
+pytest                        # Full suite (~721 tests, ~30s)
 pytest tests/test_factory.py  # Single file
 pytest -k "premise"           # By keyword
 pytest --lf                   # Re-run last failures
@@ -64,7 +73,9 @@ A reinstall (`pip install -e .`) is required after switching the working tree be
 
 ## High-level architecture
 
-cents is structured as **four cooperating layers** + a transversal **finance substrate**. The discovery → evaluation → invalidation → analytics path is the load-bearing flow; finance/ supplies the risk/cost primitives the factory leans on.
+cents is a **research pipeline** for studying whether multi-agent LLM orchestration produces a calibrated signal on forward equity returns. **It is not a trading tool.** The factory engine RECORDS what happens to a labeled outcomes dataset; it does not FILTER or GATE on trading-style controls. `cents/finance/*` modules exist as utilities for callers writing their own analytics — the engine's default behaviour doesn't use them as gates.
+
+cents is structured as **four cooperating layers** + a transversal **finance substrate** + an **experiments registry** that pre-registers hypotheses against a frozen factory.toml SHA. The discovery → evaluation → invalidation → analytics path is the load-bearing flow.
 
 ```
 1. Discovery
@@ -117,6 +128,8 @@ Transversal: cents/finance/ — UTILITIES, not gates
 
 ### Things that aren't obvious from a single file
 
+- **The pipeline has a two-arm control design.** `cents factory run` defaults to `--orchestrator llm` (the real multi-agent stack). `--orchestrator random` (`cents/agents/random_orchestrator.py`) is the matched-cadence control — uniform `conviction_delta` in `[-30, +30]`, no LLM calls, `orchestrator_label = "random"` on every opened thesis. The paired-neutral cohort is a control for *regime beta*; the random arm is a control for *signal value*. `Thesis.orchestrator_label` + `Thesis.experiment_id` are the cohort-analytics columns that make this falsifiable.
+- **Experiments are pre-registered, not post-hoc.** `cents experiment register <spec.yaml>` writes an Experiment row with the current factory.toml SHA + body, frozen at registration time. Spec is `{name, hypothesis, primary_metric, minimum_n_per_arm, stopping_rule}`. The factory engine stamps `experiment_id` on every thesis opened while the experiment is active. `cents experiment status` shows progress against `minimum_n_per_arm`; `cents experiment finalize <name>` locks it. See `cents/experiments/registry.py`.
 - **The orchestrator's `AgentResult` has a different clamp from individual agents.** Per-agent `conviction_delta` clamps to ±10 (`MAX_CONVICTION_DELTA`); the orchestrator's aggregate (constructed with `aggregate=True`) clamps to ±30 (`MAX_AGGREGATE_CONVICTION_DELTA`) so strong consensus isn't quantized to ±10. See `cents/agents/base.py`.
 - **Premise tags are a controlled vocabulary** (`EVENT_TAGS` in `cents/models/event.py`). Both the EventAgent (tagging fetched events) and the premise classifier (`cents/factory/premise.py`) draw from this single list. **Adding tags is safe; renaming them is not.**
 - **Premise invalidation is polarity-aware.** `Event.matches_premise(tags, direction)` requires (a) tag overlap AND (b) event polarity opposite the thesis's `premise_direction` on a shared tag. A bullish event on a "positive"-direction thesis does NOT invalidate it (it confirms). Neutral/unclear polarities never invalidate. Empty `premise_direction` falls back to legacy unsigned intersection for back-compat.

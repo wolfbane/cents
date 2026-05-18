@@ -1,0 +1,66 @@
+---
+title: "cents usage"
+description: "Report on LLM token usage and cost."
+---
+
+
+Report on LLM token usage and cost.
+
+## Synopsis
+
+```bash
+cents usage <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents usage list` — Show individual recent LLM calls, newest first.
+- `cents usage summary` — Aggregate LLM usage by agent, model, day, or operation.
+
+### `cents usage list`
+
+Show individual recent LLM calls, newest first.
+
+**Synopsis**
+
+```bash
+cents usage list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--since-days INTEGER` | `integer` | `7` | Window in days. |
+| `--limit INTEGER` | `integer` | `50` |  |
+| `--output [text|json]` | `[text \| json]` | `text` |  |
+
+**Example**
+
+```bash
+cents usage list [OPTIONS]
+```
+
+### `cents usage summary`
+
+Aggregate LLM usage by agent, model, day, or operation.
+
+**Synopsis**
+
+```bash
+cents usage summary [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--since-days INTEGER` | `integer` | `30` | Window in days. |
+| `--by [agent|model|day|operation]` | `[agent \| model \| day \| operation]` | `agent` | Dimension to aggregate by. |
+| `--output [text|json]` | `[text \| json]` | `text` |  |
+
+**Example**
+
+```bash
+cents usage summary [OPTIONS]
+```

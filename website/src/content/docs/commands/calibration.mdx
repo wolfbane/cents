@@ -1,0 +1,64 @@
+---
+title: "cents calibration"
+description: "Fit and inspect the conviction calibration model."
+---
+
+
+Fit and inspect the conviction calibration model.
+
+## Synopsis
+
+```bash
+cents calibration <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents calibration refit` — Fit a fresh calibration model against the current outcomes dataset.
+- `cents calibration report` — Inspect the latest persisted model and its reliability diagram.
+
+### `cents calibration refit`
+
+Fit a fresh calibration model against the current outcomes dataset.
+
+**Synopsis**
+
+```bash
+cents calibration refit [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+| `--min-observations INTEGER` | `integer` | `30` | Minimum number of decided theses required to fit. |
+| `--holdout-pct FLOAT` | `float` | `0.2` | Fraction of observations held out for honest generalisation metrics. 0.0 disables; the report then carries only in-sample numbers. |
+
+**Example**
+
+```bash
+cents calibration refit [OPTIONS]
+```
+
+### `cents calibration report`
+
+Inspect the latest persisted model and its reliability diagram.
+
+**Synopsis**
+
+```bash
+cents calibration report [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents calibration report [OPTIONS]
+```

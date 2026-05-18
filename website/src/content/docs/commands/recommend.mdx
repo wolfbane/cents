@@ -12,22 +12,20 @@ analysis, or position sizing. See [/scope/](/scope/) for the project's
 stated boundaries.
 </Aside>
 
-Emit a model signal (bullish / bearish / neutral) for every open thesis,
-based on conviction, target/stop levels, expiry, and current price.
+Emit model signals (bullish / bearish / neutral) for open theses.
 
-    Evaluates each open thesis against current prices and conviction
-    levels and tags it with one of `bullish_signal`, `bearish_signal`,
-    `neutral_signal`, `close`, or `review`. These are signals, not
-    recommendations.
+    Evaluates each open thesis against current prices, conviction, and
+    target/stop/expiry to produce a *model signal*. Signals are not
+    investment advice — see /scope/ for the project's stated boundaries.
 
     Rules (in priority order):
-      1. Stop loss triggered            → CLOSE
-      2. Target price reached           → CLOSE
-      3. Thesis invalidated             → CLOSE / REVIEW
-      4. Thesis expired                 → REVIEW
-      5. Low conviction w/ position     → bearish signal
-      6. High conviction, no position   → bullish signal
-      7. Otherwise                      → neutral signal
+      1. Stop loss triggered          → CLOSE
+      2. Target price reached         → CLOSE
+      3. Thesis invalidated           → CLOSE / REVIEW
+      4. Thesis expired               → REVIEW
+      5. Low conviction w/ position   → bearish signal
+      6. High conviction, no position → bullish signal
+      7. Otherwise                    → neutral signal
 
 ## Synopsis
 
@@ -39,27 +37,13 @@ cents recommend [OPTIONS]
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--buy-threshold FLOAT` | `float` | `70.0` | Minimum conviction to emit a bullish signal |
-| `--sell-threshold FLOAT` | `float` | `30.0` | Maximum conviction to emit a bearish signal |
-| `--output [text\|json]` | `[text \| json]` |  | Output format (default: from config) |
+| `--buy-threshold FLOAT` | `float` | `70.0` | Minimum conviction to emit a bullish signal (default: 70) |
+| `--sell-threshold FLOAT` | `float` | `30.0` | Maximum conviction to emit a bearish signal (default: 30) |
+| `--output [text|json]` | `[text \| json]` |  | Output format (default: from config) |
 | `--actionable` | `boolean` | `false` | Only show actionable signals (exclude neutral) |
-
-## Output
-
-The `action` field in the JSON / text output is one of:
-
-| Value | Meaning |
-| --- | --- |
-| `bullish_signal` | High conviction without a position; model leans long. |
-| `bearish_signal` | Low conviction with an open position; model leans flat / short. |
-| `neutral_signal` | Thesis intact, no directional signal. |
-| `close` | Stop, target, or invalidation triggered — review the position. |
-| `review` | Thesis expired or invalidated without a position. |
 
 ## Example
 
 ```bash
-cents recommend
-cents recommend --output json
-cents recommend --actionable     # hide neutral_signal rows
+cents recommend [OPTIONS]
 ```

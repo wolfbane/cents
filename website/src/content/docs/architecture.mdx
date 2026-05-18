@@ -6,7 +6,16 @@ description: Data flow, agent orchestration, the regime-aware substrate, and the
 Cents is intentionally boring on the storage layer: SQLite, repository
 pattern, no daemon. The interesting parts are (1) the agent
 orchestration, (2) the regime-aware substrate that ties events to
-theses, and (3) the autonomous factory loop on top.
+theses, (3) the autonomous factory loop on top, and (4) the
+experiments registry that pre-registers hypotheses against a frozen
+factory.toml SHA so analytics stay falsifiable.
+
+The factory engine **records** what happens — it does not **gate** on
+trading-style controls. Drawdown, liquidity, borrow, beta-matched
+hedging, and calibrated-p are computed on every thesis but never block
+an open. `cents/finance/` is a transversal utility library for callers
+writing their own analytics, not a set of gates the engine relies on.
+See [Scope](/scope/).
 
 ## Data flow
 
@@ -100,6 +109,31 @@ A per-agent clamp of ±10 conviction points keeps any single agent from
 dominating the result. The orchestrator's _own_ aggregate result uses a
 higher cap of ±30, so a strong-consensus signal isn't quantized to ±10
 by the per-agent clamp.
+
+### The control arm: RandomOrchestrator
+
+`cents factory run --orchestrator random` swaps the multi-agent
+orchestrator above for `RandomOrchestrator`
+(`cents/agents/random_orchestrator.py`), which emits a uniform-random
+`conviction_delta` in `[-30, +30]` with no LLM calls. Theses opened by
+this orchestrator are stamped with `orchestrator_label = "random"` so
+cohort analytics can compare the LLM arm against a matched-cadence
+baseline run on the same universe. Without this, no cohort spread the
+LLM arm produces can be attributed to the LLM signal versus the act of
+opening theses in whatever tape happened to be running. The seed
+parameter makes runs reproducible.
+
+## Pre-registered experiments
+
+`cents experiment register <spec.yaml>` writes an `Experiment` row that
+freezes the current `factory.toml` SHA + body, plus a hypothesis,
+primary metric, and `minimum_n_per_arm` target. While the experiment is
+active, the factory engine stamps `experiment_id` on every opened
+thesis. `cents experiment status` tracks progress against the target;
+`cents experiment finalize <name>` locks the run with an optional
+verdict JSON. This is the surface that makes the analytics falsifiable
+rather than post-hoc storytelling — see
+[`cents experiment`](/commands/experiment/) for the workflow.
 
 ## The regime-aware substrate
 
@@ -235,6 +269,28 @@ Key contracts:
 
 See [Factory](/factory/) for the operating rules and budget mechanics
 in detail.
+
+## The finance/ utility substrate
+
+`cents/finance/` is a transversal utility library. Each module exposes
+primitives the factory **could** gate on but **deliberately doesn't** in
+the default research configuration. They exist so analytics callers can
+stratify outcomes by these dimensions, and so users who want trading-
+shaped behaviour can opt in explicitly.
+
+| Module | What it provides | Opt-in via |
+| --- | --- | --- |
+| `sizing.py` | `vol_scaled_shares` — inverse-vol sizing toward a target $-vol fraction. | `sizing_mode = "vol_scaled"` (default: `"equal_dollar"`) |
+| `costs.py` | `apply_open_cost` / `apply_close_cost` — commission + slippage + borrow + gap penalty. | Always on — research honesty, applied so `Position.pnl` is net of costs. Cohort analytics should always use `pnl`, not `gross_pnl`. |
+| `hedging.py` | `estimate_beta` + `beta_match_ratio` — 60-day OLS beta vs hedge ETF, refuses estimation when R² < threshold. | `beta_match_hedge = true` (default: `false`, dollar-matched) |
+| `liquidity.py` | `passes_liquidity_gate` / `passes_borrow_gate` — utilities only; the engine never skips on them. | Analytics callers — never used as a gate in the default engine. |
+| `portfolio.py` | `compute_drawdown` + `check_kill_switch` — utilities only; the engine never halts on them. | Analytics callers — never used as a gate in the default engine. |
+| `calibration.py` | `CalibrationModel` + `fit_calibration` — logistic regression on outcomes. | Recorded on every thesis as `calibrated_p_correct`; the engine never skips on it. |
+
+The split between "recorded" and "gated" is deliberate. The point of
+the research pipeline is to study what happens at every conviction
+level / drawdown / liquidity tier, not to filter the dataset to the
+tier that looks best ex-ante.
 
 ## The AgentResult contract
 

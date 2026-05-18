@@ -52,6 +52,25 @@ audit-grade.
   callers writing their own analytics can study these dimensions of the
   outcomes dataset; the engine itself records what happened, it doesn't
   filter what gets to happen.
+
+## How the pipeline stays falsifiable
+
+The way cents addresses the question "did this experiment actually
+work?" without post-hoc cherry-picking is
+[`cents experiment register`](/commands/experiment/). A YAML spec
+declares the hypothesis, the primary metric, and a
+`minimum_n_per_arm` target *before* the factory opens any theses for
+the run. Registration snapshots the current `factory.toml` SHA so the
+parameters are frozen too. Every thesis the factory opens while the
+experiment is active is stamped with the `experiment_id` and an
+`orchestrator_label` (`"llm"` for the real multi-agent stack,
+`"random"` for the matched-cadence control arm — see
+[Operating principles](/principles/#two-arms-the-random-orchestrator)).
+`cents experiment finalize <name>` locks the verdict against the
+original spec — not against whatever cut of the data flatters it.
+
+This is the move that makes the cohort and regime tables on this site
+worth anything. Without it, they're storytelling.
 - **Not a fund accounting system.** SQLite at `~/.cents/data/cents.db`
   is a single-user file with no encryption, no WORM-compliant audit
   trail, no broker reconciliation, no lot accounting, no wash-sale
@@ -108,6 +127,52 @@ tracked as issues in the `.beads` directory; the headline gaps are:
   decisions cannot be reconstructed for audit.
 
 These are real and known. They are why this is a research tool.
+
+## Survivorship bias in universes
+
+Universes resolved at run-time use current FMP screener output plus any
+persisted delistings. Forward tests are unbiased once
+`cents universe ingest-delistings` has been run; retrospective backtests
+against the same universe stay biased by symbols delisted before the
+delistings table existed.
+
+In practice:
+
+- **Live / forward runs**: `cents factory run` resolves the universe as
+  of today, so survivorship bias is absent for symbols that exist today.
+- **Past-date backtests**: `cents universe show --as-of YYYY-MM-DD`
+  reconstructs membership by layering tracked delistings on top of the
+  current screener output. Coverage is only as good as how recently
+  `ingest-delistings` has been running.
+- **The fix**: keep `cents universe ingest-delistings` on a daily
+  schedule. The longer it runs, the closer retrospective universes get
+  to being unbiased.
+
+## Lookahead leakage in sentiment scoring
+
+NewsAPI returns articles published at any time, including same-day pieces
+that explicitly reference today's price action ("NVDA up 8% after ..."). The
+sentiment agent's LLM scorer sees that text — so when the article body
+already names the move, the agent is implicitly forward-looking on
+intraday horizons. The outcome label the factory then learns from is
+contaminated with information the strategy could not have used at decision
+time.
+
+An audit test documents the methodology:
+
+```bash
+pytest tests/test_lookahead_audit.py --runlookahead
+```
+
+It scores two headlines that differ only in whether they mention the day's
+move and asserts the live LLM doesn't move more than 0.3 between them.
+A failure is the documented "leakage detected" signal. The mocked smoke
+version runs unconditionally on every test run and only checks plumbing.
+
+**Mitigation (TODO).** Add a `news_cutoff_time` config knob on
+`FactoryConfig` that filters NewsAPI by `publishedAt < cutoff` — only
+consider articles published before market open on the decision day.
+Tracked as part of `cents-ekd`.
 
 ## If you still want to use it
 

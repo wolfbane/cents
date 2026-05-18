@@ -23,13 +23,14 @@ cents research [OPTIONS] SYMBOL
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--thesis/-t TEXT` | `text` |  | Thesis ID to evaluate against |
-| `--agent/-a [fundamentals|technical|macro|sentiment|moat|insider|orchestrator]` | `[fundamentals \| technical \| macro \| sentiment \| moat \| insider \| orchestrator]` |  | Run specific agent only |
+| `--agent/-a [fundamentals|technical|macro|sentiment|moat|insider|event|orchestrator]` | `[fundamentals \| technical \| macro \| sentiment \| moat \| insider \| event \| orchestrator]` |  | Run specific agent only |
 | `--save` | `boolean` | `true` | Save evidence to database |
 | `--output [text|json]` | `[text \| json]` |  | Output format for results (default: from config) |
 | `--quiet` | `boolean` | `false` | Suppress verbose logs for scripting |
 | `--suggest-thesis` | `boolean` | `false` | Generate thesis suggestion from research |
 | `--as-of TEXT` | `text` |  | Historical date for backtesting (YYYY-MM-DD format) |
 | `--export-html PATH` | `file` |  | Export a self-contained HTML report (e.g., --export-html /tmp/report.html) |
+| `--max-cost-usd FLOAT` | `float` |  | Abort this research call if cumulative LLM spend would exceed this many USD. Checked PRE-call against a token estimate. |
 
 ## Example
 

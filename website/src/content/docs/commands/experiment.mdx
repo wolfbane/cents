@@ -1,0 +1,127 @@
+---
+title: "cents experiment"
+description: "Register and inspect pre-registered research experiments."
+---
+
+
+Register and inspect pre-registered research experiments.
+
+## Synopsis
+
+```bash
+cents experiment <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents experiment finalize` — Finalize an experiment (lock its status and optionally record a verdict).
+- `cents experiment list` — List registered experiments.
+- `cents experiment register` — Register a new experiment, freezing the current factory.toml SHA.
+- `cents experiment status` — Show progress of an active experiment against its targets.
+
+### `cents experiment finalize`
+
+Finalize an experiment (lock its status and optionally record a verdict).
+
+    Blocks by default when the experiment is not verdict-ready (insufficient
+    N per arm, too-recent registration, or factory.toml SHA drift). Pass
+    ``--force`` to override; the verdict will be tagged ``forced: true``.
+
+**Synopsis**
+
+```bash
+cents experiment finalize [OPTIONS] NAME
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `NAME` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--verdict PATH` | `path` |  | JSON file with the verdict on the primary metric. |
+| `--force` | `boolean` | `false` | Bypass the verdict-ready check and finalize early. The recorded verdict will be tagged with 'forced': true so downstream analytics can flag the cohort as below-discipline. |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents experiment finalize [OPTIONS] NAME
+```
+
+### `cents experiment list`
+
+List registered experiments.
+
+**Synopsis**
+
+```bash
+cents experiment list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents experiment list [OPTIONS]
+```
+
+### `cents experiment register`
+
+Register a new experiment, freezing the current factory.toml SHA.
+
+**Synopsis**
+
+```bash
+cents experiment register [OPTIONS] SPEC_PATH
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `SPEC_PATH` | `path` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents experiment register [OPTIONS] SPEC_PATH
+```
+
+### `cents experiment status`
+
+Show progress of an active experiment against its targets.
+
+**Synopsis**
+
+```bash
+cents experiment status [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--name TEXT` | `text` |  | Experiment name (defaults to the active one) |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents experiment status [OPTIONS]
+```

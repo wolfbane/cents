@@ -27,7 +27,11 @@ A research experiment in agent-orchestrated investment hypothesis tracking. **No
 
 ## What is Cents?
 
-Cents is a CLI sandbox for treating investment ideas as falsifiable hypotheses. You write down a thesis ("NVDA's data-center growth will drive earnings beats over 12 months"), and a set of specialised agents — fundamentals, technical, macro, sentiment, moat, insider, plus an orchestrator — gather evidence and adjust a conviction score. Positions and outcomes are tracked against the original thesis so the project produces a labeled outcomes dataset you can study. Everything lives in local SQLite; data flows from FMP, Alpaca (paper), FRED, and NewsAPI.
+Cents is a research pipeline for studying whether multi-agent LLM orchestration produces a calibrated signal on forward equity returns. You write down a thesis ("NVDA's data-center growth will drive earnings beats over 12 months"), and a set of specialised agents — fundamentals, technical, macro, sentiment, moat, insider, plus an orchestrator — gather evidence and adjust a conviction score. The autonomous factory loop walks a universe of symbols, opens paired paper theses where the orchestrator clears an entry threshold, and closes them on target / stop / horizon / premise-invalidation. **The engine records outcomes, it does not gate on trading-style controls.** Sizing, costs, hedging, drawdown, and liquidity utilities live in `cents/finance/` but are opt-in — the default research mode opens everything that clears the threshold so the resulting dataset isn't censored.
+
+A matched control arm (`--orchestrator random`) and a pre-registered experiments workflow (`cents experiment register`) make the pipeline falsifiable: every thesis carries `orchestrator_label` (`"llm"` | `"random"`) and `experiment_id`, so cohort analytics can ask whether the LLM arm beats the random arm under a hypothesis written down before any theses opened.
+
+Everything lives in local SQLite; data flows from FMP, Alpaca (paper), FRED, and NewsAPI.
 
 ## Install
 

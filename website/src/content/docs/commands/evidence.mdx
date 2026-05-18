@@ -18,6 +18,7 @@ cents evidence <subcommand> [OPTIONS] [ARGS]...
 - `cents evidence link` — Link orphan evidence for a symbol to a thesis.
 - `cents evidence list` — List evidence, optionally filtered by symbol.
 - `cents evidence prune` — Delete evidence for theses closed more than N days ago.
+- `cents evidence trace` — Reconstruct the prompt + output that produced an evidence row.
 
 ### `cents evidence delete`
 
@@ -128,4 +129,37 @@ cents evidence prune [OPTIONS]
 
 ```bash
 cents evidence prune [OPTIONS]
+```
+
+### `cents evidence trace`
+
+Reconstruct the prompt + output that produced an evidence row.
+
+    Reads the evidence's provenance columns to find its llm_call_id, then
+    loads the append-only blob from ~/.cents/data/llm_calls/. Returns an
+    error when the evidence has no LLM provenance (e.g. it came from a
+    deterministic agent).
+
+**Synopsis**
+
+```bash
+cents evidence trace [OPTIONS] EVIDENCE_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `EVIDENCE_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output [text|json]` | `[text \| json]` | `text` | Output format |
+
+**Example**
+
+```bash
+cents evidence trace [OPTIONS] EVIDENCE_ID
 ```

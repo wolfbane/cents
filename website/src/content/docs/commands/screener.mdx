@@ -1,0 +1,99 @@
+---
+title: "cents screener"
+description: "Inspect and preview screener-based discovery strategies."
+---
+
+
+Inspect and preview screener-based discovery strategies.
+
+## Synopsis
+
+```bash
+cents screener <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents screener describe` — Show the rule set for a screener strategy.
+- `cents screener list` — List registered screener strategies.
+- `cents screener preview` — Dry-run a screener and print the symbols it would return.
+
+### `cents screener describe`
+
+Show the rule set for a screener strategy.
+
+**Synopsis**
+
+```bash
+cents screener describe [OPTIONS] STRATEGY
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `STRATEGY` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents screener describe [OPTIONS] STRATEGY
+```
+
+### `cents screener list`
+
+List registered screener strategies.
+
+**Synopsis**
+
+```bash
+cents screener list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents screener list [OPTIONS]
+```
+
+### `cents screener preview`
+
+Dry-run a screener and print the symbols it would return.
+
+**Synopsis**
+
+```bash
+cents screener preview [OPTIONS] STRATEGY
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `STRATEGY` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--over TEXT` | `text` |  | Parent universe to screen over |
+| `--limit INTEGER` | `integer` | `20` | Max symbols to return |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents screener preview [OPTIONS] STRATEGY
+```

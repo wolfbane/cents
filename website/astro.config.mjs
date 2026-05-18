@@ -51,6 +51,16 @@ export default defineConfig({
           ],
         },
         {
+          label: "Research workflow",
+          items: [
+            { label: "cents experiment", link: "/commands/experiment/" },
+            { label: "cents calibration", link: "/commands/calibration/" },
+            { label: "cents eval", link: "/commands/eval/" },
+            { label: "cents evidence", link: "/commands/evidence/" },
+            { label: "cents shadow", link: "/commands/shadow/" },
+          ],
+        },
+        {
           label: "Project",
           items: [{ label: "Roadmap", link: "/roadmap/" }],
         },

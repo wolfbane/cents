@@ -110,6 +110,8 @@ Open a new paper position.
 
     Example: cents position open NVDA --size 10 --price 137
 
+    For neutral theses (paired-hedge), provide --hedge-price; both legs open at once.
+
 **Synopsis**
 
 ```bash
@@ -131,6 +133,8 @@ cents position open [OPTIONS] SYMBOL
 | `--thesis/-t TEXT` | `text` |  | Link to thesis ID |
 | `--short` | `boolean` | `false` | Short position (default is long) |
 | `--notes/-n TEXT` | `text` |  | Position notes |
+| `--hedge-price FLOAT` | `float` |  | Short-leg entry price (required for neutral theses) |
+| `--hedge-size FLOAT` | `float` |  | Short-leg size (defaults to dollar-matched) |
 
 **Example**
 

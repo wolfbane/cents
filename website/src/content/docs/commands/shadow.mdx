@@ -1,0 +1,63 @@
+---
+title: "cents shadow"
+description: "Inspect shadow-opens — rejected factory candidates and their forward returns."
+---
+
+
+Inspect shadow-opens — rejected factory candidates and their forward returns.
+
+## Synopsis
+
+```bash
+cents shadow <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents shadow analyze` — Compare accepted-vs-rejected forward returns by reason and arm.
+- `cents shadow backfill` — Walk shadow_opens past the horizon and fill forward returns from price history.
+
+### `cents shadow analyze`
+
+Compare accepted-vs-rejected forward returns by reason and arm.
+
+**Synopsis**
+
+```bash
+cents shadow analyze [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents shadow analyze [OPTIONS]
+```
+
+### `cents shadow backfill`
+
+Walk shadow_opens past the horizon and fill forward returns from price history.
+
+**Synopsis**
+
+```bash
+cents shadow backfill [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--horizon INTEGER` | `integer` | `30` | Forward-return horizon in days (30 or 60). Default 30. |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents shadow backfill [OPTIONS]
+```

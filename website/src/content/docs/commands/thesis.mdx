@@ -18,6 +18,7 @@ cents thesis <subcommand> [OPTIONS] [ARGS]...
 - `cents thesis create` — Create a new investment thesis.
 - `cents thesis list` — List theses.
 - `cents thesis show` — Show thesis details.
+- `cents thesis twin` — Create a policy-neutral paired twin of an existing directional thesis.
 - `cents thesis update` — Update a thesis.
 
 ### `cents thesis close`
@@ -77,6 +78,8 @@ cents thesis create [OPTIONS]
 | `--risks/-r TEXT` | `text` |  | Comma-separated key risks |
 | `--target-price FLOAT` | `float` |  | Target price to close thesis |
 | `--stop-price FLOAT` | `float` |  | Stop price to close thesis |
+| `--cohort [directional|neutral]` | `[directional \| neutral]` | `directional` | Cohort: directional (default) or neutral (paired hedge) |
+| `--hedge-with TEXT` | `text` |  | Hedge symbol for neutral cohort theses |
 | `--from-research TEXT` | `text` |  | Auto-populate from research on symbol |
 
 **Example**
@@ -129,6 +132,36 @@ cents thesis show THESIS_ID
 
 ```bash
 cents thesis show THESIS_ID
+```
+
+### `cents thesis twin`
+
+Create a policy-neutral paired twin of an existing directional thesis.
+
+    Example: cents thesis twin abc123 --hedge-with SPY
+
+**Synopsis**
+
+```bash
+cents thesis twin [OPTIONS] THESIS_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `THESIS_ID` | `text` | yes |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--hedge-with TEXT` | `text` |  | Symbol to short against the parent's long leg |
+
+**Example**
+
+```bash
+cents thesis twin abc123 --hedge-with SPY
 ```
 
 ### `cents thesis update`

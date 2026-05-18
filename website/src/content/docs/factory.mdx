@@ -15,22 +15,33 @@ backdrop — why we built it this way — read
 ## Philosophy first
 
 The factory's goal is **not** maximizing P&L. It's producing a labeled
-outcomes dataset stratified by cohort and regime, so that after enough
-resolved theses you can mine the data for which kinds of trades cents
-generates _well_ in which regime conditions. The income algorithm comes
-out of that map; it doesn't exist yet, and shouldn't, until the data
-supports a real conclusion.
+outcomes dataset stratified by cohort, regime, and orchestrator arm, so
+that after enough resolved theses you can mine the data for which kinds
+of trades cents generates _well_ under which conditions. The income
+algorithm comes out of that map; it doesn't exist yet, and shouldn't,
+until the data supports a real conclusion.
 
-Two commitments shape the structure:
+Three commitments shape the structure:
 
-- **The neutral cohort is mandatory** (paired mode is the intended
-  default). Without it you can't tell whether the directional cohort
-  earned skill or rode regime beta.
+- **The neutral cohort is mandatory** (paired mode is the default).
+  Without it you can't tell whether the directional cohort earned
+  skill or rode regime beta.
+- **The random arm is mandatory** (`cents factory run --orchestrator random`).
+  Without a matched-cadence baseline, you can't tell whether the LLM
+  arm produced signal or just rode whatever the universe was doing
+  while it ran. Every thesis carries `orchestrator_label` so cohort
+  analytics can compare the arms directly.
 - **Premise tags are first-class.** Every thesis declares which regime
   variables it depends on, drawn from the same controlled vocabulary
   the EventAgent uses to tag policy events. That shared vocab is what
-  makes premise-invalidation mechanical, and what makes
-  correlated-signal control work.
+  makes premise-invalidation mechanical.
+
+**The engine records, it does not gate.** Drawdown, liquidity, borrow,
+beta-matched hedging, and calibrated-p are all computed and stored on
+every thesis but never block an open. The point is the labeled outcomes
+dataset, not trading controls. `cents/finance/*` is a utility library
+for callers writing their own analytics, not a set of gates the engine
+relies on. See [Scope](/scope/).
 
 ## Budget mechanics
 
@@ -42,15 +53,14 @@ Defaults from `cents factory init`:
 | `target_positions` | `30` | Derives `position_size_usd = budget / target = $3,333` |
 | `entry_threshold` | `7.0` | `|conviction_delta|` required to open |
 | `preemption_margin` | `5.0` | New conviction must beat lowest open's by this much to displace |
-| `cohort_mode` | `directional_only`\* | `paired` opens both legs (2× notional); `directional_only` opens one |
+| `cohort_mode` | `paired` | `paired` opens both legs (2× notional); `directional_only` opens one |
+| `sizing_mode` | `equal_dollar` | `budget / target_positions` per leg. Flip to `vol_scaled` to opt into inverse-vol sizing. |
+| `beta_match_hedge` | `false` | Hedge leg is dollar-matched. Flip to `true` to opt into 60-day OLS beta-matched sizing. |
 | `default_horizon_days` | `30` | Auto-close as `UNCLEAR` after this many days |
 | `default_target_pct` | `+10%` | Close as `CORRECT` when price moves this far in conviction direction |
 | `default_stop_pct` | `-5%` | Close as `INCORRECT` when price moves this far against conviction |
 | `max_new_per_run` | `5` | Rate-limit so one run can't reshape the whole book |
 | `max_per_premise_tag` | `2` | Concentration cap — max open theses sharing any single premise tag |
-
-\* The scaffold defaults to `directional_only` for now, but the intended
-default is `paired` — change it manually after `cents factory init`.
 
 So under defaults: $3,333 per leg; paired theses cost $6,667 each; the
 budget supports ~15 paired theses or ~30 directional. With
@@ -97,15 +107,18 @@ invalidating event can't reopen them before it ages out.
 
 ## What it deliberately doesn't do
 
-- No real-money execution — paper positions only
+- No real-money execution — paper positions only (see [Scope](/scope/))
 - No reinvestment / compounding — budget is a static notional cap
-- No beta-matched sizing — 1:1 dollar across legs
 - No active threshold auto-tuning — entry/preemption parameters are
-  static config
+  static config and freeze at `cents experiment register` time
 - No pyramiding — one open thesis per symbol at a time
 - No chained preemption — won't unwind two cheap theses to fit one
   expensive new one
 - No backtest mode — runs only against `now()`
+- **Does not gate on drawdown, liquidity, borrow, or calibrated-p.**
+  Those numbers are computed and stored on every thesis, but the
+  engine never refuses to open on them. Trading-shaped behavior is
+  opt-in via the `cents/finance/` utilities.
 
 Each of these is tracked as a follow-up in
 [GitHub issues](https://github.com/wolfbane/cents/issues).
@@ -132,12 +145,16 @@ the deliverable, not the P&L number on any one run.
 ## Operating the factory
 
 ```bash
-cents factory init             # scaffold ~/.cents/factory.toml
-cents factory run --dry-run    # preview proposed actions
-cents factory run              # the real loop
-cents factory status           # current state, last run, budget util
-cents factory analyze          # cohort-stratified outcomes summary
+cents factory init                              # scaffold ~/.cents/factory.toml
+cents factory run --dry-run                     # preview proposed actions
+cents factory run                               # LLM arm — the real loop
+cents factory run --orchestrator random         # control arm — uniform-random conviction, no LLM calls
+cents factory run --orchestrator random --orchestrator-seed 42   # reproducible control arm
+cents factory run --max-cost-usd 5.00           # pre-call cost cap; aborts before the offending call
+cents factory status                            # current state, last run, budget util
+cents factory analyze                           # cohort-stratified outcomes summary
+cents factory analyze --by discovery,cohort,regime
 ```
 
-See also: [Universe](/universe/), [Cohort](/cohort/), and
-[Events](/events/).
+See also: [Universe](/universe/), [Cohort](/cohort/),
+[Events](/events/), and [Experiments](/commands/experiment/).

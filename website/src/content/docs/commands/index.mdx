@@ -5,8 +5,10 @@ description: One-line summary of every cents command group, with links to per-co
 
 import { LinkCard, CardGrid } from "@astrojs/starlight/components";
 
-Cents exposes 13 top-level command groups, each grouping related operations
-on theses, research, watchlists, alerts, positions, and broker state.
+Cents exposes 22 top-level command groups, each grouping related operations
+on theses, research, watchlists, alerts, positions, broker state, the
+autonomous factory loop, pre-registered experiments, calibration, and the
+LLM eval harness.
 
 The pages below are auto-generated from the CLI's `--help` output, so they
 stay in sync with the installed `cents` binary. Each page lists subcommands,
@@ -86,6 +88,51 @@ runnable examples.
     title="status"
     href="/commands/status/"
     description="Show current configuration and database status."
+  />
+  <LinkCard
+    title="factory"
+    href="/commands/factory/"
+    description="Run and inspect the autonomous open/close loop over a symbol universe."
+  />
+  <LinkCard
+    title="universe"
+    href="/commands/universe/"
+    description="Define and manage the symbol universes the factory walks."
+  />
+  <LinkCard
+    title="screener"
+    href="/commands/screener/"
+    description="Run discovery screeners (value, growth, momentum, mean reversion, insider cluster)."
+  />
+  <LinkCard
+    title="cohort"
+    href="/commands/cohort/"
+    description="Inspect directional vs neutral cohort spread P&L."
+  />
+  <LinkCard
+    title="event"
+    href="/commands/event/"
+    description="Refresh and inspect policy events used for premise invalidation."
+  />
+  <LinkCard
+    title="experiment"
+    href="/commands/experiment/"
+    description="Pre-register hypotheses with a frozen factory.toml so analytics stay falsifiable."
+  />
+  <LinkCard
+    title="calibration"
+    href="/commands/calibration/"
+    description="Fit and inspect the logistic-regression conviction calibration model."
+  />
+  <LinkCard
+    title="eval"
+    href="/commands/eval/"
+    description="Run the LLM eval harness against golden fixture sets."
+  />
+  <LinkCard
+    title="usage"
+    href="/commands/usage/"
+    description="Summarise persisted LLM usage and cost by agent / model / day."
   />
 </CardGrid>
 

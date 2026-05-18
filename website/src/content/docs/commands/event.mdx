@@ -1,0 +1,87 @@
+---
+title: "cents event"
+description: "Manage policy/macro events."
+---
+
+
+Manage policy/macro events.
+
+## Synopsis
+
+```bash
+cents event <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents event list` — List recently ingested events.
+- `cents event refresh` — Fetch new events and fire premise-invalidation alerts.
+- `cents event show` — Show full detail of a single event.
+
+### `cents event list`
+
+List recently ingested events.
+
+**Synopsis**
+
+```bash
+cents event list [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--tag TEXT` | `text` |  | Filter by tag (repeatable). |
+| `--since-days INTEGER` | `integer` | `30` | Window in days (default: 30). |
+| `--limit INTEGER` | `integer` | `20` |  |
+
+**Example**
+
+```bash
+cents event list [OPTIONS]
+```
+
+### `cents event refresh`
+
+Fetch new events and fire premise-invalidation alerts.
+
+**Synopsis**
+
+```bash
+cents event refresh [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--lookback-days INTEGER` | `integer` |  | Force a fixed lookback window (default: incremental since last fetch). |
+
+**Example**
+
+```bash
+cents event refresh [OPTIONS]
+```
+
+### `cents event show`
+
+Show full detail of a single event.
+
+**Synopsis**
+
+```bash
+cents event show EVENT_ID
+```
+
+**Arguments**
+
+| Argument | Type | Required |
+| --- | --- | --- |
+| `EVENT_ID` | `text` | yes |
+
+**Example**
+
+```bash
+cents event show EVENT_ID
+```

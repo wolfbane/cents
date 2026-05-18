@@ -131,6 +131,43 @@ returns 0.8 Sharpe and the neutral cohort returns 0.7, the actual edge
 is 0.1, not 0.8. Without the neutral cohort, you can't tell skill from
 tape. With it, you can.
 
+## Two arms: the random orchestrator
+
+The paired-neutral cohort controls for *regime beta*. It does not
+control for *signal value* — the question of whether the LLM-driven
+orchestrator did anything useful at all, or whether opening theses on
+the same cadence with random conviction would have produced the same
+cohort spread.
+
+Cents addresses that with a second control: a `RandomOrchestrator`
+arm. `cents factory run --orchestrator random` runs the loop with a
+uniform-random `conviction_delta` and no LLM calls. Every thesis it
+opens is tagged `orchestrator_label = "random"`; the default LLM arm
+is tagged `"llm"`. Run them on the same universe at the same cadence
+and the gap between the two arms is the value of the LLM signal,
+isolated from everything else.
+
+This is the design move that makes the pipeline a research experiment
+rather than a story. If the LLM arm doesn't beat the random arm at
+matched N, the headline conclusion is that the LLM signal didn't earn
+its operating cost — which is a useful conclusion, just not the one
+the system was *for*.
+
+## Pre-registration makes it falsifiable
+
+Cohort spreads and per-arm win rates are vulnerable to a different
+kind of cheating: post-hoc selection. Run the factory ten different
+ways, look at all the splits, pick the one that looks best, and write
+it up. The result will always look good — and won't replicate.
+
+`cents experiment register <spec.yaml>` blocks that move. A spec
+declares the hypothesis, the primary metric, and a `minimum_n_per_arm`
+target *before* any theses open. Registration snapshots the current
+`factory.toml` SHA so the parameters are frozen too. Every thesis
+opened while the experiment is active carries the `experiment_id`. At
+the end, `cents experiment finalize <name>` locks the verdict against
+the original spec — not against whatever cut of the data flatters it.
+
 ## The autonomous factory
 
 The [factory](/factory/) is the loop that runs all of this

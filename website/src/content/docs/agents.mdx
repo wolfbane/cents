@@ -110,7 +110,7 @@ for the project's stated boundaries.
   events as macro evidence for the thesis. See
   [Events & premise invalidation](/events/) for the full picture.
 
-### Orchestrator
+### Orchestrator (LLM arm)
 
 - **Source:** the seven agents above.
 - **Output:** a single `AgentResult` whose evidence is the union of every
@@ -130,6 +130,21 @@ for the project's stated boundaries.
     isn't quantized to ±10 by the per-agent clamp.
 - **Synthesis summary:** human-readable string of the form
   `NVDA synthesis: fundamentals: +3.1 | technical: +1.8 | sentiment: +0.4 = +5.3 total (weighted)`.
+
+### RandomOrchestrator (control arm)
+
+- **Source:** none — emits a uniform-random `conviction_delta` in
+  `[-30, +30]` with no LLM calls and no evidence rows.
+- **Stamp:** every thesis opened by this orchestrator gets
+  `orchestrator_label = "random"` (the LLM arm gets `"llm"`).
+- **Why it exists:** the paired-neutral cohort is a control for
+  *regime beta*; the random arm is the matched-cadence control for
+  *signal value*. Run it on the same universe at the same cadence as
+  the LLM arm and the cohort spread between the two arms isolates
+  whatever signal the LLM orchestrator actually contributed. See
+  [Operating principles](/principles/#two-arms-the-random-orchestrator).
+- **Invocation:** `cents factory run --orchestrator random
+  --orchestrator-seed 42` (seed for reproducibility).
 
 ## Reading the dimension scores
 

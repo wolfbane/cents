@@ -1,0 +1,66 @@
+---
+title: "cents eval"
+description: "Run the LLM eval harness against golden sets."
+---
+
+
+Run the LLM eval harness against golden sets.
+
+## Synopsis
+
+```bash
+cents eval <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents eval golden` — Inspect the golden fixture sets.
+- `cents eval run` — Run the eval against the live Anthropic API.
+
+### `cents eval golden`
+
+Inspect the golden fixture sets. The only subcommand is `show`.
+
+**Synopsis**
+
+```bash
+cents eval golden show --set [premise|sentiment] [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--set [premise\|sentiment]` | `[premise \| sentiment]` |  | Which golden set to inspect (required). |
+| `--output/-o [text\|json]` | `[text \| json]` |  | Output format. |
+
+**Example**
+
+```bash
+cents eval golden show --set premise
+cents eval golden show --set sentiment --output json
+```
+
+### `cents eval run`
+
+Run the eval against the live Anthropic API.
+
+**Synopsis**
+
+```bash
+cents eval run [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--set [premise|sentiment|all]` | `[premise \| sentiment \| all]` | `all` | Which eval to run (default: all). |
+| `--limit INTEGER` | `integer` |  | Cap fixtures per set (handy for smoke-testing). |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format. |
+
+**Example**
+
+```bash
+cents eval run [OPTIONS]
+```

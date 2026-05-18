@@ -1,0 +1,115 @@
+---
+title: "cents factory"
+description: "Run and inspect the autonomous factory loop."
+---
+
+
+Run and inspect the autonomous factory loop.
+
+## Synopsis
+
+```bash
+cents factory <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents factory analyze` — Outcomes stratified by one or more discovery / cohort / regime axes.
+- `cents factory init` — Scaffold ~/.cents/factory.toml with sensible defaults.
+- `cents factory run` — Run the factory engine once.
+- `cents factory status` — Summarize the factory's current state.
+
+### `cents factory analyze`
+
+Outcomes stratified by one or more discovery / cohort / regime axes.
+
+**Synopsis**
+
+```bash
+cents factory analyze [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--since-days INTEGER` | `integer` | `90` | Look-back window in days |
+| `--by TEXT` | `text` | `cohort` | Comma-separated grouping axes (cohort,discovery,regime). Multiple axes produce a cross-tab. Default: cohort. |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents factory analyze [OPTIONS]
+```
+
+### `cents factory init`
+
+Scaffold ~/.cents/factory.toml with sensible defaults.
+
+**Synopsis**
+
+```bash
+cents factory init [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--force` | `boolean` | `false` | Overwrite existing config |
+
+**Example**
+
+```bash
+cents factory init [OPTIONS]
+```
+
+### `cents factory run`
+
+Run the factory engine once.
+
+**Synopsis**
+
+```bash
+cents factory run [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--dry-run` | `boolean` | `false` | Plan actions without mutating state |
+| `--universe TEXT` | `text` |  | Universe name (defaults to config / default) |
+| `--max-cost-usd FLOAT` | `float` |  | Abort the run if cumulative LLM spend would exceed this many USD. Checked PRE-call against a token estimate so the offending call is never made. |
+| `--orchestrator [llm|random]` | `[llm \| random]` | `llm` | Which orchestrator to use. 'llm' = the real multi-agent stack. 'random' = the control arm (uniform conviction_delta, no LLM calls); use this to generate the baseline cohort that the LLM arm must beat. |
+| `--orchestrator-seed INTEGER` | `integer` |  | RNG seed for --orchestrator random (reproducibility). |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents factory run [OPTIONS]
+```
+
+### `cents factory status`
+
+Summarize the factory's current state.
+
+**Synopsis**
+
+```bash
+cents factory status [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format |
+
+**Example**
+
+```bash
+cents factory status [OPTIONS]
+```
