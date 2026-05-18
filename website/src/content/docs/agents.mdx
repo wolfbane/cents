@@ -33,6 +33,17 @@ for the project's stated boundaries.
 
 ## Per-agent breakdown
 
+<Aside type="note" title="Fired-rule attribution in evidence text">
+Evidence rows tagged `[+]` or `[-]` from the macro, technical,
+fundamentals, and moat agents include the **actual rule that fired** as
+a suffix on the evidence content — e.g. `Unemployment Rate 4.30 —
+low_level: UNRATE < 4.5%`, or `Profit Margin 28% — sector-high threshold`.
+Without this, the metric value alone is easy to mis-attribute (a falling
+unemployment reading reads as "decline is bullish" when the actual rule
+was the absolute level). Read the rule from the evidence content; the
+metric is decorative once the rule name is on the row.
+</Aside>
+
 ### Fundamentals
 
 - **Source:** [Financial Modeling Prep](https://site.financialmodelingprep.com/) (`/api/v3/ratios`, `/api/v3/key-metrics`).
@@ -93,6 +104,11 @@ for the project's stated boundaries.
 - **Dimension scores:** small contributions to `quality` and `risk`.
 - **Logic:** cluster buying is treated as a stronger supporting signal than
   isolated transactions; cluster selling registers as contradicting.
+  Trades are **deduplicated per-insider** before scoring (collapsed on
+  `reportingName`) so one insider filing five 10b5-1 sale slices doesn't
+  masquerade as cluster activity. When multiple rows collapse, the
+  evidence text appends `(across N filings, likely 10b5-1)` so the
+  scheduled-sale context is visible.
 
 ### Event
 
@@ -107,7 +123,11 @@ for the project's stated boundaries.
   pull new Federal Register documents, LLM-tag them, persist, and fire
   `PREMISE_INVALIDATION` alerts against open theses whose
   `premise_tags` intersect. (2) On `research()`, return recent matching
-  events as macro evidence for the thesis. See
+  events as macro evidence for the thesis. When called against a symbol
+  with no associated thesis (no-thesis research), untagged events are
+  dropped from the result — they can't intersect any premise by
+  construction, so surfacing them only adds noise. They are still
+  persisted and may match later. See
   [Events & premise invalidation](/events/) for the full picture.
 
 ### Orchestrator (LLM arm)

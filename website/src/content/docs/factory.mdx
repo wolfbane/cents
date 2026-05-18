@@ -154,7 +154,20 @@ cents factory run --max-cost-usd 5.00           # pre-call cost cap; aborts befo
 cents factory status                            # current state, last run, budget util
 cents factory analyze                           # cohort-stratified outcomes summary
 cents factory analyze --by discovery,cohort,regime
+cents factory analyze --by cohort,orchestrator  # the 2x2 LLM-vs-random win-rate table
+cents factory analyze --include-cost-per-outcome  # adds llm_cost_per_{opened,judged,correct} per cell
 ```
+
+The `--by orchestrator` axis stratifies by `orchestrator_label` (`llm` vs
+`random`). Pair it with `--by cohort` to read the experiment's primary
+metric off the resulting 2×2 grid.
+
+`--include-cost-per-outcome` is opt-in. It adds `llm_cost_per_opened`,
+`llm_cost_per_judged`, `llm_cost_per_correct`, and `llm_cost_total_usd`
+to every cell, plus an `unattributable_cost_usd` figure at the top level
+for LLM calls that didn't bind to any thesis (random-arm cells naturally
+read $0). Attribution joins `llm_usage.context` to `thesis.id` directly,
+or to `thesis.symbol` within the thesis's open window.
 
 See also: [Universe](/universe/), [Cohort](/cohort/),
 [Events](/events/), and [Experiments](/commands/experiment/).

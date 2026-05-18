@@ -19,6 +19,32 @@ cents experiment <subcommand> [OPTIONS] [ARGS]...
 - `cents experiment register` — Register a new experiment, freezing the current factory.toml SHA.
 - `cents experiment status` — Show progress of an active experiment against its targets.
 
+## Spec fields
+
+The YAML spec passed to `register` declares the hypothesis and the
+verdict-readiness criteria. Every field except `name`, `hypothesis`,
+and `primary_metric` has a default.
+
+| Field | Default | What it does |
+| --- | --- | --- |
+| `name` | — | Unique experiment name, used as a foreign key on every thesis opened while active. |
+| `hypothesis` | — | Free-text rationale, frozen at register time. |
+| `primary_metric` | — | The metric finalize will read the verdict against. |
+| `minimum_n_per_arm` | `100` | Per-arm closed-thesis count before `verdict_ready` flips true. |
+| `minimum_calendar_days` | `14` | Calendar-day floor from registration before `verdict_ready` flips true. Pilots can run lower (30 days for a 30-day pilot); full runs run higher (90 for a 90-day forward test). Combined with `minimum_n_per_arm` under a "later of" stopping rule, so neither gate short-circuits the other. |
+| `stopping_rule` | `later_of` | How to combine the N and calendar gates. |
+
+The two pre-registered specs shipped in the repo are:
+
+- **`experiments/pilot_v1.yaml`** — 30-day pilot, `minimum_n_per_arm: 200`,
+  `minimum_calendar_days: 30`, ~$5/day cost target. Coarse by design;
+  the goal is operational shakedown plus a go/no-go directional read.
+- **`experiments/hit_rate_delta_v1.yaml`** — 90-day full run,
+  `minimum_n_per_arm: 400`, `minimum_calendar_days: 90`, ~$15/day cost
+  target. Powers ~10pp gap detection at 80% power / α=0.05. Spec
+  preamble explicitly says do not register until the pilot lands a
+  positive directional read.
+
 ### `cents experiment finalize`
 
 Finalize an experiment (lock its status and optionally record a verdict).

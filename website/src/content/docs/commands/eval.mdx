@@ -16,6 +16,13 @@ cents eval <subcommand> [OPTIONS] [ARGS]...
 
 - `cents eval golden` — Inspect the golden fixture sets.
 - `cents eval run` — Run the eval against the live Anthropic API.
+- `cents eval drift-check` — Fire a `MODEL_DRIFT` alert if F1 has fallen more than 5pp below the trailing-7 median.
+
+The golden sets ship at 302 premise fixtures and 380 sentiment
+fixtures (>=6 per `EVENT_TAG`, prompt-injection negative controls,
+paired same-headline-opposite-direction fixtures). Output includes
+bootstrap CIs by default (1000 samples, deterministic at seed=17);
+text renders as `F1: 0.85 [0.81, 0.89]`, JSON exposes `*_ci` keys.
 
 ### `cents eval golden`
 
@@ -63,4 +70,35 @@ cents eval run [OPTIONS]
 
 ```bash
 cents eval run [OPTIONS]
+
+# Persist today's metrics to ~/.cents/data/eval_history/YYYY-MM-DD.jsonl
+cents eval run --persist-history
+
+# CI gate: exits 2 on regression beyond tolerance (distinct from skipped=1)
+cents eval run --gate \
+  --baseline-f1 0.85 --baseline-brier 0.18 --tolerance-pp 3
+
+# Bake the current run as the new baseline (locked_at: null until you lock it)
+cents eval run --persist-baseline
+```
+
+### `cents eval drift-check`
+
+Reads the trailing 7 days from `~/.cents/data/eval_history/` and
+fires an `AlertType.MODEL_DRIFT` alert when today's F1 has fallen
+more than 5pp below the trailing-7 median. Cheap insurance against
+silent classifier regressions when the upstream Haiku snapshot
+bumps. Run it after `cents eval run --persist-history` so the
+trailing window has today's data point in it.
+
+**Synopsis**
+
+```bash
+cents eval drift-check [OPTIONS]
+```
+
+**Example**
+
+```bash
+cents eval run --persist-history && cents eval drift-check
 ```
