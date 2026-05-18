@@ -58,6 +58,7 @@ export default defineConfig({
             { label: "cents eval", link: "/commands/eval/" },
             { label: "cents evidence", link: "/commands/evidence/" },
             { label: "cents shadow", link: "/commands/shadow/" },
+            { label: "Scheduling", link: "/scheduling/" },
           ],
         },
         {

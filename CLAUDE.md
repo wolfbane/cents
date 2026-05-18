@@ -58,6 +58,8 @@ cents recommend NVDA                    # emits bullish_signal / bearish_signal 
 
 Use `--output json` for machine-readable output. Run `cents --help` or `cents <command> --help` for full options.
 
+For running the factory + event refresh + shadow backfill on a daily cadence (cron / launchd recipes, cost-cap discipline, editable-install drift), see the [Scheduling page](https://dollars-and-cents.ai/scheduling/) — the docs surface for the 90-day forward test.
+
 ## Build & Test
 
 ```bash

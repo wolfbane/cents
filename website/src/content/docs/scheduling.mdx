@@ -1,0 +1,250 @@
+---
+title: Scheduling
+description: Wire up cron or launchd for a 90-day forward test — two arms, daily refresh, weekly delistings, with cost caps and a wrapper script.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+A pre-registered forward test only earns its labeled-outcomes dataset if
+the factory actually runs every trading day. This page is the operator's
+recipe for that — what to schedule, what order it has to run in, and
+the two pitfalls (`PATH` and editable-install drift) that bite first.
+
+If you haven't pre-registered the experiment yet, do that first via
+[`cents experiment register`](/commands/experiment/). The schedule below
+assumes an active experiment is already in place.
+
+## What needs to run on a schedule
+
+For a two-arm forward test, six commands run on a cadence:
+
+| Command | Cadence | Why |
+| --- | --- | --- |
+| `cents event refresh` | Daily, before open (e.g. 06:00 ET) | Pulls Federal Register events; fires `PREMISE_INVALIDATION` alerts against any open thesis whose `premise_tags` intersect an event's tags. |
+| `cents factory run` | Daily, after the refresh (e.g. 06:30 ET) | The LLM arm — the real multi-agent stack. Stamps `orchestrator_label = "llm"` on every thesis it opens. |
+| `cents factory run --orchestrator random --orchestrator-seed N` | Daily, same window, separate invocation | The control arm. Uniform-random conviction, no LLM calls. Stamps `orchestrator_label = "random"`. Without this you cannot tell whether the LLM arm produced signal or rode the universe. |
+| `cents shadow backfill --horizon 30` | Daily (or weekly) | Walks the `shadow_opens` table past the 30-day horizon and fills forward returns from price history. This is what gives you a baseline against rejected candidates. |
+| `cents universe ingest-delistings` | Weekly | Keeps the delistings table current. Forward runs are unbiased today; the longer this has been running, the less retrospective survivorship bias bleeds into back-dated universe reconstructions. See [Scope](/scope/#survivorship-bias-in-universes). |
+| `cents experiment status --output json` | Daily, appended to a log | Lets you watch `verdict_ready` and `opened_by_arm` evolve over the 90 days without having to remember to check. |
+
+Order matters in one place: `event refresh` must complete before
+`factory run`, otherwise the day's events haven't had a chance to
+invalidate stale theses before the open phase considers new ones.
+
+<Aside type="note" title="Order within a day">
+`event refresh` → `factory run` (LLM) → `factory run --orchestrator random`
+→ `shadow backfill`. The two factory invocations don't have to be
+sequential (they don't share state at run time), but staggering them by
+a few minutes makes the logs easier to read.
+</Aside>
+
+## Recipe 1: cron (Linux / macOS)
+
+A wrapper script makes the cron entries readable and gives one place to
+manage `PATH`, the timezone, and the path to your editable install.
+
+`~/.cents/bin/cents-wrap` (mark it executable with `chmod +x`):
+
+```bash
+#!/usr/bin/env bash
+# Wrapper so cron / launchd dispatch to the right cents binary
+# regardless of which working tree is currently checked out.
+set -euo pipefail
+
+# Anchor schedules to US market hours even on a non-US machine.
+export TZ="America/New_York"
+
+# Use the venv's cents directly — never rely on PATH lookup from cron.
+# Adjust to wherever your editable install lives.
+CENTS_BIN="$HOME/.venvs/cents/bin/cents"
+
+# API keys: read from ~/.cents/config.toml at runtime. If you'd rather
+# keep them out of the config file, export them here instead:
+#   export ANTHROPIC_API_KEY="..."
+#   export FMP_API_KEY="..."
+
+# Per-day log directory.
+LOG_DIR="$HOME/.cents/logs/$(date +%Y-%m-%d)"
+mkdir -p "$LOG_DIR"
+
+CMD_NAME="$1"; shift
+exec "$CENTS_BIN" "$@" >>"$LOG_DIR/${CMD_NAME}.log" 2>&1
+```
+
+Then `crontab -e`:
+
+```bash
+# m h dom mon dow  command
+# Anchor cron itself to ET so the hour fields below mean what they look like.
+TZ=America/New_York
+
+# 06:00 ET — pull policy events, fire premise-invalidation alerts.
+0  6  * * 1-5  ~/.cents/bin/cents-wrap event-refresh event refresh
+
+# 06:30 ET — LLM arm. Cost-capped so a hung loop can't run unbounded charges.
+30 6  * * 1-5  ~/.cents/bin/cents-wrap factory-llm    factory run --max-cost-usd 10
+
+# 06:35 ET — control arm. Same cadence, different orchestrator, fixed seed for repro.
+35 6  * * 1-5  ~/.cents/bin/cents-wrap factory-random factory run --orchestrator random --orchestrator-seed 42
+
+# 07:00 ET — backfill 30-day forward returns for rejected candidates.
+0  7  * * 1-5  ~/.cents/bin/cents-wrap shadow         shadow backfill --horizon 30
+
+# Sunday 04:00 ET — refresh the delistings table.
+0  4  * * 0    ~/.cents/bin/cents-wrap delistings     universe ingest-delistings
+
+# 18:00 ET — daily experiment-status snapshot for trend-watching.
+0 18  * * 1-5  ~/.cents/bin/cents-wrap status         experiment status --output json
+```
+
+Logs land at `~/.cents/logs/YYYY-MM-DD/<command>.log`. The per-day
+directory makes failed-day archaeology trivial (`ls ~/.cents/logs/` is
+your run history).
+
+## Recipe 2: launchd (macOS)
+
+`launchd` keeps running across reboots and doesn't need a logged-in
+shell. Drop these under `~/Library/LaunchAgents/` and load each one
+with `launchctl load -w <plist>`.
+
+`~/Library/LaunchAgents/ai.dollars-and-cents.factory-llm.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.factory-llm</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/.cents/bin/cents-wrap</string>
+    <string>factory-llm</string>
+    <string>factory</string>
+    <string>run</string>
+    <string>--max-cost-usd</string>
+    <string>10</string>
+  </array>
+
+  <!-- 06:30, weekdays only. launchd has no TZ key — the wrapper handles ET. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <!-- Don't run on load — only when the calendar interval triggers. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/.cents/logs/launchd-factory-llm.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/.cents/logs/launchd-factory-llm.err</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TZ</key>
+    <string>America/New_York</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
+```
+
+Make one plist per scheduled command — `factory-llm`, `factory-random`,
+`event-refresh`, `shadow-backfill`, `delistings`, `experiment-status` —
+varying the `Label`, `ProgramArguments`, `StartCalendarInterval`, and
+log paths. The wrapper script handles the rest.
+
+Load and verify:
+
+```bash
+launchctl load -w ~/Library/LaunchAgents/ai.dollars-and-cents.factory-llm.plist
+launchctl list | grep dollars-and-cents
+# To unload (e.g. before editing the plist):
+launchctl unload   ~/Library/LaunchAgents/ai.dollars-and-cents.factory-llm.plist
+```
+
+The `-w` flag persists the load state across reboots.
+
+## Common pitfalls
+
+<Aside type="caution" title="Editable-install drift">
+If you installed `cents` with `pip install -e .` and you do work in git
+worktrees, the binary on `PATH` may dispatch to whichever working tree
+was active during the last `pip install -e .`. cron / launchd inherit a
+minimal environment and will silently pick up a stale install. **Always
+reference the full venv path** in your wrapper script
+(`$HOME/.venvs/cents/bin/cents` or `python -m cents.cli`) — never let
+cron resolve `cents` via `PATH`.
+</Aside>
+
+<Aside type="caution" title="Timezone">
+`cron`'s `0 6 * * *` uses the system timezone. If you're trading US
+equities from a non-US machine, the hour field means the wrong thing.
+Fix it by setting `TZ=America/New_York` in the crontab itself (shown
+above). `launchd` has no equivalent knob — the wrapper script's
+`export TZ=...` is what anchors it, plus `EnvironmentVariables` in the
+plist for any cents subprocesses.
+</Aside>
+
+<Aside type="caution" title="Cost-cap discipline">
+A hung agent loop can rack up Anthropic charges quickly. **Always pair
+`cents factory run` with `--max-cost-usd N`** under cron / launchd.
+$5–10/day is a comfortable ceiling for a small universe; raise it once
+you've watched a few runs land at under $0.10. The cap is enforced pre-call
+via a token-count estimate, so the offending request is never made —
+see the [factory cost note](/factory/#operational-cost-observed).
+</Aside>
+
+<Aside type="caution" title="Don't automate `experiment finalize`">
+`cents experiment finalize` is a manual review step, not an automated
+one. The `--force` flag exists for **abandoning** experiments (e.g.
+the data collection failed and you want the cohort flagged), not for
+closing them on a schedule. Read the verdict yourself, write the
+verdict file yourself, run finalize yourself.
+</Aside>
+
+## Verifying it's working
+
+Five quick checks. Run them on day 2 of any new schedule, before you
+trust it to run unattended for 90.
+
+```bash
+# 1. The latest run actually executed and produced output.
+tail -F ~/.cents/logs/$(date +%Y-%m-%d)/factory-llm.log
+
+# 2. Both arms are accumulating theses against the active experiment.
+cents experiment status --output json | jq .opened_by_arm
+# Expect something like: { "llm": 12, "random": 11 } — counts should grow daily.
+
+# 3. Premise invalidation is firing when events match an open thesis.
+cents alert list --unread
+
+# 4. The labeled-outcomes dataset is populating across discovery / cohort / regime.
+cents factory analyze --by cohort
+cents factory analyze --by discovery,regime
+
+# 5. Spend is where you expect — well under any --max-cost-usd cap.
+cents usage summary --by agent
+```
+
+If `opened_by_arm` shows only `"llm"`, the random-orchestrator cron
+entry isn't firing — check its log, then check that the experiment is
+still active (`cents experiment list`).
+
+## How this connects to the rest of the docs
+
+The schedule produces the labeled outcomes dataset. Whether you should
+trust the cohort numbers it generates is a separate question, answered
+by [Scope](/scope/) — survivorship coverage, lookahead audit results,
+calibration honesty, and the gates the engine deliberately does not
+apply. Read that page before you start drawing conclusions from
+whatever the 90-day window leaves behind.
