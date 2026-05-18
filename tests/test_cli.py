@@ -1002,3 +1002,79 @@ class TestThesisResolutionTriggers:
             result = runner.invoke(cli, ["watch", "remove", "NOTFOUND"])
             assert result.exit_code == 1
             assert "not found" in result.output
+
+
+class TestUsageHeadroom:
+    """Tests for `cents usage headroom` — daily cost cap tracking surface."""
+
+    def _seed_usage(self, model="claude-haiku-4-5-20251001", *, input_tokens, output_tokens, days_ago=0):
+        """Insert one llm_usage row at `now - days_ago` so today_cost_usd can find it."""
+        import sqlite3
+        from datetime import datetime, timedelta
+        from cents.db.schema import get_db_path
+        from cents.models import LLMUsage
+        from cents.db import LLMUsageRepository
+
+        repo = LLMUsageRepository()
+        called_at = datetime.now() - timedelta(days=days_ago)
+        row = LLMUsage(
+            model=model,
+            agent="sentiment",
+            operation="score_article",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            called_at=called_at,
+        )
+        repo.create(row)
+
+    def test_headroom_no_cap_configured(self, runner, mock_db, monkeypatch):
+        """Reports 'no_cap_configured' when neither env nor settings supply a cap."""
+        monkeypatch.delenv("CENTS_MAX_LLM_SPEND_USD_PER_DAY", raising=False)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["usage", "headroom", "--output", "json"])
+            assert result.exit_code == 0
+            import json
+            payload = json.loads(result.output)
+            assert payload["status"] == "no_cap_configured"
+            assert payload["cap_usd"] is None
+
+    def test_headroom_ok_status_when_well_under_warn(self, runner, mock_db, monkeypatch):
+        """Status = 'ok' when today's spend is under warn_pct of cap."""
+        monkeypatch.setenv("CENTS_MAX_LLM_SPEND_USD_PER_DAY", "5.0")
+        # Spend ~$0.001 today, $5 cap → ok
+        self._seed_usage(input_tokens=100, output_tokens=20)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["usage", "headroom", "--output", "json"])
+            assert result.exit_code == 0
+            import json
+            payload = json.loads(result.output)
+            assert payload["status"] == "ok"
+            assert payload["cap_usd"] == 5.0
+            assert payload["used_pct"] < 1.0
+            assert payload["headroom_pct"] > 99.0
+
+    def test_headroom_approaching_cap(self, runner, mock_db, monkeypatch):
+        """Status = 'approaching_cap' when spend crosses warn_pct."""
+        monkeypatch.setenv("CENTS_MAX_LLM_SPEND_USD_PER_DAY", "1.0")
+        # Force ~$0.85 by seeding ~850k input tokens ($1/M for Haiku 4.5)
+        self._seed_usage(input_tokens=850_000, output_tokens=0)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["usage", "headroom", "--output", "json"])
+            assert result.exit_code == 0
+            import json
+            payload = json.loads(result.output)
+            assert payload["status"] == "approaching_cap"
+            assert payload["used_pct"] >= 80.0
+            assert payload["headroom_pct"] < 20.0
+
+    def test_headroom_hit_cap(self, runner, mock_db, monkeypatch):
+        """Status = 'hit_cap' when today's spend is at or above the cap."""
+        monkeypatch.setenv("CENTS_MAX_LLM_SPEND_USD_PER_DAY", "1.0")
+        self._seed_usage(input_tokens=1_000_000, output_tokens=0)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["usage", "headroom", "--output", "json"])
+            assert result.exit_code == 0
+            import json
+            payload = json.loads(result.output)
+            assert payload["status"] == "hit_cap"
+            assert payload["headroom_pct"] == 0.0

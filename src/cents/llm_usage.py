@@ -235,6 +235,16 @@ def check_cost_cap(call_kwargs: dict[str, Any], *, agent: str, operation: str) -
             )
 
 
+def get_daily_cap() -> float | None:
+    """Public accessor for the configured daily LLM spend cap.
+
+    Resolves from ``CENTS_MAX_LLM_SPEND_USD_PER_DAY`` env first, then
+    ``max_llm_spend_usd_per_day`` in ``~/.cents/factory.toml``. Returns
+    ``None`` when no cap is configured.
+    """
+    return _get_daily_cap()
+
+
 def _get_daily_cap() -> float | None:
     """Resolve the daily cap from env first, then Settings — env wins for tests."""
     env_val = os.environ.get("CENTS_MAX_LLM_SPEND_USD_PER_DAY")
