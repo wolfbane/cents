@@ -9,12 +9,17 @@
 #
 # Pre-flight checklist before `cents experiment register`:
 #   1. ~/.cents/factory.toml exists (run `cents factory init` if not)
-#   2. max_llm_spend_usd_per_day = 5.00 (pilot cap; tighter than full run)
-#   3. cohort_mode = "paired"
-#   4. sizing_mode = "equal_dollar"
-#   5. beta_match_hedge = false
+#   2. Daily cap of $5/day set in ~/.cents/config.toml (NOT factory.toml):
+#         max_llm_spend_usd_per_day = 5.0
+#      OR exported as CENTS_MAX_LLM_SPEND_USD_PER_DAY=5.0 in your cron env.
+#      Also pair every `cents factory run` with --max-cost-usd 5.0 as a
+#      per-run belt-and-suspenders.
+#   3. cohort_mode = "paired" (in factory.toml)
+#   4. sizing_mode = "equal_dollar" (in factory.toml)
+#   5. beta_match_hedge = false (in factory.toml)
 #   6. universe set-default points at an S&P 500 universe
 #   7. `cents universe ingest-delistings` has been run within the last 24h
+#   8. `cents usage headroom` returns status=ok with the cap configured
 
 name: pilot_v1
 hypothesis: >

@@ -204,12 +204,19 @@ plist for any cents subprocesses.
 </Aside>
 
 <Aside type="caution" title="Cost-cap discipline">
-A hung agent loop can rack up Anthropic charges quickly. **Always pair
-`cents factory run` with `--max-cost-usd N`** under cron / launchd.
-$5–10/day is a comfortable ceiling for a small universe; raise it once
-you've watched a few runs land at under $0.10. The cap is enforced pre-call
-via a token-count estimate, so the offending request is never made —
-see the [factory cost note](/factory/#operational-cost-observed).
+A hung agent loop can rack up Anthropic charges quickly. Two layers:
+
+- **Per-run cap**: pair every `cents factory run` with `--max-cost-usd N`.
+  $5–10/day is a comfortable ceiling for a small universe; raise it once
+  you've watched a few runs land at under $0.10.
+- **Daily cap**: set `max_llm_spend_usd_per_day = N` in **`~/.cents/config.toml`**
+  (NOT `factory.toml` — easy mistake). The `CENTS_MAX_LLM_SPEND_USD_PER_DAY`
+  env var works too and is what most cron setups use.
+
+Both are enforced pre-call via a token-count estimate, so the offending
+request is never made. Watch usage with `cents usage headroom --output json |
+jq .status` — emits `ok / approaching_cap / hit_cap / no_cap_configured`.
+See the [factory cost note](/factory/#operational-cost-observed).
 </Aside>
 
 <Aside type="caution" title="Don't automate `experiment finalize`">
@@ -241,7 +248,9 @@ cents factory analyze --by cohort
 cents factory analyze --by discovery,regime
 
 # 5. Spend is where you expect — well under any --max-cost-usd cap.
-cents usage summary --by agent
+cents usage headroom
+# Expect: "Status: ok". "approaching_cap" or "hit_cap" means tune the cap up.
+# Per-agent attribution: cents usage summary --by agent
 ```
 
 If `opened_by_arm` shows only `"llm"`, the random-orchestrator cron
