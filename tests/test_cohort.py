@@ -436,8 +436,10 @@ class TestCohortCLI:
         result = runner.invoke(cli, ["cohort", "--output", "json"])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
-        cohorts = {entry["cohort"]: entry for entry in data}
+        cohorts = {entry["cohort"]: entry for entry in data["cohorts"]}
         assert cohorts["directional"]["thesis_count"] == 1
         assert cohorts["neutral"]["thesis_count"] == 1
         assert cohorts["directional"]["realized_pnl"] == 0
         assert cohorts["directional"]["win_rate"] is None
+        assert "_disclosure" in data
+        assert "_low_n" in data

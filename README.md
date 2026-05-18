@@ -1,17 +1,26 @@
 # Cents
 
-Thesis-driven investment research, agent-orchestrated.
+A research experiment in agent-orchestrated investment hypothesis tracking. **Not an investing tool.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](#development)
 [![Docs](https://img.shields.io/badge/docs-dollars-and-cents.ai-blueviolet.svg)](https://dollars-and-cents.ai)
 
-> ⚠️ **Not financial advice.** Cents is an educational and research tool for tracking your own investment theses. It does not provide investment advice, recommendations, or solicitations. Outputs are model-generated and may be inaccurate. You are solely responsible for your own investment decisions. Consult a licensed financial advisor before trading.
+> ⚠️ **Research tool, not an investing tool — and not financial advice.**
+> Cents is an open-source experiment in multi-agent LLM orchestration applied
+> to investment research. It is **not** an investment adviser, broker, or
+> recommendation engine. Outputs (conviction scores, premise tags, BUY/SELL/HOLD
+> strings) are model-generated, uncalibrated, and may be wrong. There is no KYC,
+> no suitability check, no portfolio risk controls, no slippage/borrow modeling,
+> no reconciliation or audit trail. **Real-money trading is technically possible
+> but explicitly out of scope** — the autonomous loop is hard-coded to paper.
+> If you point this at a live account, you are doing so against the documented
+> intent of the project. Read the [scope statement](https://dollars-and-cents.ai/scope/) before going further.
 
 ## What is Cents?
 
-Cents is a CLI for the AI/finance crowd that treats investing as a hypothesis-testing exercise. You write down a thesis ("NVDA's data-center growth will drive earnings beats over 12 months"), and Cents orchestrates seven specialised research agents — fundamentals, technical, macro, sentiment, moat, insider, plus an orchestrator — that gather evidence and adjust a conviction score. Positions and outcomes are tracked against the original thesis so you measure thesis accuracy, not just P&L. Everything lives in local SQLite; data flows from FMP, Alpaca, FRED, and NewsAPI.
+Cents is a CLI sandbox for treating investment ideas as falsifiable hypotheses. You write down a thesis ("NVDA's data-center growth will drive earnings beats over 12 months"), and a set of specialised agents — fundamentals, technical, macro, sentiment, moat, insider, plus an orchestrator — gather evidence and adjust a conviction score. Positions and outcomes are tracked against the original thesis so the project produces a labeled outcomes dataset you can study. Everything lives in local SQLite; data flows from FMP, Alpaca (paper), FRED, and NewsAPI.
 
 ## Install
 

@@ -1,0 +1,113 @@
+---
+title: Scope
+description: What cents is, what it is not, and why real-money trading is out of scope.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Read this before anything else">
+**Cents is a research experiment, not an investing tool.** It exists to
+explore whether agent-orchestrated, regime-aware research can produce
+a labeled outcomes dataset worth studying. It is **not** an investment
+adviser, broker, robo-adviser, or recommendation engine, and nothing it
+emits is investment advice.
+</Aside>
+
+## What cents is
+
+- A **personal research workbench** for writing down stock theses,
+  attaching evidence, and tracking whether the reasoning held up.
+- An **experiment** in multi-agent LLM orchestration applied to a
+  domain where outcomes are unambiguous (price moves) and the regime
+  is non-stationary.
+- A **labeled-outcomes dataset generator** — every closed thesis is
+  tagged with its discovery source, premise tags, regime snapshot, and
+  closure reason, so the project itself can be studied.
+
+It is open-source under the MIT license. Treat the codebase as you
+would any research code: instructive, occasionally clever, not
+audit-grade.
+
+## What cents is not
+
+- **Not investment advice.** Outputs (conviction deltas, premise tags,
+  thesis suggestions, BUY/SELL/HOLD strings) are model-generated and
+  uncalibrated. There is no held-out evaluation of the LLM scorers;
+  there are no performance disclosures on the cohort or backtest
+  outputs.
+- **Not a fiduciary product.** No KYC, no suitability check, no risk
+  tolerance intake, no investor profiling. The system will happily
+  open paper shorts on a retiree's behalf if asked.
+- **Not a trading system.** Position sizing is equal-dollar. There is
+  no portfolio-level kill switch, no max-drawdown gate, no
+  vol-targeting, no factor or correlation cap, no slippage or
+  borrow-cost modeling, no intraday stop monitoring. The "paired
+  hedge" is dollar-matched, not beta-matched.
+- **Not a fund accounting system.** SQLite at `~/.cents/data/cents.db`
+  is a single-user file with no encryption, no WORM-compliant audit
+  trail, no broker reconciliation, no lot accounting, no wash-sale
+  tracking, no 1099 reconciliation.
+
+If any of those gaps would be load-bearing for the way you'd use
+cents, you don't want cents — you want a real OMS, a real adviser, or
+a real broker.
+
+## Real-money trading is out of scope
+
+Cents includes an `[broker]` extras install and an Alpaca integration
+because the original experiment needed somewhere to read prices and
+post paper fills. **Live, real-money trading is technically possible
+but explicitly outside the scope of this project.**
+
+What that means in practice:
+
+- The `cents factory` autonomous loop is hard-coded to `paper=True`.
+- The `cents broker buy` / `broker sell` commands are documented as
+  paper-trading commands; they have no review, suitability, or
+  best-execution layer behind them.
+- There is no roadmap item to make real-money trading safe. The
+  existing P4 [roadmap entry](/roadmap/) on Alpaca real-money
+  execution is **deferred indefinitely** — not "soon," not "after
+  v1.0," not at all under the current scope.
+- If you point cents at a non-paper Alpaca account by editing the
+  config or the source, you are doing so against the documented
+  intent of the project, with none of the controls (position sizing
+  discipline, kill switches, recordkeeping, reconciliation, tax
+  accounting) that a real trading system would require.
+
+The author of this project does not want anyone to lose money because
+of code in this repo. If you are tempted to wire it to a live account,
+please don't.
+
+## Limits the critique surfaced
+
+The system was put through a five-persona critique (investment PM, AI
+engineer, CFO, risk manager, compliance officer) and the convergent
+verdict was that it is a research tool, full stop. The findings are
+tracked as issues in the `.beads` directory; the headline gaps are:
+
+- LLM components are uncalibrated and not deterministic
+  (`temperature` unset, model alias not pinned to a snapshot).
+- Untrusted news/event text is f-stringed into LLM prompts without
+  delimiters — a prompt-injection surface.
+- No volatility-scaled position sizing, no portfolio-level drawdown
+  gate, no liquidity or borrow checks on shorts.
+- No transaction cost, slippage, or borrow-fee modeling — recorded
+  P&L is gross of costs that would meaningfully change the sign of
+  small edges.
+- No prompt/model fingerprint linked to evidence rows, so historical
+  decisions cannot be reconstructed for audit.
+
+These are real and known. They are why this is a research tool.
+
+## If you still want to use it
+
+Use cents the way you'd use a Jupyter notebook: as a sandbox for
+asking questions about your own theses, in paper, on a machine you
+control, with money you've decided to treat as study material. Don't
+share its outputs as recommendations to other people. Don't publish
+its cohort or backtest tables without disclosing how thin the
+sample is and how much of the P&L is gross of costs. And don't point
+it at a live account.
+
+That's the scope.

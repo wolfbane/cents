@@ -1,5 +1,6 @@
 """Base agent class for research agents."""
 
+import hashlib
 import json
 import re
 from abc import ABC, abstractmethod
@@ -65,6 +66,40 @@ RECOVERABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
 def clamp_conviction_delta(delta: float, max_val: float = MAX_CONVICTION_DELTA) -> float:
     """Clamp conviction delta to prevent extreme swings."""
     return max(-max_val, min(max_val, delta))
+
+
+def _sha256(text: str) -> str:
+    """Hex SHA-256 of a UTF-8 string. Stable across runs and Python versions."""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def make_provenance(
+    *,
+    prompt: str,
+    input_text: str,
+    output_text: str,
+    model: str,
+    llm_call_id: str,
+) -> dict[str, str]:
+    """Return a provenance dict for stamping on Evidence rows.
+
+    Caller is expected to have already persisted the prompt+input+output blob
+    via :func:`cents.llm_usage.persist_call_blob` (the same `llm_call_id`).
+    The returned dict maps directly onto the evidence schema columns:
+    ``llm_call_id``, ``model_snapshot``, ``prompt_sha256``, ``input_sha256``,
+    ``output_sha256``.
+
+    Hashes are stable: identical inputs produce identical hashes across
+    processes / Python versions, which lets compliance reviews verify that
+    a stored blob matches the evidence row that claims it.
+    """
+    return {
+        "llm_call_id": llm_call_id,
+        "model_snapshot": model,
+        "prompt_sha256": _sha256(prompt),
+        "input_sha256": _sha256(input_text),
+        "output_sha256": _sha256(output_text),
+    }
 
 
 @dataclass

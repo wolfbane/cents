@@ -30,6 +30,10 @@ class Settings:
     default_output: str = "text"
     fetch_forward_estimates: bool = False  # Enable forward P/E via FMP analyst-estimates
     default_api_timeout: int = 10  # API request timeout in seconds
+    # Hard cap on cumulative LLM spend per calendar day across all cents
+    # processes (checked against today's `llm_usage` rows). `None` disables.
+    # Overridable via `CENTS_MAX_LLM_SPEND_USD_PER_DAY`.
+    max_llm_spend_usd_per_day: float | None = None
 
 
 def _load_config_file(config_path: Path) -> dict:
@@ -87,6 +91,21 @@ def get_settings(config_path: str | None = None) -> Settings:
     except (TypeError, ValueError):
         timeout_value = 10
 
+    # Parse daily LLM spend cap. None disables the cap.
+    daily_cap_raw = _get(
+        "max_llm_spend_usd_per_day", "CENTS_MAX_LLM_SPEND_USD_PER_DAY", None
+    )
+    daily_cap_value: float | None
+    if daily_cap_raw in (None, "", "none", "None"):
+        daily_cap_value = None
+    else:
+        try:
+            daily_cap_value = float(daily_cap_raw)
+            if daily_cap_value < 0:
+                daily_cap_value = None
+        except (TypeError, ValueError):
+            daily_cap_value = None
+
     return Settings(
         news_api_key=_get("news_api_key", "NEWS_API_KEY", None),
         fred_api_key=_get("fred_api_key", "FRED_API_KEY", None),
@@ -99,5 +118,6 @@ def get_settings(config_path: str | None = None) -> Settings:
         default_output=default_output,
         fetch_forward_estimates=fetch_forward,
         default_api_timeout=timeout_value,
+        max_llm_spend_usd_per_day=daily_cap_value,
     )
 

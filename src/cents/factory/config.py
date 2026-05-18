@@ -25,6 +25,36 @@ default_stop_pct = -5.0        # close-position trigger as % off entry (negative
 default_target_pct = 10.0      # close-position trigger as % off entry (positive)
 max_new_per_run = 5            # rate-limit on new theses opened per run
 max_per_premise_tag = 2        # max open theses sharing any single premise tag (0 disables)
+
+# Vol-scaled sizing (v0.10). When enabled, replaces equal-dollar sizing with
+# inverse-vol scaling toward a target per-position daily $-vol fraction.
+sizing_mode = "vol_scaled"     # "vol_scaled" (default) or "equal_dollar"
+target_vol_pct_per_position = 0.5   # per-position annual $-vol as % of budget
+max_position_pct = 5.0         # hard cap on single-position dollar weight as % of budget
+vol_lookback_days = 20
+
+# Transaction cost model (v0.10). Subtracted from P&L on close and persisted on
+# the position so cohort analytics see net-of-cost results.
+commission_per_share_usd = 0.0     # 0 for paper / Alpaca; non-zero for other venues
+slippage_bps = 5.0                  # bps of notional per side
+gap_slippage_bps = 25.0             # extra bps applied when a stop is breached / gapped through
+borrow_rate_pa_pct = 3.0            # synthetic annual borrow rate applied to shorts
+
+# Paired-hedge beta matching (v0.10). When enabled, hedge leg notional is
+# scaled by a 60-day historical beta vs the hedge ETF rather than dollar-matched.
+beta_match_hedge = true
+default_beta = 1.0
+beta_lookback_days = 60
+beta_min = 0.25
+beta_max = 3.0
+
+# Liquidity + borrow gates (v0.10).
+min_adv_multiple = 50.0        # require median daily $-volume >= this x position size
+liquidity_lookback_days = 20
+
+# Portfolio kill switch (v0.10). Halts the open phase when breached.
+max_portfolio_drawdown_pct = 10.0   # halt opens at <= -10% unrealized DD
+max_daily_loss_pct = 3.0            # halt opens at <= -3% realized loss today
 """
 
 
@@ -43,11 +73,37 @@ class FactoryConfig:
     default_target_pct: float = 10.0
     max_new_per_run: int = 5
     max_per_premise_tag: int = 2
+    # Sizing (v0.10).
+    sizing_mode: str = "vol_scaled"
+    target_vol_pct_per_position: float = 0.5
+    max_position_pct: float = 5.0
+    vol_lookback_days: int = 20
+    # Costs (v0.10).
+    commission_per_share_usd: float = 0.0
+    slippage_bps: float = 5.0
+    gap_slippage_bps: float = 25.0
+    borrow_rate_pa_pct: float = 3.0
+    # Hedging (v0.10).
+    beta_match_hedge: bool = True
+    default_beta: float = 1.0
+    beta_lookback_days: int = 60
+    beta_min: float = 0.25
+    beta_max: float = 3.0
+    # Liquidity (v0.10).
+    min_adv_multiple: float = 50.0
+    liquidity_lookback_days: int = 20
+    # Kill switch (v0.10).
+    max_portfolio_drawdown_pct: float = 10.0
+    max_daily_loss_pct: float = 3.0
 
     def __post_init__(self) -> None:
         if self.cohort_mode not in {"paired", "directional_only"}:
             raise ValueError(
                 f"cohort_mode must be 'paired' or 'directional_only', got {self.cohort_mode!r}"
+            )
+        if self.sizing_mode not in {"vol_scaled", "equal_dollar"}:
+            raise ValueError(
+                f"sizing_mode must be 'vol_scaled' or 'equal_dollar', got {self.sizing_mode!r}"
             )
         if self.budget_usd <= 0:
             raise ValueError("budget_usd must be positive")
@@ -59,10 +115,24 @@ class FactoryConfig:
             raise ValueError("max_new_per_run must be non-negative")
         if self.max_per_premise_tag < 0:
             raise ValueError("max_per_premise_tag must be non-negative")
+        if self.target_vol_pct_per_position <= 0:
+            raise ValueError("target_vol_pct_per_position must be positive")
+        if self.max_position_pct <= 0:
+            raise ValueError("max_position_pct must be positive")
+        if self.slippage_bps < 0 or self.gap_slippage_bps < 0:
+            raise ValueError("slippage_bps fields must be non-negative")
+        if self.borrow_rate_pa_pct < 0:
+            raise ValueError("borrow_rate_pa_pct must be non-negative")
+        if self.beta_min < 0 or self.beta_max <= self.beta_min:
+            raise ValueError("beta_min must be >=0 and beta_max must exceed beta_min")
+        if self.min_adv_multiple < 0:
+            raise ValueError("min_adv_multiple must be non-negative")
+        if self.max_portfolio_drawdown_pct < 0 or self.max_daily_loss_pct < 0:
+            raise ValueError("kill-switch thresholds must be non-negative")
 
     @property
     def position_size_usd(self) -> float:
-        """Per-position dollar sizing derived from budget / target_positions."""
+        """Equal-dollar fallback sizing — used when vol unavailable or sizing_mode='equal_dollar'."""
         return self.budget_usd / self.target_positions
 
 
@@ -106,6 +176,24 @@ def load_factory_config(path: Path | None = None) -> FactoryConfig:
         "default_target_pct": float(data.get("default_target_pct", 10.0)),
         "max_new_per_run": int(data.get("max_new_per_run", 5)),
         "max_per_premise_tag": int(data.get("max_per_premise_tag", 2)),
+        # v0.10 — sizing / costs / hedging / liquidity / kill-switch.
+        "sizing_mode": str(data.get("sizing_mode", "vol_scaled")),
+        "target_vol_pct_per_position": float(data.get("target_vol_pct_per_position", 0.5)),
+        "max_position_pct": float(data.get("max_position_pct", 5.0)),
+        "vol_lookback_days": int(data.get("vol_lookback_days", 20)),
+        "commission_per_share_usd": float(data.get("commission_per_share_usd", 0.0)),
+        "slippage_bps": float(data.get("slippage_bps", 5.0)),
+        "gap_slippage_bps": float(data.get("gap_slippage_bps", 25.0)),
+        "borrow_rate_pa_pct": float(data.get("borrow_rate_pa_pct", 3.0)),
+        "beta_match_hedge": bool(data.get("beta_match_hedge", True)),
+        "default_beta": float(data.get("default_beta", 1.0)),
+        "beta_lookback_days": int(data.get("beta_lookback_days", 60)),
+        "beta_min": float(data.get("beta_min", 0.25)),
+        "beta_max": float(data.get("beta_max", 3.0)),
+        "min_adv_multiple": float(data.get("min_adv_multiple", 50.0)),
+        "liquidity_lookback_days": int(data.get("liquidity_lookback_days", 20)),
+        "max_portfolio_drawdown_pct": float(data.get("max_portfolio_drawdown_pct", 10.0)),
+        "max_daily_loss_pct": float(data.get("max_daily_loss_pct", 3.0)),
     }
     return FactoryConfig(**fields)
 

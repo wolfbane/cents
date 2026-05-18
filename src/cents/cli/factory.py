@@ -12,15 +12,18 @@ from cents.db import (
     ThesisRepository,
     UniverseRepository,
 )
+from cents.exceptions import CostCapExceeded
 from cents.factory.config import (
     get_factory_config_path,
     load_factory_config,
     scaffold_factory_config,
 )
 from cents.factory.engine import FactoryEngine, TAG_FACTORY
+from cents.llm_usage import cost_cap, current_run_cap_usd, current_run_spend_usd
 from cents.models import PositionStatus, ThesisCohort, ThesisOutcome, ThesisStatus
 from cents.serialization import serialize
 
+from ._disclosures import LOW_N_THRESHOLD, disclosure_text, low_n_warning
 from ._shared import (
     default_subcommand,
     exit_with_error,
@@ -48,13 +51,43 @@ def factory_init(force: bool):
 @factory.command("run")
 @click.option("--dry-run", is_flag=True, help="Plan actions without mutating state")
 @click.option("--universe", "universe_name", help="Universe name (defaults to config / default)")
+@click.option(
+    "--max-cost-usd",
+    "max_cost_usd",
+    type=float,
+    default=None,
+    help=(
+        "Abort the run if cumulative LLM spend would exceed this many USD. "
+        "Checked PRE-call against a token estimate so the offending call is "
+        "never made."
+    ),
+)
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def factory_run(dry_run: bool, universe_name: str | None, output: str | None):
+def factory_run(
+    dry_run: bool,
+    universe_name: str | None,
+    max_cost_usd: float | None,
+    output: str | None,
+):
     """Run the factory engine once."""
     output = resolve_output_format(output)
     config = load_factory_config()
     engine = FactoryEngine(config=config)
-    run = engine.run(dry_run=dry_run, universe_override=universe_name)
+
+    try:
+        with cost_cap(max_cost_usd):
+            run = engine.run(dry_run=dry_run, universe_override=universe_name)
+            spend = current_run_spend_usd()
+            cap = current_run_cap_usd()
+    except CostCapExceeded as exc:
+        exit_with_error(str(exc))
+        return  # pragma: no cover — exit_with_error raises SystemExit
+
+    if output == "text":
+        if cap is not None:
+            click.echo(f"LLM spend so far: ${spend:.4f} of ${cap:.4f}")
+        elif spend > 0:
+            click.echo(f"LLM spend so far: ${spend:.4f} (no cap set)")
 
     respond_with_output(
         output,
@@ -147,8 +180,6 @@ class AnalyzeAxis(str, Enum):
     REGIME = "regime"
 
 
-LOW_N_THRESHOLD = 5
-
 # Per-axis bucketing — extending the analyze surface = add a case here.
 _AXIS_BUCKET = {
     AnalyzeAxis.COHORT: lambda t: t.cohort.value,
@@ -197,11 +228,18 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
     if axes == [AnalyzeAxis.COHORT]:
         directional = [t for t in factory_theses if t.cohort == ThesisCohort.DIRECTIONAL]
         paired = [t for t in factory_theses if t.cohort == ThesisCohort.NEUTRAL]
+        d_metrics = _cohort_metrics(directional, positions_by_thesis)
+        n_metrics = _cohort_metrics(paired, positions_by_thesis)
+        d_metrics["low_n"] = d_metrics["judged"] < LOW_N_THRESHOLD
+        n_metrics["low_n"] = n_metrics["judged"] < LOW_N_THRESHOLD
+        any_low_n = d_metrics["low_n"] or n_metrics["low_n"]
         payload = {
             "since_days": since_days,
             "by": ["cohort"],
-            "directional": _cohort_metrics(directional, positions_by_thesis),
-            "neutral": _cohort_metrics(paired, positions_by_thesis),
+            "directional": d_metrics,
+            "neutral": n_metrics,
+            "_disclosure": disclosure_text(),
+            "_low_n": any_low_n,
         }
         respond_with_output(output, payload, lambda: _print_analyze_legacy(payload))
         return
@@ -212,10 +250,12 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
         groups.setdefault(key, []).append(t)
 
     cells: list[dict] = []
+    any_low_n = False
     for key, theses in sorted(groups.items(), key=lambda kv: kv[0]):
         cell = {axis.value: key[i] for i, axis in enumerate(axes)}
         metrics = _cohort_metrics(theses, positions_by_thesis)
-        metrics["low_n"] = metrics["opened"] < LOW_N_THRESHOLD
+        metrics["low_n"] = metrics["judged"] < LOW_N_THRESHOLD
+        any_low_n = any_low_n or metrics["low_n"]
         cell["metrics"] = metrics
         cells.append(cell)
 
@@ -223,6 +263,8 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
         "since_days": since_days,
         "by": [a.value for a in axes],
         "cells": cells,
+        "_disclosure": disclosure_text(),
+        "_low_n": any_low_n,
     }
     respond_with_output(output, payload, lambda: _print_analyze_crosstab(payload))
 
@@ -281,6 +323,7 @@ def _cohort_metrics(theses, positions_by_thesis: dict) -> dict:
         "opened": opened,
         "closed": len(closed),
         "preempted": len(preempted),
+        "judged": len(judged),
         "win_rate": win_rate,
         "avg_pnl": avg_pnl,
         "avg_held_days": avg_held_days,
@@ -293,6 +336,10 @@ def _print_analyze_legacy(payload: dict) -> None:
         m = payload[cohort_name]
         click.echo(f"  {cohort_name}:")
         _print_metrics(m)
+        warning = low_n_warning(m["judged"])
+        if warning:
+            click.echo(f"    {warning}")
+    _print_disclosure_footer()
 
 
 def _print_analyze_crosstab(payload: dict) -> None:
@@ -302,12 +349,22 @@ def _print_analyze_crosstab(payload: dict) -> None:
     )
     if not payload["cells"]:
         click.echo("  (no factory theses in window)")
+        _print_disclosure_footer()
         return
     for cell in payload["cells"]:
         key = " / ".join(f"{a}={cell[a]}" for a in axes)
         marker = " [low N]" if cell["metrics"].get("low_n") else ""
         click.echo(f"  {key}{marker}:")
         _print_metrics(cell["metrics"])
+        warning = low_n_warning(cell["metrics"]["judged"])
+        if warning:
+            click.echo(f"    {warning}")
+    _print_disclosure_footer()
+
+
+def _print_disclosure_footer() -> None:
+    click.echo("")
+    click.echo(disclosure_text())
 
 
 def _print_metrics(m: dict) -> None:

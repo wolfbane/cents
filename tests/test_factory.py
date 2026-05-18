@@ -792,9 +792,13 @@ class TestFactoryCli:
         value_cell = next(c for c in payload["cells"] if c["discovery"] == "value")
         assert value_cell["metrics"]["opened"] == 2
         assert value_cell["metrics"]["win_rate"] == 0.5
-        assert value_cell["metrics"]["low_n"] is True  # 2 < 5 threshold
+        # low_n gates on `judged` (win_rate denominator), not `opened`.
+        # Both theses are judged here (2 < 5 threshold).
+        assert value_cell["metrics"]["judged"] == 2
+        assert value_cell["metrics"]["low_n"] is True
         momentum_cell = next(c for c in payload["cells"] if c["discovery"] == "momentum")
         assert momentum_cell["metrics"]["opened"] == 1
+        assert momentum_cell["metrics"]["judged"] == 1
         assert momentum_cell["metrics"]["low_n"] is True
 
     def test_analyze_cross_tab_discovery_cohort(self, factory_db, monkeypatch, tmp_path):

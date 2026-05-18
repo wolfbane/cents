@@ -90,10 +90,16 @@ class TestAlpacaClient:
 
     @patch("cents.broker.alpaca.TradingClient")
     @patch("cents.broker.alpaca.get_settings")
-    def test_init_live_trading(self, mock_settings, mock_client):
-        """Initialize client for live trading."""
+    def test_init_live_trading_passes_when_opted_in(
+        self, mock_settings, mock_client, monkeypatch
+    ):
+        """Live trading instantiates only with full opt-in env vars."""
+        from cents.broker.alpaca import LIVE_TRADING_ACK_PHRASE
+
         mock_settings.return_value.alpaca_api_key = "test_key"
         mock_settings.return_value.alpaca_secret_key = "test_secret"
+        monkeypatch.setenv("CENTS_ALLOW_LIVE_TRADING", "1")
+        monkeypatch.setenv("CENTS_LIVE_TRADING_ACK", LIVE_TRADING_ACK_PHRASE)
 
         client = AlpacaClient(paper=False)
 
@@ -332,7 +338,7 @@ class TestAlpacaClient:
         mock_settings.return_value.alpaca_secret_key = "test_secret"
         mock_client_class.return_value = MagicMock()
 
-        client = AlpacaClient(paper=False)
+        client = AlpacaClient(paper=True)
 
         bp = BrokerPosition(
             symbol="TSLA",
@@ -348,7 +354,7 @@ class TestAlpacaClient:
 
         assert position.side == PositionSide.SHORT
         assert position.size == 5.0  # abs value
-        assert position.paper is False
+        assert position.paper is True
         assert position.thesis_id is None
 
 
@@ -366,3 +372,49 @@ class TestAlpacaClientNoImport:
                 # The check happens at runtime in __init__
                 ac = AC.__new__(AC)
                 ac.__init__()
+
+
+class TestLiveTradingGate:
+    """The live-trading opt-in must be impossible to satisfy by accident."""
+
+    def test_paper_false_blocked_with_no_env(self, monkeypatch):
+        from cents.broker.alpaca import AlpacaClient
+        from cents.exceptions import BrokerError
+
+        monkeypatch.delenv("CENTS_ALLOW_LIVE_TRADING", raising=False)
+        monkeypatch.delenv("CENTS_LIVE_TRADING_ACK", raising=False)
+        with pytest.raises(BrokerError, match="out of scope"):
+            AlpacaClient(paper=False)
+
+    def test_paper_false_blocked_with_partial_env(self, monkeypatch):
+        from cents.broker.alpaca import AlpacaClient
+        from cents.exceptions import BrokerError
+
+        monkeypatch.setenv("CENTS_ALLOW_LIVE_TRADING", "1")
+        monkeypatch.delenv("CENTS_LIVE_TRADING_ACK", raising=False)
+        with pytest.raises(BrokerError, match="out of scope"):
+            AlpacaClient(paper=False)
+
+    def test_paper_false_blocked_with_wrong_phrase(self, monkeypatch):
+        from cents.broker.alpaca import AlpacaClient
+        from cents.exceptions import BrokerError
+
+        monkeypatch.setenv("CENTS_ALLOW_LIVE_TRADING", "1")
+        monkeypatch.setenv("CENTS_LIVE_TRADING_ACK", "I am sure")
+        with pytest.raises(BrokerError, match="out of scope"):
+            AlpacaClient(paper=False)
+
+    def test_paper_true_never_invokes_gate(self, monkeypatch):
+        """paper=True must not raise even with no env vars set."""
+        from cents.broker.alpaca import AlpacaClient
+
+        monkeypatch.delenv("CENTS_ALLOW_LIVE_TRADING", raising=False)
+        monkeypatch.delenv("CENTS_LIVE_TRADING_ACK", raising=False)
+        with patch("cents.broker.alpaca.TradingClient") as mock_tc, \
+             patch("cents.broker.alpaca.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                alpaca_api_key="k", alpaca_secret_key="s"
+            )
+            client = AlpacaClient(paper=True)
+            assert client.paper is True
+            mock_tc.assert_called_once()

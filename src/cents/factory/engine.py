@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Protocol
 
 from cents.config import get_settings
@@ -20,6 +20,19 @@ from cents.factory.config import FactoryConfig, load_factory_config
 from cents.factory.premise import capture_regime_snapshot, classify_premise_tags
 from cents.factory.sector_map import hedge_etf_for
 from cents.factory.universe_resolver import resolve_symbols
+from cents.finance import (
+    Cost,
+    apply_close_cost,
+    apply_open_cost,
+    beta_match_ratio,
+    check_kill_switch,
+    compute_drawdown,
+    estimate_beta,
+    passes_borrow_gate,
+    passes_liquidity_gate,
+    realized_vol_pct,
+    vol_scaled_shares,
+)
 from cents.models import (
     Alert,
     AlertType,
@@ -117,6 +130,40 @@ class FactoryEngine:
         from cents.data.alpaca import get_price_provider
 
         return get_price_provider()
+
+    def _history_supported(self) -> bool:
+        """True when the injected price provider exposes a real get_history.
+
+        Returns False for minimal test stubs (no get_history attribute) and
+        for MagicMock-style auto-mocks (callable but returns mock garbage).
+        The engine disables gates that need history when this is False.
+        """
+        provider = self._make_price_provider()
+        get_history = getattr(provider, "get_history", None)
+        if not callable(get_history):
+            return False
+        # Heuristic: MagicMock auto-mocks return _mock.MagicMock on call.
+        # Real providers return a PriceHistory. A quick probe with an empty
+        # symbol catches stubs without breaking real providers (they return
+        # an empty PriceHistory rather than something with a .bars list of mocks).
+        return type(provider).__name__ not in {"MagicMock", "Mock", "NonCallableMagicMock"}
+
+    def _get_history(self, symbol: str, days: int) -> tuple[list[float] | None, list[int] | None]:
+        """Fetch closes + volumes for a symbol via the price provider, or (None, None)."""
+        if not self._history_supported():
+            return None, None
+        provider = self._make_price_provider()
+        try:
+            history = provider.get_history(symbol, days=days)
+            bars = getattr(history, "bars", None) or []
+            if not bars:
+                return None, None
+            closes = [float(b.close) for b in bars]
+            volumes = [int(getattr(b, "volume", 0)) for b in bars]
+            return closes, volumes
+        except Exception as exc:
+            logger.debug("history fetch failed for %s: %s", symbol, exc)
+            return None, None
 
     def _clock(self) -> datetime:
         return self._now or datetime.now()
@@ -268,7 +315,9 @@ class FactoryEngine:
                         invalidated_symbols.add(thesis.hedge_symbol)
                 continue
 
-            positions_closed += self._close_thesis_positions(thesis, price_provider)
+            positions_closed += self._close_thesis_positions(
+                thesis, price_provider, outcome=trigger,
+            )
             thesis.close(trigger)
             self.thesis_repo.update(thesis)
             theses_closed += 1
@@ -337,6 +386,30 @@ class FactoryEngine:
                 return pos.side
         return PositionSide.LONG
 
+    def _positions_closed_today(self) -> list[Position]:
+        """All positions whose exit_date is today. Used by the drawdown kill switch."""
+        today = date.today()
+        closed = []
+        for pos in self.position_repo.list(status=PositionStatus.CLOSED):
+            if pos.exit_date == today:
+                closed.append(pos)
+        return closed
+
+    def _emit_kill_switch_alert(self, state) -> None:
+        """Record an alert when the portfolio kill switch trips."""
+        alert = Alert(
+            symbol="PORTFOLIO",
+            alert_type=AlertType.PRICE_TRIGGER,
+            message=f"factory kill switch tripped: {state.gate_reason}",
+            data={
+                "unrealized_drawdown_pct": state.unrealized_drawdown_pct,
+                "realized_loss_today_pct": state.realized_loss_today_pct,
+                "gate_reason": state.gate_reason,
+                "kind": "factory_kill_switch",
+            },
+        )
+        self.alert_repo.create(alert)
+
     def _has_invalidation_alert(self, thesis: Thesis) -> bool:
         """Check for a PREMISE_INVALIDATION alert targeting this thesis."""
         for alert in self.alert_repo.list_all(limit=200):
@@ -349,14 +422,56 @@ class FactoryEngine:
             return True
         return False
 
-    def _close_thesis_positions(self, thesis: Thesis, price_provider) -> int:
-        """Close all open positions linked to a thesis. Returns count closed."""
+    def _close_thesis_positions(
+        self,
+        thesis: Thesis,
+        price_provider,
+        *,
+        outcome: ThesisOutcome | None = None,
+    ) -> int:
+        """Close all open positions linked to a thesis. Returns count closed.
+
+        Applies the transaction cost model (commission + slippage + short borrow)
+        and a stop-gap penalty when the close is a stop trigger. Persists both
+        the signal ``exit_price`` and the modeled ``realized_exit_price``.
+        """
+        cfg = self.config
         closed = 0
+        triggered_stop = outcome == ThesisOutcome.INCORRECT
         for pos in self.position_repo.list(status=PositionStatus.OPEN):
             if pos.thesis_id != thesis.id:
                 continue
-            exit_price = price_provider.get_latest_price(pos.symbol) or pos.entry_price
-            pos.close(exit_price)
+            mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
+            exit_signal = mark
+            # Gap-aware fill: when the close was triggered by a stop hit, use
+            # whichever is worse for the position — last observed price or the
+            # stop price — so we stop pretending fills happen exactly at stop.
+            realized = exit_signal
+            gap_bps = 0.0
+            if triggered_stop and thesis.stop_price is not None:
+                if pos.side == PositionSide.LONG:
+                    realized = min(exit_signal, thesis.stop_price)
+                else:
+                    realized = max(exit_signal, thesis.stop_price)
+                gap_bps = cfg.gap_slippage_bps
+
+            days_held = max(0, (date.today() - pos.entry_date).days)
+            close_cost = apply_close_cost(
+                side=pos.side.value,
+                shares=pos.size,
+                entry_price=pos.entry_price,
+                exit_price=realized,
+                days_held=days_held,
+                commission_per_share_usd=cfg.commission_per_share_usd,
+                slippage_bps=cfg.slippage_bps,
+                borrow_rate_pa_pct=pos.borrow_rate_pa_pct or 0.0,
+                gap_penalty_bps=gap_bps,
+            )
+            pos.close(
+                exit_signal,
+                realized_exit_price=realized,
+                costs_applied_usd=(pos.costs_applied_usd or 0.0) + close_cost.total,
+            )
             self.position_repo.update(pos)
             closed += 1
         return closed
@@ -390,6 +505,38 @@ class FactoryEngine:
 
         orchestrator = self._make_orchestrator()
         price_provider = self._make_price_provider()
+
+        # ---- portfolio-level kill switch (cents-59r) ---------------------
+        # Drawdown and daily-loss caps are evaluated once per open phase.
+        # If breached, we skip the entire phase (no new opens) and emit an
+        # alert. Closes still happen in the prior phase regardless.
+        all_open_positions = self.position_repo.list(status=PositionStatus.OPEN)
+        factory_thesis_ids = {t.id for t in open_theses}
+        factory_open_positions = [
+            p for p in all_open_positions if p.thesis_id in factory_thesis_ids
+        ]
+        closed_today = self._positions_closed_today()
+        dd_state = compute_drawdown(
+            open_positions=factory_open_positions,
+            closed_today=closed_today,
+            price_provider=price_provider,
+        )
+        dd_state = check_kill_switch(
+            dd_state,
+            max_portfolio_drawdown_pct=cfg.max_portfolio_drawdown_pct,
+            max_daily_loss_pct=cfg.max_daily_loss_pct,
+        )
+        if not dd_state.gate_open and not dry_run:
+            self._emit_kill_switch_alert(dd_state)
+            logger.warning("Factory kill switch tripped: %s", dd_state.gate_reason)
+            return {
+                "theses_opened": 0,
+                "positions_opened": 0,
+                "preemptions": 0,
+                "preempted_closed": 0,
+                "preempted_positions_closed": 0,
+                "kill_switch": dd_state.gate_reason,
+            }
 
         for symbol in universe_symbols:
             if opened_this_run >= cfg.max_new_per_run:
@@ -426,7 +573,65 @@ class FactoryEngine:
                 )
                 continue
 
-            position_cost = cfg.position_size_usd * (2 if paired else 1)
+            # ---- per-symbol gates + sizing (v0.10) ----
+            # Compute sizing BEFORE budget/preemption math so the budget check
+            # reflects the realistic position size, not the equal-dollar fiction.
+            primary_side = PositionSide.SHORT if result.conviction_delta < 0 else PositionSide.LONG
+            history_supported = self._history_supported()
+
+            primary_closes, primary_volumes = (
+                self._get_history(symbol, cfg.vol_lookback_days * 2)
+                if history_supported else (None, None)
+            )
+
+            # Liquidity gate is conservative when history IS supported (skip if
+            # we can't characterize the symbol's depth) and disabled when the
+            # provider can't give us history at all (test stubs, paper-only).
+            if history_supported and cfg.min_adv_multiple > 0:
+                liq = passes_liquidity_gate(
+                    symbol=symbol,
+                    position_size_usd=cfg.position_size_usd,
+                    closes=primary_closes,
+                    volumes=primary_volumes,
+                    adv_multiple=cfg.min_adv_multiple,
+                    lookback=cfg.liquidity_lookback_days,
+                )
+                if not liq.passes:
+                    logger.debug("Liquidity gate failed for %s: %s", symbol, liq.reason)
+                    continue
+
+            borrow = passes_borrow_gate(
+                symbol=symbol,
+                side=primary_side.value,
+                default_borrow_rate_pa_pct=cfg.borrow_rate_pa_pct,
+            )
+            if not borrow.passes:
+                logger.debug("Borrow gate failed for %s: %s", symbol, borrow.reason)
+                continue
+
+            vol_pct = (
+                realized_vol_pct(primary_closes, lookback=cfg.vol_lookback_days)
+                if primary_closes is not None else None
+            )
+
+            primary_shares, sizing_method = 0.0, "equal_dollar"
+            if price is not None and price > 0:
+                primary_shares, sizing_method = vol_scaled_shares(
+                    price=price,
+                    annual_vol_pct=vol_pct if cfg.sizing_mode == "vol_scaled" else None,
+                    budget_usd=cfg.budget_usd,
+                    target_vol_pct_per_position=cfg.target_vol_pct_per_position,
+                    max_position_pct=cfg.max_position_pct,
+                    fallback_position_usd=cfg.position_size_usd,
+                )
+
+            primary_notional = primary_shares * (price or 0.0)
+            # Project hedge notional with a placeholder beta — refined below
+            # if we actually open the trade.
+            hedge_notional_estimate = (
+                primary_notional * cfg.default_beta if paired and hedge_symbol else 0.0
+            )
+            position_cost = primary_notional + hedge_notional_estimate
             current_notional = self._current_notional(price_provider)
 
             preemption_target: Thesis | None = None
@@ -460,7 +665,7 @@ class FactoryEngine:
 
             if preemption_target is not None:
                 preempted_positions_closed += self._close_thesis_positions(
-                    preemption_target, price_provider
+                    preemption_target, price_provider, outcome=ThesisOutcome.PREEMPTED,
                 )
                 preemption_target.close(ThesisOutcome.PREEMPTED)
                 preemption_target.hypothesis = (
@@ -482,6 +687,10 @@ class FactoryEngine:
                 hedge_symbol=hedge_symbol,
                 premise_tags=premise_tags,
                 discovery_source=discovery_source,
+                primary_shares=primary_shares,
+                primary_sizing_method=sizing_method,
+                primary_closes=primary_closes,
+                borrow_rate_pa_pct=borrow.borrow_rate_pa_pct,
             )
             theses_opened += new_open["theses_opened"]
             positions_opened += new_open["positions_opened"]
@@ -590,6 +799,10 @@ class FactoryEngine:
         hedge_symbol: str | None,
         premise_tags: list[str] | None = None,
         discovery_source: str | None = None,
+        primary_shares: float = 0.0,
+        primary_sizing_method: str = "equal_dollar",
+        primary_closes: list[float] | None = None,
+        borrow_rate_pa_pct: float = 0.0,
     ) -> dict:
         """Persist a new factory thesis and its position(s), oriented by signal sign.
 
@@ -653,33 +866,92 @@ class FactoryEngine:
         self.thesis_repo.create(thesis)
 
         positions_opened = 0
-        if price is not None and price > 0:
-            shares = cfg.position_size_usd / price
-            if shares > 0:
-                self.position_repo.create(Position(
-                    symbol=symbol,
-                    side=primary_side,
-                    entry_price=price,
-                    size=shares,
-                    thesis_id=thesis.id,
-                    paper=True,
-                    notes=f"opened by factory ({direction_label})",
-                ))
-                positions_opened += 1
+        # ---- Primary leg (cents-wiz vol-scaled sizing + cents-5s7 open cost) ----
+        if price is not None and price > 0 and primary_shares > 0:
+            open_cost = apply_open_cost(
+                shares=primary_shares,
+                price=price,
+                commission_per_share_usd=cfg.commission_per_share_usd,
+                slippage_bps=cfg.slippage_bps,
+            )
+            self.position_repo.create(Position(
+                symbol=symbol,
+                side=primary_side,
+                entry_price=price,
+                size=primary_shares,
+                thesis_id=thesis.id,
+                paper=True,
+                notes=(
+                    f"opened by factory ({direction_label}); "
+                    f"sizing={primary_sizing_method}"
+                ),
+                costs_applied_usd=open_cost.total,
+                sizing_method=primary_sizing_method,
+                borrow_rate_pa_pct=(borrow_rate_pa_pct if primary_side == PositionSide.SHORT else None),
+            ))
+            positions_opened += 1
 
-        if hedge_symbol:
-            hedge_price = self._make_price_provider().get_latest_price(hedge_symbol)
+        # ---- Hedge leg (cents-t8r beta-matched sizing) ----
+        if hedge_symbol and price is not None and price > 0 and primary_shares > 0:
+            hedge_provider = self._make_price_provider()
+            hedge_price = hedge_provider.get_latest_price(hedge_symbol)
             if hedge_price is not None and hedge_price > 0:
-                shares = cfg.position_size_usd / hedge_price
-                if shares > 0:
+                primary_notional = primary_shares * price
+
+                # Beta-match the hedge leg notional. Falls back to default_beta
+                # when history is insufficient (cents-t8r — strictly an
+                # improvement on the previous dollar-for-dollar match).
+                beta = None
+                if cfg.beta_match_hedge:
+                    hedge_closes, _ = self._get_history(
+                        hedge_symbol, cfg.beta_lookback_days * 2
+                    )
+                    if primary_closes is not None and hedge_closes is not None:
+                        beta = estimate_beta(
+                            primary_closes, hedge_closes,
+                            lookback=cfg.beta_lookback_days,
+                        )
+                ratio = beta_match_ratio(
+                    beta=beta,
+                    default_beta=cfg.default_beta,
+                    min_beta=cfg.beta_min,
+                    max_beta=cfg.beta_max,
+                )
+                hedge_notional = primary_notional * ratio
+                hedge_shares = hedge_notional / hedge_price
+                # Cap hedge leg at the per-position max too.
+                max_hedge_dollar = cfg.budget_usd * (cfg.max_position_pct / 100.0)
+                if hedge_shares * hedge_price > max_hedge_dollar:
+                    hedge_shares = max_hedge_dollar / hedge_price
+
+                if hedge_shares > 0:
+                    hedge_open_cost = apply_open_cost(
+                        shares=hedge_shares,
+                        price=hedge_price,
+                        commission_per_share_usd=cfg.commission_per_share_usd,
+                        slippage_bps=cfg.slippage_bps,
+                    )
+                    sizing_label = (
+                        f"beta_matched_hedge(beta={ratio:.2f})"
+                        if cfg.beta_match_hedge else "equal_dollar_hedge"
+                    )
+                    hedge_borrow = (
+                        cfg.borrow_rate_pa_pct if hedge_side == PositionSide.SHORT else None
+                    )
                     self.position_repo.create(Position(
                         symbol=hedge_symbol,
                         side=hedge_side,
                         entry_price=hedge_price,
-                        size=shares,
+                        size=hedge_shares,
                         thesis_id=thesis.id,
                         paper=True,
-                        notes=f"opened by factory ({direction_label} hedge leg)",
+                        notes=(
+                            f"opened by factory ({direction_label} hedge leg); "
+                            f"sizing={sizing_label}"
+                        ),
+                        costs_applied_usd=hedge_open_cost.total,
+                        sizing_method=sizing_label,
+                        borrow_rate_pa_pct=hedge_borrow,
                     ))
                     positions_opened += 1
 

@@ -1,33 +1,45 @@
 ---
 title: Cents
-description: Regime-aware, thesis-driven investment research — agent-orchestrated, autonomously operable.
+description: A research experiment in agent-orchestrated, regime-aware investment hypothesis tracking. Not an investing tool.
 template: splash
 hero:
-  tagline: An investing tool that's honest about why you bought, and tells you the moment the reason stops being true.
+  tagline: A research experiment in treating investment theses like falsifiable hypotheses — written, tracked, and invalidated when the regime moves under them.
   actions:
+    - text: Read the scope first
+      link: /scope/
+      icon: warning
+      variant: primary
     - text: Quickstart
       link: /quickstart/
       icon: right-arrow
-      variant: primary
-    - text: How it thinks
-      link: /principles/
-      icon: open-book
       variant: secondary
     - text: GitHub
       link: https://github.com/wolfbane/cents
       icon: external
 ---
 
-import { Card, CardGrid } from "@astrojs/starlight/components";
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
 import AsciinemaPlayer from "../../components/AsciinemaPlayer.astro";
 
-Cents is a CLI for investors who want to treat investing like a
-hypothesis-testing exercise — write down a thesis, declare which regime
-variables it depends on, and let the system warn you the moment one of
-those dependencies shifts. Pluggable screeners discover candidate
-universes, eight specialised research agents gather the evidence, and
-an autonomous factory loop runs the whole cycle for you — producing a
-labeled outcomes dataset you can actually learn from.
+<Aside type="caution" title="Research tool, not an investing tool">
+Cents is an open-source experiment in agent-orchestrated investment
+research. It is **not** an investment adviser, broker, or
+recommendation engine, and nothing it emits is investment advice.
+Real-money trading is technically possible but **explicitly out of
+scope** — the autonomous loop is hard-coded to paper, and the
+controls a real trading system would require (vol-scaled sizing,
+drawdown gates, slippage and borrow modeling, reconciliation, audit
+recordkeeping) are intentionally absent. [Read the full scope
+statement](/scope/) before going further.
+</Aside>
+
+Cents is a CLI sandbox for treating investing as a hypothesis-testing
+exercise — write down a thesis, declare which regime variables it
+depends on, and let the system flag when one of those dependencies
+shifts. Pluggable screeners discover candidate universes, specialised
+research agents gather evidence, and an autonomous factory loop walks
+the cycle in **paper mode only** — producing a labeled outcomes
+dataset you can study.
 
 ```bash
 git clone https://github.com/wolfbane/cents.git
@@ -55,12 +67,12 @@ cd cents && pip install .
     FRED, NewsAPI, and the Federal Register; each contributes evidence
     and a conviction delta.
   </Card>
-  <Card title="Autonomous factory" icon="setting">
-    `cents factory run` walks a universe of symbols, opens paper theses
-    where the orchestrator clears your entry threshold (with neutral
-    twins in paired mode), closes positions on target / stop / horizon /
-    premise-invalidation, and writes a structured run log with token
-    cost per run.
+  <Card title="Paper-only factory" icon="setting">
+    `cents factory run` walks a universe of symbols and opens
+    **paper theses** where the orchestrator clears your entry
+    threshold (with neutral twins in paired mode), closing on target /
+    stop / horizon / premise-invalidation. Hard-coded to paper — real
+    trading is [out of scope](/scope/).
   </Card>
   <Card title="Pluggable screeners" icon="seti:search">
     Five built-in discovery strategies — value, growth, momentum,
@@ -87,8 +99,13 @@ cd cents && pip install .
 ## Get started
 
 <CardGrid>
+  <Card title="Scope" icon="warning">
+    What cents is, what it is not, and why real-money trading is
+    out of scope. **Read this first.**
+    [Read the scope →](/scope/)
+  </Card>
   <Card title="Quickstart" icon="rocket">
-    A 5-step walkthrough from zero to your first scan.
+    A 5-step walkthrough from zero to your first paper scan.
     [Read the quickstart →](/quickstart/)
   </Card>
   <Card title="How it thinks" icon="open-book">

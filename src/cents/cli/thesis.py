@@ -254,6 +254,16 @@ def thesis_show(thesis_id: str):
         click.echo(f"Hedge:      {t.hedge_symbol}")
     if t.paired_thesis_id:
         click.echo(f"Paired:     {t.paired_thesis_id}")
+    if t.premise_tags:
+        click.echo(f"Premise:    {', '.join(t.premise_tags)}")
+    if t.regime_snapshot:
+        top_tags = t.regime_snapshot.get("top_event_tags") or {}
+        top_str = ", ".join(f"{k} ({v})" for k, v in list(top_tags.items())[:3])
+        click.echo(
+            f"Regime:     {t.regime_snapshot.get('recent_event_count', 0)} events, "
+            f"net polarity {t.regime_snapshot.get('net_polarity', 0):+d}"
+            + (f" — top: {top_str}" if top_str else "")
+        )
     click.echo(f"Created:    {t.created_at.strftime('%Y-%m-%d %H:%M')}")
     if t.closed_at:
         click.echo(f"Closed:     {t.closed_at.strftime('%Y-%m-%d %H:%M')}")

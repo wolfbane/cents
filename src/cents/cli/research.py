@@ -8,6 +8,8 @@ import click
 from cents.agents import AGENTS
 from cents.data.alpaca import get_price_provider
 from cents.db import ThesisRepository, EvidenceRepository
+from cents.exceptions import CostCapExceeded
+from cents.llm_usage import cost_cap
 
 from cents.serialization import serialize
 from ._research_html import EVIDENCE_ICONS, render_research_html
@@ -21,6 +23,41 @@ from ._shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _capture_research_result(
+    name: str,
+    result,
+    verbose: bool,
+    agent_outputs: list,
+    agent_deltas: dict,
+    all_evidence: list,
+) -> None:
+    """Append one agent's result to the in-progress research aggregates."""
+    if verbose:
+        click.echo(f"--- {name.upper()} ---")
+        click.echo(f"Summary: {result.summary}")
+        click.echo(f"Conviction delta: {result.conviction_delta:+.1f}")
+
+        if result.evidence:
+            click.echo("Evidence:")
+            for e in result.evidence:
+                icon = EVIDENCE_ICONS.get(e.type.value, "~")
+                click.echo(f"  [{icon}] {e.content}")
+        click.echo()
+
+    agent_outputs.append(
+        {
+            "agent": name,
+            "summary": result.summary,
+            "conviction_delta": result.conviction_delta,
+            "dimension_scores": dict(result.dimension_scores),
+            "evidence": [serialize(e) for e in result.evidence],
+        }
+    )
+
+    agent_deltas[name] = result.conviction_delta
+    all_evidence.extend(result.evidence)
 
 
 @click.command("research")
@@ -57,6 +94,16 @@ logger = logging.getLogger(__name__)
     metavar="PATH",
     help="Export a self-contained HTML report (e.g., --export-html /tmp/report.html)",
 )
+@click.option(
+    "--max-cost-usd",
+    "max_cost_usd",
+    type=float,
+    default=None,
+    help=(
+        "Abort this research call if cumulative LLM spend would exceed this many "
+        "USD. Checked PRE-call against a token estimate."
+    ),
+)
 def research(
     symbol: str,
     thesis_id: str | None,
@@ -67,6 +114,7 @@ def research(
     suggest_thesis: bool,
     as_of_str: str | None,
     export_html_path: str | None,
+    max_cost_usd: float | None,
 ):
     """Run research agents on a symbol."""
     symbol = validate_symbol(symbol)
@@ -110,34 +158,17 @@ def research(
     agent_outputs = []
     agent_deltas: dict[str, float] = {}
 
-    for name, agent_class in agents_to_run.items():
-        agent = agent_class()
-        result = agent.research(symbol.upper(), thesis, as_of=as_of)
-
-        if verbose:
-            click.echo(f"--- {name.upper()} ---")
-            click.echo(f"Summary: {result.summary}")
-            click.echo(f"Conviction delta: {result.conviction_delta:+.1f}")
-
-            if result.evidence:
-                click.echo("Evidence:")
-                for e in result.evidence:
-                    icon = EVIDENCE_ICONS.get(e.type.value, "~")
-                    click.echo(f"  [{icon}] {e.content}")
-            click.echo()
-
-        agent_outputs.append(
-            {
-                "agent": name,
-                "summary": result.summary,
-                "conviction_delta": result.conviction_delta,
-                "dimension_scores": dict(result.dimension_scores),
-                "evidence": [serialize(e) for e in result.evidence],
-            }
-        )
-
-        agent_deltas[name] = result.conviction_delta
-        all_evidence.extend(result.evidence)
+    try:
+        with cost_cap(max_cost_usd):
+            for name, agent_class in agents_to_run.items():
+                agent = agent_class()
+                result = agent.research(symbol.upper(), thesis, as_of=as_of)
+                _capture_research_result(
+                    name, result, verbose, agent_outputs, agent_deltas, all_evidence
+                )
+    except CostCapExceeded as exc:
+        exit_with_error(str(exc))
+        return  # pragma: no cover
 
     # Orchestrator's delta is the weighted aggregate — prefer it over a sum.
     if "orchestrator" in agent_deltas:

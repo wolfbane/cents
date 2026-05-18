@@ -9,6 +9,7 @@ from cents.agents import AGENTS
 from cents.db import BacktestRepository
 from cents.models import Backtest, BacktestSignal
 
+from ._disclosures import disclosure_text, low_n_warning
 from ._shared import (
     calculate_correlation,
     calculate_hit_rate,
@@ -504,11 +505,18 @@ def analyze_backtest(backtest_id: str | None, symbol: str | None, analyze_all: b
 
         dimension_results.append(dim_result)
 
+    # Low-N is judged against total_signals: with fewer than the threshold
+    # number of model evaluations, hit-rate and correlation are dominated by
+    # variance, not skill.
+    is_low_n = low_n_warning(len(all_signals)) is not None
+
     data = {
         "backtests": len(backtests),
         "total_signals": len(all_signals),
         "agents": results,
         "dimensions": dimension_results,
+        "_disclosure": disclosure_text(),
+        "_low_n": is_low_n,
     }
 
     def _render_text():
@@ -555,6 +563,13 @@ def analyze_backtest(backtest_id: str | None, symbol: str | None, analyze_all: b
                 c20 = f"{corrs.get('20d', 0):+.2f}" if corrs.get('20d') is not None else "N/A"
                 c60 = f"{corrs.get('60d', 0):+.2f}" if corrs.get('60d') is not None else "N/A"
                 click.echo(f"  {r['dimension']:<14} {r['signals']:<6} {c5:<10} {c20:<10} {c60:<10}")
+
+        warning = low_n_warning(len(all_signals))
+        if warning:
+            click.echo()
+            click.echo(warning)
+        click.echo()
+        click.echo(disclosure_text())
 
     render_output(output, _render_text, data)
 

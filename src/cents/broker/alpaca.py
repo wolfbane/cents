@@ -1,8 +1,21 @@
-"""Alpaca broker integration."""
+"""Alpaca broker integration.
+
+Live (non-paper) trading is explicitly out of scope for this project. The
+client refuses ``paper=False`` unless ``CENTS_ALLOW_LIVE_TRADING=1`` is set
+AND ``CENTS_LIVE_TRADING_ACK`` contains the exact acknowledgment phrase
+(see ``LIVE_TRADING_ACK_PHRASE``). This is a deliberate friction layer — see
+https://dollars-and-cents.ai/scope/ for the reasoning.
+"""
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import date
+
+LIVE_TRADING_ACK_PHRASE = (
+    "I understand cents is a research tool with none of the controls a live "
+    "trading system requires and I am proceeding against its documented intent"
+)
 
 try:
     from alpaca.trading.client import TradingClient
@@ -17,6 +30,27 @@ from cents.exceptions import BrokerError, ConfigurationError
 from cents.models import Position, PositionSide, PositionStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _enforce_live_trading_gate() -> None:
+    """Raise BrokerError unless the live-trading opt-in is fully satisfied.
+
+    Live trading is out of scope for this project. This gate makes it
+    impossible to instantiate a non-paper AlpacaClient by accident: a caller
+    must set BOTH ``CENTS_ALLOW_LIVE_TRADING=1`` and ``CENTS_LIVE_TRADING_ACK``
+    to the exact phrase in ``LIVE_TRADING_ACK_PHRASE``. The error message
+    points users at the scope statement instead of providing a workaround.
+    """
+    allow = os.environ.get("CENTS_ALLOW_LIVE_TRADING")
+    ack = os.environ.get("CENTS_LIVE_TRADING_ACK")
+    if allow != "1" or ack != LIVE_TRADING_ACK_PHRASE:
+        raise BrokerError(
+            "Live (non-paper) trading is out of scope for cents. "
+            "The autonomous loop and broker CLI are wired to paper; "
+            "instantiating AlpacaClient(paper=False) is blocked. "
+            "See https://dollars-and-cents.ai/scope/ — there are no controls "
+            "in this codebase that would make a live account safe."
+        )
 
 
 @dataclass
@@ -49,12 +83,18 @@ class AlpacaClient:
         """Initialize Alpaca client.
 
         Args:
-            paper: Use paper trading (default True for safety)
+            paper: Use paper trading (default True for safety). ``paper=False``
+                is gated behind ``CENTS_ALLOW_LIVE_TRADING=1`` plus a typed
+                acknowledgment in ``CENTS_LIVE_TRADING_ACK``. See
+                https://dollars-and-cents.ai/scope/ — live trading is out of scope.
         """
         if not ALPACA_AVAILABLE:
             raise ImportError(
                 "alpaca-py not installed. Install with: pip install cents[broker]"
             )
+
+        if not paper:
+            _enforce_live_trading_gate()
 
         settings = get_settings()
         api_key = settings.alpaca_api_key

@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from cents.db.schema import init_db, close_connection, SCHEMA
+from cents.llm_usage import reset_cost_cap_state
 
 
 @pytest.fixture(autouse=True)
@@ -19,10 +20,24 @@ def reset_db_connection():
 
 
 @pytest.fixture(autouse=True)
+def reset_llm_cost_cap():
+    """Clear any per-run LLM cost cap set by a prior test."""
+    reset_cost_cap_state()
+    yield
+    reset_cost_cap_state()
+
+
+@pytest.fixture(autouse=True)
 def isolate_api_cache(tmp_path, monkeypatch):
     """Point every test at a throwaway DB so cached external responses
     (FMP/Alpaca/etc.) from prior runs can't leak across tests."""
     monkeypatch.setenv("CENTS_DB_PATH", str(tmp_path / "test.db"))
+    # Also isolate the LLM blob store so persist_call_blob doesn't write
+    # under the developer's real ~/.cents/data tree during tests.
+    monkeypatch.setenv("CENTS_LLM_BLOB_DIR", str(tmp_path / "llm_calls"))
+    # Clear the daily cap env var so leaked CI/dev settings don't trip caps
+    # in tests that don't explicitly opt in.
+    monkeypatch.delenv("CENTS_MAX_LLM_SPEND_USD_PER_DAY", raising=False)
 
 
 @pytest.fixture

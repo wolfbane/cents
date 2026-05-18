@@ -5,10 +5,12 @@ import json
 import click
 
 from cents.db import EvidenceRepository, ThesisRepository
+from cents.llm_usage import load_call_blob
 from cents.serialization import serialize
 
 from ._shared import (
     default_subcommand,
+    echo_json,
     exit_with_error,
     respond_with_output,
     validate_symbol,
@@ -105,6 +107,66 @@ def evidence_delete(evidence_id: str):
         click.echo(f"Deleted evidence {evidence_id}")
     else:
         exit_with_error(f"Evidence {evidence_id} not found.")
+
+
+@evidence.command("trace")
+@click.argument("evidence_id")
+@click.option(
+    "--output",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format",
+)
+def evidence_trace(evidence_id: str, output: str):
+    """Reconstruct the prompt + output that produced an evidence row.
+
+    Reads the evidence's provenance columns to find its llm_call_id, then
+    loads the append-only blob from ~/.cents/data/llm_calls/. Returns an
+    error when the evidence has no LLM provenance (e.g. it came from a
+    deterministic agent).
+    """
+    repo = EvidenceRepository()
+    ev = repo.get(evidence_id)
+    if ev is None:
+        exit_with_error(f"Evidence {evidence_id} not found.")
+
+    prov = ev.provenance or {}
+    call_id = prov.get("llm_call_id")
+    if not call_id:
+        exit_with_error(
+            f"Evidence {evidence_id} has no LLM provenance (no llm_call_id)."
+        )
+
+    blob = load_call_blob(call_id)
+    if blob is None:
+        exit_with_error(
+            f"No LLM call blob found for llm_call_id={call_id}. "
+            "It may have been pruned, or the blob store path was changed."
+        )
+
+    payload = {
+        "evidence_id": ev.id,
+        "agent": ev.agent,
+        "content": ev.content,
+        "provenance": prov,
+        "blob": blob,
+    }
+    if output == "json":
+        echo_json(payload)
+        return
+
+    click.echo(f"Evidence {ev.id} ({ev.agent})")
+    click.echo(f"  content:        {ev.content}")
+    click.echo(f"  llm_call_id:    {call_id}")
+    click.echo(f"  model_snapshot: {prov.get('model_snapshot', '-')}")
+    click.echo(f"  prompt_sha256:  {prov.get('prompt_sha256', '-')}")
+    click.echo(f"  input_sha256:   {prov.get('input_sha256', '-')}")
+    click.echo(f"  output_sha256:  {prov.get('output_sha256', '-')}")
+    click.echo("\n--- PROMPT ---")
+    click.echo(blob.get("prompt", "(missing)"))
+    click.echo("\n--- OUTPUT ---")
+    click.echo(blob.get("output", "(missing)"))
 
 
 @evidence.command("prune")

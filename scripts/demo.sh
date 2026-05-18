@@ -54,27 +54,32 @@ type_cmd "cents universe show demo"
 
 sleep "$SECTION_PAUSE"
 
-# --- Act 2: the factory's view --------------------------------------------
-say "The factory walked the universe and opened theses where signal was strong."
+# --- Act 2: research a single symbol --------------------------------------
+say "Research fans out across seven specialised agents and synthesises a single conviction."
+type_cmd "cents research NVDA 2>&1 | head -5"
+
+sleep "$SECTION_PAUSE"
+
+# --- Act 3: the factory's rules + what they produced ----------------------
+say "The factory runs under a config you control..."
+type_cmd "cat \$CENTS_FACTORY_CONFIG"
+
+say "...and opens paper theses across the universe wherever signal clears your threshold."
 type_cmd "cents factory status"
 
 sleep "$SECTION_PAUSE"
 
-# --- Act 3: what a thesis looks like --------------------------------------
+# --- Act 4: what a thesis looks like --------------------------------------
 say "Each thesis is paired-neutral, premise-tagged, regime-snapshotted."
-type_cmd "sqlite3 -header -column \$CENTS_DB_PATH 'SELECT symbol, cohort, discovery_source, substr(premise_tags, 1, 60) AS premise_tags FROM theses ORDER BY created_at DESC;'"
+# Pick the highest-conviction thesis so the regime / premise output is meaningful.
+DEMO_THESIS=$(sqlite3 "$CENTS_DB_PATH" "SELECT id FROM theses ORDER BY conviction DESC LIMIT 1;")
+type_cmd "cents thesis show $DEMO_THESIS"
 
 sleep "$SECTION_PAUSE"
 
-# --- Act 4: regime invalidation -------------------------------------------
-say "EventAgent ingests Federal Register events, tagged against a controlled vocab."
+# --- Act 5: regime invalidation -------------------------------------------
+say "EventAgent ingests Federal Register events; tags intersect with open theses to fire premise-invalidation alerts."
 type_cmd "cents event list --since-days 7 --limit 5"
-
-sleep "$SECTION_PAUSE"
-
-# --- Act 5: discovery-stratified analytics --------------------------------
-say "Outcomes can be stratified by cohort × discovery × regime."
-type_cmd "cents factory analyze --by discovery,cohort"
 
 sleep "$SECTION_PAUSE"
 

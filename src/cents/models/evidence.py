@@ -38,6 +38,11 @@ class Evidence:
     confidence: float = 0.5  # 0-1, agent's confidence in this evidence
     dimension: ThesisDimension | None = None  # Which thesis aspect this relates to
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Provenance link to the LLM call that produced this evidence (if any).
+    # Optional dict with keys: llm_call_id, model_snapshot, prompt_sha256,
+    # input_sha256, output_sha256 — see cents.agents.base.make_provenance.
+    # `None` means non-LLM evidence (e.g. keyword sentiment, FMP fundamentals).
+    provenance: dict[str, str] | None = None
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     timestamp: datetime = field(default_factory=datetime.now)
 

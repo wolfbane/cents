@@ -8,6 +8,7 @@ import click
 from cents.db import PositionRepository, ThesisRepository
 from cents.models import Position, PositionStatus, Thesis, ThesisCohort
 
+from ._disclosures import LOW_N_THRESHOLD, disclosure_text, low_n_warning
 from ._shared import resolve_output_format, respond_with_output
 
 
@@ -93,9 +94,20 @@ def cohort(output: str | None):
     buckets = _aggregate_cohort(all_theses, positions_by_thesis)
     ordered = [buckets[c.value] for c in ThesisCohort]
 
+    # Low-N is judged on closed_thesis_count: an unclosed bucket has no
+    # realized P&L to defend, so the warning is about anything that has
+    # actually printed numbers.
+    any_low_n = any(b["closed_thesis_count"] < LOW_N_THRESHOLD for b in ordered)
+
+    payload = {
+        "cohorts": ordered,
+        "_disclosure": disclosure_text(),
+        "_low_n": any_low_n,
+    }
+
     respond_with_output(
         output,
-        ordered,
+        payload,
         lambda: _print_cohorts(ordered),
     )
 
@@ -113,4 +125,10 @@ def _print_cohorts(buckets: list[dict[str, Any]]) -> None:
             f"{b['cohort']:<12} {b['thesis_count']:>7} {b['position_count']:>10} "
             f"{sign}${b['realized_pnl']:>12.2f} {win:>10} {held:>10}"
         )
+    for b in buckets:
+        warning = low_n_warning(b["closed_thesis_count"])
+        if warning:
+            click.echo(f"  [{b['cohort']}] {warning}")
+    click.echo("")
+    click.echo(disclosure_text())
     click.echo("")

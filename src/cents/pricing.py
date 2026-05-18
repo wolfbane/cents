@@ -14,12 +14,40 @@ from __future__ import annotations
 # USD per 1M tokens. Keys are canonical model family identifiers; the lookup
 # matches by prefix so dated snapshots like "claude-haiku-4-5-20251001" resolve
 # to the same family.
+#
+# Sonnet 4.6 rates are not yet published separately at the time of writing;
+# we assume the same prices as the Sonnet family (input $3, output $15 per
+# 1M, with cache reads at $0.30 and writes at $3.75). If Anthropic publishes
+# different numbers for 4.6, update this table — historical rows aren't
+# backfilled because cost is computed at report time.
 _PRICES_PER_MILLION: dict[str, dict[str, float]] = {
     "claude-haiku-4-5": {
         "input": 1.00,
         "output": 5.00,
         "cache_read": 0.10,
         "cache_write": 1.25,
+    },
+    # Assumed identical to claude-haiku-4-5 until Anthropic publishes a
+    # different rate; documented here so it isn't silently wrong.
+    "claude-haiku-4-6": {
+        "input": 1.00,
+        "output": 5.00,
+        "cache_read": 0.10,
+        "cache_write": 1.25,
+    },
+    "claude-sonnet-4-5": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
+    },
+    # Same assumption as Haiku 4-6: prices are assumed to mirror the prior
+    # Sonnet generation until Anthropic publishes a 4-6 rate.
+    "claude-sonnet-4-6": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
     },
 }
 

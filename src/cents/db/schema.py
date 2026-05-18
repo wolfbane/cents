@@ -48,6 +48,15 @@ CREATE TABLE IF NOT EXISTS evidence (
     confidence REAL DEFAULT 0.5,
     dimension TEXT,
     metadata TEXT DEFAULT '{}',
+    -- Provenance fields linking an Evidence row to the LLM call that produced
+    -- it. NULL for non-LLM evidence (keyword sentiment, FMP fundamentals, …).
+    -- `llm_call_id` references `llm_usage.id` but the FK is intentionally not
+    -- enforced so evidence survives `llm_usage` pruning.
+    llm_call_id TEXT,
+    model_snapshot TEXT,
+    prompt_sha256 TEXT,
+    input_sha256 TEXT,
+    output_sha256 TEXT,
     timestamp TEXT NOT NULL,
     FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
 );
@@ -66,6 +75,10 @@ CREATE TABLE IF NOT EXISTS positions (
     paper INTEGER DEFAULT 1,
     notes TEXT DEFAULT '',
     created_at TEXT NOT NULL,
+    costs_applied_usd REAL DEFAULT 0.0,
+    realized_exit_price REAL,
+    sizing_method TEXT,
+    borrow_rate_pa_pct REAL,
     FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
 );
 
@@ -275,17 +288,39 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "paired_thesis_id", "ALTER TABLE theses ADD COLUMN paired_thesis_id TEXT"),
         # Add discovery_source to label which universe/screener surfaced the symbol (added in v0.9)
         ("theses", "discovery_source", "ALTER TABLE theses ADD COLUMN discovery_source TEXT"),
+        # Cost-aware position accounting (added in v0.10)
+        ("positions", "costs_applied_usd", "ALTER TABLE positions ADD COLUMN costs_applied_usd REAL DEFAULT 0.0"),
+        ("positions", "realized_exit_price", "ALTER TABLE positions ADD COLUMN realized_exit_price REAL"),
+        ("positions", "sizing_method", "ALTER TABLE positions ADD COLUMN sizing_method TEXT"),
+        ("positions", "borrow_rate_pa_pct", "ALTER TABLE positions ADD COLUMN borrow_rate_pa_pct REAL"),
+        # Evidence provenance columns linking to the LLM call (added in v0.10).
+        # Run BEFORE and AFTER the FK migration since that migration may recreate
+        # the evidence table with the legacy column set.
+        ("evidence", "llm_call_id", "ALTER TABLE evidence ADD COLUMN llm_call_id TEXT"),
+        ("evidence", "model_snapshot", "ALTER TABLE evidence ADD COLUMN model_snapshot TEXT"),
+        ("evidence", "prompt_sha256", "ALTER TABLE evidence ADD COLUMN prompt_sha256 TEXT"),
+        ("evidence", "input_sha256", "ALTER TABLE evidence ADD COLUMN input_sha256 TEXT"),
+        ("evidence", "output_sha256", "ALTER TABLE evidence ADD COLUMN output_sha256 TEXT"),
     ]
 
-    for table, column, sql in column_migrations:
-        # Check if column exists
-        cursor = conn.execute(f"PRAGMA table_info({table})")
-        columns = [row[1] for row in cursor.fetchall()]
-        if column not in columns:
-            conn.execute(sql)
+    def _apply_column_migrations() -> None:
+        for table, column, sql in column_migrations:
+            # Skip missing tables — some test fixtures create partial schemas.
+            cursor = conn.execute(f"PRAGMA table_info({table})")
+            columns = [row[1] for row in cursor.fetchall()]
+            if not columns:
+                continue
+            if column not in columns:
+                conn.execute(sql)
+
+    _apply_column_migrations()
 
     # Migrate foreign keys to include ON DELETE actions (added in v0.6)
     _migrate_foreign_keys(conn)
+
+    # Re-apply column adds — the FK migration may have recreated tables
+    # without the v0.10 columns.
+    _apply_column_migrations()
 
 
 def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
@@ -341,6 +376,8 @@ def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE evidence_old")
 
         # Migrate positions table (ON DELETE SET NULL)
+        # Column list includes v0.10 cost-aware accounting fields so a DB that
+        # picked those up via column_migrations before reaching here still copies cleanly.
         conn.execute("ALTER TABLE positions RENAME TO positions_old")
         conn.execute("""
             CREATE TABLE positions (
@@ -357,12 +394,19 @@ def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
                 paper INTEGER DEFAULT 1,
                 notes TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
+                costs_applied_usd REAL DEFAULT 0.0,
+                realized_exit_price REAL,
+                sizing_method TEXT,
+                borrow_rate_pa_pct REAL,
                 FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
             )
         """)
-        conn.execute("""
-            INSERT INTO positions SELECT * FROM positions_old
-        """)
+        # positions_old may or may not have the v0.10 columns depending on whether
+        # column_migrations ran first. Pull the present column set and insert by name.
+        cursor = conn.execute("PRAGMA table_info(positions_old)")
+        old_cols = [row[1] for row in cursor.fetchall()]
+        col_csv = ", ".join(old_cols)
+        conn.execute(f"INSERT INTO positions ({col_csv}) SELECT {col_csv} FROM positions_old")
         conn.execute("DROP TABLE positions_old")
 
         # Migrate outcomes table (ON DELETE CASCADE)

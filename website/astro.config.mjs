@@ -26,6 +26,7 @@ export default defineConfig({
           label: "Start here",
           items: [
             { label: "Overview", link: "/" },
+            { label: "Scope (read first)", link: "/scope/", badge: { text: "Important", variant: "caution" } },
             { label: "Operating principles", link: "/principles/" },
             { label: "Quickstart", link: "/quickstart/" },
             { label: "Configuration", link: "/configuration/" },

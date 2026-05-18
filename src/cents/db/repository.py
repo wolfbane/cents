@@ -239,6 +239,11 @@ class PositionRepository(BaseRepository):
             ModelField("paper", serialize=lambda v: 1 if v else 0, deserialize=lambda raw: bool(raw)),
             ModelField("notes"),
             ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
+            # Cost-aware accounting (v0.10) — see cents/models/position.py.
+            ModelField("costs_applied_usd", serialize=lambda v: v or 0.0, deserialize=lambda raw: float(raw) if raw is not None else 0.0),
+            ModelField("realized_exit_price"),
+            ModelField("sizing_method"),
+            ModelField("borrow_rate_pa_pct"),
         ],
         default_order="created_at DESC",
     )
@@ -288,11 +293,62 @@ class EvidenceRepository(BaseRepository):
         default_order="timestamp DESC",
     )
 
+    # Provenance columns are stored alongside Evidence rows but live on the
+    # ``provenance`` dict on the model. Handled via override hooks below rather
+    # than as ModelFields so the generic CRUD helpers stay simple.
+    _PROVENANCE_COLUMNS = (
+        "llm_call_id",
+        "model_snapshot",
+        "prompt_sha256",
+        "input_sha256",
+        "output_sha256",
+    )
+
     def create(self, evidence: Evidence, dedupe: bool = False) -> Evidence | None:
-        """Insert new evidence, optionally deduping."""
+        """Insert new evidence, optionally deduping.
+
+        Provenance columns are persisted alongside the row when
+        ``evidence.provenance`` is populated.
+        """
         if dedupe and self.exists_similar(evidence):
             return None
-        return self._insert(self._META, evidence)
+        self._insert_with_provenance(evidence)
+        return evidence
+
+    def _insert_with_provenance(self, evidence: Evidence) -> None:
+        meta = self._META
+        base_columns = [field.column for field in meta.fields]
+        base_values = [field.serialize(getattr(evidence, field.attr)) for field in meta.fields]
+        prov = evidence.provenance if isinstance(evidence.provenance, dict) else {}
+        prov_values = [prov.get(col) for col in self._PROVENANCE_COLUMNS]
+
+        all_columns = base_columns + list(self._PROVENANCE_COLUMNS)
+        all_values = base_values + prov_values
+        placeholders = ", ".join(["?"] * len(all_columns))
+        column_list = ", ".join(all_columns)
+        self.conn.execute(
+            f"INSERT INTO {meta.table} ({column_list}) VALUES ({placeholders})",
+            all_values,
+        )
+        self.conn.commit()
+
+    def _row_to_model(self, meta, row):  # type: ignore[override]
+        evidence = super()._row_to_model(meta, row)
+        if meta is self._META:
+            prov: dict[str, str] = {}
+            try:
+                row_keys = set(row.keys())
+            except Exception:
+                row_keys = set()
+            for col in self._PROVENANCE_COLUMNS:
+                if col in row_keys and row[col] is not None:
+                    prov[col] = row[col]
+            evidence.provenance = prov or None
+        return evidence
+
+    def get(self, evidence_id: str) -> Evidence | None:
+        """Get evidence by ID."""
+        return self._get_by_id(self._META, evidence_id)
 
     def exists_similar(self, evidence: Evidence) -> bool:
         """Check if similar evidence already exists.
