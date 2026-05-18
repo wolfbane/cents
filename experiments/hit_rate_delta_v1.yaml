@@ -1,0 +1,59 @@
+# Full experiment — pre-registered falsification target for whether the
+# multi-agent LLM orchestrator produces a calibrated signal on forward
+# S&P 500 equity returns.
+#
+# DO NOT register this experiment until the pilot_v1 run has completed
+# and produced a positive directional read (LLM-arm hit-rate >= random-
+# arm hit-rate at the pilot's N=200). Registering this when the pilot
+# was negative or null is the exact discipline failure pre-registration
+# is meant to prevent.
+#
+# Pre-flight checklist before `cents experiment register`:
+#   1. ~/.cents/factory.toml exists with FROZEN parameters from pilot
+#   2. max_llm_spend_usd_per_day = 15.00
+#   3. cohort_mode = "paired"
+#   4. sizing_mode = "equal_dollar"
+#   5. beta_match_hedge = false
+#   6. universe set-default points at the SAME S&P 500 universe used in pilot
+#   7. `cents universe ingest-delistings` has been run within the last 24h
+#   8. Pilot run finalized with documented verdict
+
+name: hit_rate_delta_v1
+hypothesis: >
+  Multi-agent LLM orchestrator produces a hit-rate edge of >= 10pp over
+  random-conviction control on S&P 500 paired-neutral theses, measured
+  by closed outcomes (CORRECT vs INCORRECT) over a 90-day forward window
+  per arm.
+
+primary_metric: hit_rate_delta_vs_random
+
+# N=400 per arm powers detection of 10pp hit-rate gap at 80% power,
+# alpha=0.05. A 10pp gap is the smallest effect size worth defending —
+# anything subtler is dominated by transaction-cost variance.
+minimum_n_per_arm: 400
+
+# 90-day calendar floor on verdict_ready. Prevents early finalization
+# in case close cadence outruns expectations (e.g. heavy stop activity).
+# Combined with N=400, the experiment finalizes only when BOTH gates
+# are cleared — the "later of" rule.
+minimum_calendar_days: 90
+
+stopping_rule: "later of 90 days AND N=400 per arm"
+
+# Operational notes (not engine-enforced):
+#   - cost cap: $15/day (set in factory.toml, NOT this file)
+#   - secondary metrics reported: calibration_brier_score, mean_pnl_per_thesis,
+#     conviction_return_rank_corr
+#   - finalize verdict format (verdict.json):
+#       {
+#         "hit_rate_llm": 0.xx,
+#         "hit_rate_random": 0.xx,
+#         "delta_pp": x.xx,
+#         "p_value": 0.0x,
+#         "ci_95_pp": [lo, hi],
+#         "brier_llm": 0.xx,
+#         "brier_random": 0.xx,
+#         "mean_pnl_llm": xx.xx,
+#         "mean_pnl_random": xx.xx,
+#         "conclusion": "supports_hypothesis" | "rejects_hypothesis" | "inconclusive"
+#       }

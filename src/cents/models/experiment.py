@@ -35,6 +35,11 @@ class Experiment:
     frozen_config_sha: str
     frozen_config_json: str
     stopping_rule: str = ""
+    # Minimum calendar days before verdict_ready can fire. Set per-experiment
+    # so pilots can use a shorter floor (e.g. 30) than full runs (e.g. 90).
+    # Defaults to 14 for back-compat with experiments registered before this
+    # field existed.
+    minimum_calendar_days: int = 14
     started_at: datetime = field(default_factory=datetime.now)
     finalized_at: datetime | None = None
     verdict_json: str | None = None  # filled at finalize time
@@ -46,6 +51,8 @@ class Experiment:
             raise ValueError("experiment name is required")
         if self.minimum_n_per_arm <= 0:
             raise ValueError("minimum_n_per_arm must be positive")
+        if self.minimum_calendar_days < 0:
+            raise ValueError("minimum_calendar_days must be non-negative")
         if self.status not in {_ACTIVE, _FINALIZED, _ABANDONED}:
             raise ValueError(
                 f"status must be one of {{active, finalized, abandoned}}, got {self.status!r}"

@@ -956,6 +956,7 @@ class ExperimentRepository(BaseRepository):
             ModelField("primary_metric"),
             ModelField("minimum_n_per_arm"),
             ModelField("stopping_rule"),
+            ModelField("minimum_calendar_days"),
             ModelField("frozen_config_sha"),
             ModelField("frozen_config_json"),
             ModelField("started_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),

@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     primary_metric TEXT NOT NULL,
     minimum_n_per_arm INTEGER NOT NULL,
     stopping_rule TEXT,
+    minimum_calendar_days INTEGER NOT NULL DEFAULT 14,
     frozen_config_sha TEXT NOT NULL,
     frozen_config_json TEXT NOT NULL,
     started_at TEXT NOT NULL,
@@ -356,6 +357,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "orchestrator_label", "ALTER TABLE theses ADD COLUMN orchestrator_label TEXT DEFAULT 'llm'"),
         # Experiment registration (cents-hvz) — which active experiment a thesis was opened under.
         ("theses", "experiment_id", "ALTER TABLE theses ADD COLUMN experiment_id TEXT"),
+        # Per-experiment calendar-day floor on verdict_ready (pilot uses 30, full uses 90).
+        # Default 14 preserves back-compat with experiments registered before this column existed.
+        ("experiments", "minimum_calendar_days", "ALTER TABLE experiments ADD COLUMN minimum_calendar_days INTEGER NOT NULL DEFAULT 14"),
         # Evidence provenance columns linking to the LLM call (added in v0.10).
         # Run BEFORE and AFTER the FK migration since that migration may recreate
         # the evidence table with the legacy column set.

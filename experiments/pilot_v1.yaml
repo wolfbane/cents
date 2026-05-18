@@ -1,0 +1,44 @@
+# Pilot experiment — 30-day operational shakedown before committing to the
+# full hit_rate_delta_v1 run. The pilot's job is to surface engine bugs,
+# confirm cost-per-day estimates against reality, and give a directional
+# read on hit-rate before committing 3 months of LLM spend.
+#
+# Stopping rule notes: this is an OPERATIONAL pilot, not a falsification
+# attempt. N=200 powers only ~14pp detection — too coarse to call a
+# verdict, sufficient to call abort/proceed on the full experiment.
+#
+# Pre-flight checklist before `cents experiment register`:
+#   1. ~/.cents/factory.toml exists (run `cents factory init` if not)
+#   2. max_llm_spend_usd_per_day = 5.00 (pilot cap; tighter than full run)
+#   3. cohort_mode = "paired"
+#   4. sizing_mode = "equal_dollar"
+#   5. beta_match_hedge = false
+#   6. universe set-default points at an S&P 500 universe
+#   7. `cents universe ingest-delistings` has been run within the last 24h
+
+name: pilot_v1
+hypothesis: >
+  Pilot — confirm operational viability of the two-arm forward test on
+  S&P 500 paired-neutral theses. Primary go/no-go signal is whether the
+  LLM arm's hit-rate is directionally ahead of the random arm at N=200
+  per arm; a hit-rate gap of zero or negative triggers abort before
+  committing to the full experiment.
+
+primary_metric: hit_rate_delta_vs_random
+
+# N=200 per arm powers detection of ~14pp gap at 80% power, alpha=0.05.
+# Coarse on purpose — pilots learn about cadence and cost, not signal.
+minimum_n_per_arm: 200
+
+# 30-day calendar floor on verdict_ready. With ~5 opens/day/arm and
+# ~80% close rate, N=200 should land in 50-60 days at minimum; the
+# 30-day floor here protects against pathological early-close runs
+# (e.g. wide regime swing puts everything on stops in week 1).
+minimum_calendar_days: 30
+
+stopping_rule: "later of 30 days AND N=200 per arm"
+
+# Operational notes (not engine-enforced):
+#   - cost cap: $5/day (set in factory.toml, NOT this file)
+#   - secondary metrics reported: calibration_brier_score, mean_pnl_per_thesis
+#   - abort criteria: hit-rate gap < 0 at N=200, OR cost overrun >2x estimate

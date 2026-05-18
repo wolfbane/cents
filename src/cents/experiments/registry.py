@@ -14,12 +14,13 @@ from cents.models import Experiment, ThesisStatus
 
 REQUIRED_FIELDS = ("name", "hypothesis", "primary_metric", "minimum_n_per_arm")
 
-# Sample-size refusal-to-conclude (cents-1qp). An experiment is only
-# "verdict_ready" once at least this many calendar days have elapsed
-# since registration — prevents same-week conclusions even when the
-# minimum N has been reached. Set deliberately short so it doesn't
-# fight against legitimate small-N hypothesis tests.
-MINIMUM_ELAPSED_DAYS = 14
+# Default calendar-day floor (cents-1qp). Per-experiment overridable via the
+# `minimum_calendar_days` spec field — pilots use 30, full runs use 90.
+# Kept short by default so it doesn't fight against legitimate small-N
+# hypothesis tests where 14 days is enough.
+DEFAULT_MINIMUM_CALENDAR_DAYS = 14
+# Back-compat alias for tests that imported the original constant name.
+MINIMUM_ELAPSED_DAYS = DEFAULT_MINIMUM_CALENDAR_DAYS
 
 
 class ExperimentSpecError(ValueError):
@@ -148,6 +149,9 @@ def register_experiment(
         primary_metric=spec["primary_metric"],
         minimum_n_per_arm=int(spec["minimum_n_per_arm"]),
         stopping_rule=str(spec.get("stopping_rule", "")),
+        minimum_calendar_days=int(
+            spec.get("minimum_calendar_days", DEFAULT_MINIMUM_CALENDAR_DAYS)
+        ),
         frozen_config_sha=sha,
         frozen_config_json=raw,
     )
@@ -222,6 +226,7 @@ def status_snapshot(
         by_arm=by_arm,
         minimum_n_per_arm=exp.minimum_n_per_arm,
         elapsed_days=elapsed_days,
+        minimum_calendar_days=exp.minimum_calendar_days,
         config_sha_drift=config_sha_drift,
     )
 
@@ -234,7 +239,8 @@ def status_snapshot(
         "minimum_n_per_arm": exp.minimum_n_per_arm,
         "started_at": exp.started_at.isoformat(),
         "elapsed_days": elapsed_days,
-        "minimum_elapsed_days": MINIMUM_ELAPSED_DAYS,
+        "minimum_elapsed_days": exp.minimum_calendar_days,
+        "minimum_calendar_days": exp.minimum_calendar_days,
         "opened_by_arm": by_arm,
         "closed_by_arm": closed_by_arm,
         "cadence_per_day": round(cadence_per_day, 2),
@@ -257,13 +263,14 @@ def _evaluate_verdict_ready(
     by_arm: dict[str, int],
     minimum_n_per_arm: int,
     elapsed_days: int,
+    minimum_calendar_days: int,
     config_sha_drift: bool,
 ) -> tuple[bool, str]:
     """Return ``(verdict_ready, reason)`` for a status snapshot (cents-1qp).
 
     Verdict is only "ready" when all three discipline gates pass:
       1. Minimum N per arm reached on every arm with theses
-      2. At least MINIMUM_ELAPSED_DAYS days have passed since registration
+      2. At least ``minimum_calendar_days`` have passed since registration
       3. No SHA drift from the frozen factory.toml
 
     Reason is human-readable and points at the next blocker.
@@ -281,11 +288,11 @@ def _evaluate_verdict_ready(
             f"n={n}/{minimum_n_per_arm} on {worst} arm; "
             f"reach {minimum_n_per_arm} to enable.",
         )
-    if elapsed_days < MINIMUM_ELAPSED_DAYS:
+    if elapsed_days < minimum_calendar_days:
         return (
             False,
             f"only {elapsed_days} days elapsed; "
-            f"wait at least {MINIMUM_ELAPSED_DAYS} since registration.",
+            f"wait at least {minimum_calendar_days} since registration.",
         )
     if config_sha_drift:
         return (

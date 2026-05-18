@@ -360,6 +360,43 @@ class TestVerdictReady:
         assert snap["verdict_ready"] is False
         assert f"{MINIMUM_ELAPSED_DAYS}" in snap["verdict_ready_reason"]
 
+    def test_per_experiment_minimum_calendar_days_overrides_default(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        """Spec field `minimum_calendar_days` overrides the global default."""
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+
+        # Spec a 30-day floor (pilot) instead of the default 14.
+        path = tmp_path / "e.yaml"
+        path.write_text(
+            "experiment: pilot-30\nhypothesis: h\nprimary_metric: m\n"
+            "minimum_n_per_arm: 2\nminimum_calendar_days: 30\n"
+        )
+        exp = register_experiment(spec_path=path)
+        assert exp.minimum_calendar_days == 30
+
+        # Saturate N on both arms.
+        trepo = ThesisRepository()
+        for arm in ("llm", "random"):
+            for i in range(2):
+                t = Thesis(
+                    title=f"{arm}-{i}", symbol=f"{arm[0].upper()}{i}",
+                    experiment_id=exp.id, orchestrator_label=arm,
+                )
+                trepo.create(t)
+                t.status = ThesisStatus.CLOSED
+                trepo.update(t)
+
+        # Day 15 — past the legacy 14-day default, but under the 30-day floor.
+        snap = status_snapshot(exp, now=exp.started_at + timedelta(days=15))
+        assert snap["verdict_ready"] is False
+        assert "30" in snap["verdict_ready_reason"]
+        assert snap["minimum_calendar_days"] == 30
+
+        # Day 31 — past the per-experiment floor. Should fire.
+        snap = status_snapshot(exp, now=exp.started_at + timedelta(days=31))
+        assert snap["verdict_ready"] is True
+
     def test_verdict_ready_false_on_sha_drift(
         self, db_conn, tmp_path: Path, monkeypatch
     ):
