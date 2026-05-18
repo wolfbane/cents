@@ -668,6 +668,27 @@ class TestSkipHeldSymbols:
         assert run.theses_opened == 0
 
 
+class TestDiscoverySourceLabeling:
+    def test_factory_thesis_records_universe_name_as_discovery_source(self, factory_db):
+        _seed_universe(["AAPL"], name="myuni")
+        engine = FactoryEngine(
+            config=_config(entry_threshold=1.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 1
+        thesis = ThesisRepository().list()[0]
+        assert thesis.discovery_source == "myuni"
+
+    def test_manually_created_thesis_has_no_discovery_source(self, factory_db):
+        trepo = ThesisRepository()
+        t = Thesis(title="hand-made", symbol="GOOG")
+        trepo.create(t)
+        retrieved = trepo.get(t.id)
+        assert retrieved.discovery_source is None
+
+
 class TestFactoryCli:
     def test_help_lists_subcommands(self, factory_db):
         from cents.cli import cli
@@ -736,3 +757,105 @@ class TestFactoryCli:
         assert payload["directional"]["preempted"] == 1
         # neutral has 1 incorrect / 1 judged = 0.0
         assert payload["neutral"]["win_rate"] == 0.0
+
+    def test_analyze_by_discovery(self, factory_db, monkeypatch, tmp_path):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        # Two theses from `value` screener: 1 correct + 1 incorrect.
+        t1 = Thesis(title="factory:A", symbol="A", tags=[TAG_FACTORY], discovery_source="value")
+        trepo.create(t1)
+        t1.close(ThesisOutcome.CORRECT)
+        trepo.update(t1)
+
+        t2 = Thesis(title="factory:B", symbol="B", tags=[TAG_FACTORY], discovery_source="value")
+        trepo.create(t2)
+        t2.close(ThesisOutcome.INCORRECT)
+        trepo.update(t2)
+
+        # One thesis from `momentum` screener (low-N).
+        t3 = Thesis(title="factory:C", symbol="C", tags=[TAG_FACTORY], discovery_source="momentum")
+        trepo.create(t3)
+        t3.close(ThesisOutcome.CORRECT)
+        trepo.update(t3)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze", "--by", "discovery", "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        assert payload["by"] == ["discovery"]
+        # Find the value bucket
+        value_cell = next(c for c in payload["cells"] if c["discovery"] == "value")
+        assert value_cell["metrics"]["opened"] == 2
+        assert value_cell["metrics"]["win_rate"] == 0.5
+        assert value_cell["metrics"]["low_n"] is True  # 2 < 5 threshold
+        momentum_cell = next(c for c in payload["cells"] if c["discovery"] == "momentum")
+        assert momentum_cell["metrics"]["opened"] == 1
+        assert momentum_cell["metrics"]["low_n"] is True
+
+    def test_analyze_cross_tab_discovery_cohort(self, factory_db, monkeypatch, tmp_path):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        # 1 directional value, 1 neutral value
+        d = Thesis(title="factory:A", symbol="A", tags=[TAG_FACTORY], discovery_source="value")
+        trepo.create(d)
+        n = Thesis(
+            title="factory:B",
+            symbol="B",
+            tags=[TAG_FACTORY],
+            discovery_source="value",
+            cohort=ThesisCohort.NEUTRAL,
+            hedge_symbol="SPY",
+        )
+        trepo.create(n)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze", "--by", "discovery,cohort", "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        assert payload["by"] == ["discovery", "cohort"]
+        # Two cells expected: value/directional and value/neutral
+        cells = payload["cells"]
+        assert len(cells) == 2
+        keys = {(c["discovery"], c["cohort"]) for c in cells}
+        assert keys == {("value", "directional"), ("value", "neutral")}
+
+    def test_analyze_rejects_unknown_axis(self, factory_db, monkeypatch, tmp_path):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["factory", "analyze", "--by", "garbage"])
+        assert result.exit_code != 0
+        assert "axis" in result.output.lower() or "garbage" in result.output.lower()
+
+    def test_analyze_low_n_flagged(self, factory_db, monkeypatch, tmp_path):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        for i in range(2):
+            trepo.create(Thesis(
+                title=f"factory:S{i}",
+                symbol=f"S{i}",
+                tags=[TAG_FACTORY],
+                discovery_source="rare",
+            ))
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze", "--by", "discovery", "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        rare = next(c for c in payload["cells"] if c["discovery"] == "rare")
+        assert rare["metrics"]["low_n"] is True

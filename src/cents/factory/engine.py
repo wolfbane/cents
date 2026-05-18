@@ -165,6 +165,7 @@ class FactoryEngine:
                 dry_run,
                 proposals,
                 skip_symbols=closed_results["invalidated_symbols"],
+                discovery_source=universe_name,
             )
             run.theses_opened += open_results["theses_opened"]
             run.positions_opened += open_results["positions_opened"]
@@ -369,6 +370,7 @@ class FactoryEngine:
         proposals: list[_ProposedAction],
         *,
         skip_symbols: set[str] | None = None,
+        discovery_source: str | None = None,
     ) -> dict:
         """Open new theses where the orchestrator signals strongly enough."""
         cfg = self.config
@@ -479,6 +481,7 @@ class FactoryEngine:
                 price=price,
                 hedge_symbol=hedge_symbol,
                 premise_tags=premise_tags,
+                discovery_source=discovery_source,
             )
             theses_opened += new_open["theses_opened"]
             positions_opened += new_open["positions_opened"]
@@ -586,6 +589,7 @@ class FactoryEngine:
         price: float | None,
         hedge_symbol: str | None,
         premise_tags: list[str] | None = None,
+        discovery_source: str | None = None,
     ) -> dict:
         """Persist a new factory thesis and its position(s), oriented by signal sign.
 
@@ -644,6 +648,7 @@ class FactoryEngine:
             hedge_symbol=hedge_symbol,
             premise_tags=premise_tags or [],
             regime_snapshot=regime_snapshot,
+            discovery_source=discovery_source,
         )
         self.thesis_repo.create(thesis)
 

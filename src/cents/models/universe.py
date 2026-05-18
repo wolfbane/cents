@@ -10,6 +10,7 @@ class UniverseSource(str, Enum):
     STATIC = "static"
     WATCHLIST = "watchlist"
     FMP_INDEX = "fmp_index"
+    SCREENER = "screener"
 
 
 @dataclass
@@ -32,4 +33,6 @@ class Universe:
         self.name = self.name.strip().lower()
         if self.source == UniverseSource.FMP_INDEX and not self.source_config.get("index"):
             raise ValueError("FMP_INDEX universe requires source_config['index']")
+        if self.source == UniverseSource.SCREENER and not self.source_config.get("strategy"):
+            raise ValueError("SCREENER universe requires source_config['strategy']")
         self.symbols = [s.strip().upper() for s in self.symbols if s and s.strip()]

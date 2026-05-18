@@ -88,6 +88,153 @@ class TestUniverseRepository:
         assert repo.set_default("ghost") is None
 
 
+class TestUniverseScreenerModel:
+    def test_screener_requires_strategy(self):
+        with pytest.raises(ValueError, match="source_config\\['strategy'\\]"):
+            Universe(name="bad", source=UniverseSource.SCREENER)
+
+    def test_screener_with_strategy_succeeds(self):
+        uni = Universe(
+            name="value30",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "value", "limit": 30},
+        )
+        assert uni.source_config["strategy"] == "value"
+
+    def test_screener_round_trip_through_repo(self, db_conn):
+        repo = UniverseRepository(db_conn)
+        uni = Universe(
+            name="vscreen",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "value", "limit": 30, "over": "sp500"},
+        )
+        repo.create(uni)
+        retrieved = repo.get("vscreen")
+        assert retrieved is not None
+        assert retrieved.source == UniverseSource.SCREENER
+        assert retrieved.source_config == {"strategy": "value", "limit": 30, "over": "sp500"}
+
+
+class TestScreenerResolver:
+    def test_dispatches_to_screener_with_parent_symbols(self, db_conn, monkeypatch):
+        from cents import screeners as screener_mod
+        from cents.factory import universe_resolver as resolver_mod
+
+        # Seed a static parent and a screener universe that filters it.
+        parent = Universe(name="parent", symbols=["AAA", "BBB", "CCC"])
+        screener_uni = Universe(
+            name="screened",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "fake", "over": "parent", "limit": 10},
+        )
+        urepo = UniverseRepository(db_conn)
+        urepo.create(parent)
+        urepo.create(screener_uni)
+
+        captured: dict = {}
+
+        class _Fake:
+            name = "fake"
+
+            def describe(self):
+                return {"description": "", "rules": []}
+
+            def screen(self, candidate_symbols=None):
+                captured["candidates"] = list(candidate_symbols or [])
+                return ["BBB", "CCC"]
+
+        monkeypatch.setitem(screener_mod.SCREENERS, "fake", _Fake())
+        monkeypatch.setattr(resolver_mod, "UniverseRepository", lambda: urepo)
+
+        symbols = resolver_mod.resolve_symbols(screener_uni)
+        assert symbols == ["BBB", "CCC"]
+        assert captured["candidates"] == ["AAA", "BBB", "CCC"]
+
+    def test_unknown_parent_raises(self, db_conn, monkeypatch):
+        from cents.factory import universe_resolver as resolver_mod
+
+        urepo = UniverseRepository(db_conn)
+        screener_uni = Universe(
+            name="orphan",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "value", "over": "ghost"},
+        )
+        urepo.create(screener_uni)
+        monkeypatch.setattr(resolver_mod, "UniverseRepository", lambda: urepo)
+        with pytest.raises(ValueError, match="ghost"):
+            resolver_mod.resolve_symbols(screener_uni)
+
+    def test_full_universe_gated_by_env(self, db_conn, monkeypatch):
+        from cents.exceptions import ConfigurationError
+        from cents.factory import universe_resolver as resolver_mod
+
+        urepo = UniverseRepository(db_conn)
+        screener_uni = Universe(
+            name="wide",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "value"},
+        )
+        urepo.create(screener_uni)
+        monkeypatch.setattr(resolver_mod, "UniverseRepository", lambda: urepo)
+        monkeypatch.delenv("CENTS_SCREENER_ALLOW_FULL_UNIVERSE", raising=False)
+        with pytest.raises(ConfigurationError, match="(?i)full-universe"):
+            resolver_mod.resolve_symbols(screener_uni)
+
+    def test_full_universe_env_allows_resolution(self, db_conn, monkeypatch):
+        from cents import screeners as screener_mod
+        from cents.factory import universe_resolver as resolver_mod
+
+        urepo = UniverseRepository(db_conn)
+        screener_uni = Universe(
+            name="wide",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "fakew"},
+        )
+        urepo.create(screener_uni)
+
+        class _Fake:
+            name = "fakew"
+
+            def describe(self):
+                return {"description": "", "rules": []}
+
+            def screen(self, candidate_symbols=None):
+                assert candidate_symbols is None
+                return ["AAA"]
+
+        monkeypatch.setitem(screener_mod.SCREENERS, "fakew", _Fake())
+        monkeypatch.setattr(resolver_mod, "UniverseRepository", lambda: urepo)
+        monkeypatch.setenv("CENTS_SCREENER_ALLOW_FULL_UNIVERSE", "1")
+        assert resolver_mod.resolve_symbols(screener_uni) == ["AAA"]
+
+    def test_limit_truncates_returned_symbols(self, db_conn, monkeypatch):
+        from cents import screeners as screener_mod
+        from cents.factory import universe_resolver as resolver_mod
+
+        urepo = UniverseRepository(db_conn)
+        parent = Universe(name="parent", symbols=["AAA", "BBB", "CCC", "DDD"])
+        urepo.create(parent)
+        screener_uni = Universe(
+            name="capped",
+            source=UniverseSource.SCREENER,
+            source_config={"strategy": "fakec", "over": "parent", "limit": 2},
+        )
+        urepo.create(screener_uni)
+
+        class _Fake:
+            name = "fakec"
+
+            def describe(self):
+                return {"description": "", "rules": []}
+
+            def screen(self, candidate_symbols=None):
+                return ["AAA", "BBB", "CCC"]
+
+        monkeypatch.setitem(screener_mod.SCREENERS, "fakec", _Fake())
+        monkeypatch.setattr(resolver_mod, "UniverseRepository", lambda: urepo)
+        assert resolver_mod.resolve_symbols(screener_uni) == ["AAA", "BBB"]
+
+
 class TestUniverseResolver:
     def test_static_returns_symbols_verbatim(self):
         uni = Universe(name="t", source=UniverseSource.STATIC, symbols=["AAPL", "NVDA"])
@@ -225,3 +372,94 @@ class TestUniverseCli:
         result = runner.invoke(cli, ["universe", "delete", "bye", "--force"])
         assert result.exit_code == 0, result.output
         assert UniverseRepository().get("bye") is None
+
+    def test_create_screener_requires_strategy(self, cli_db):
+        from cents.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "universe", "create", "screened",
+            "--source", "screener",
+        ])
+        assert result.exit_code != 0
+        assert "strategy" in result.output.lower()
+
+    def test_create_screener_rejects_unknown_strategy(self, cli_db):
+        from cents.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "universe", "create", "screened",
+            "--source", "screener",
+            "--strategy", "nonexistent",
+        ])
+        assert result.exit_code != 0
+
+    def test_create_screener_with_strategy_and_over(self, cli_db):
+        from cents.cli import cli
+
+        runner = CliRunner()
+        UniverseRepository().create(Universe(name="parent", symbols=["AAA"]))
+        result = runner.invoke(cli, [
+            "universe", "create", "screened",
+            "--source", "screener",
+            "--strategy", "value",
+            "--over", "parent",
+            "--limit", "10",
+        ])
+        assert result.exit_code == 0, result.output
+        uni = UniverseRepository().get("screened")
+        assert uni is not None
+        assert uni.source == UniverseSource.SCREENER
+        assert uni.source_config == {"strategy": "value", "limit": 10, "over": "parent"}
+
+
+class TestScreenerCli:
+    def test_screener_list_shows_all(self, cli_db):
+        from cents.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["screener", "list"])
+        assert result.exit_code == 0, result.output
+        for name in ("value", "growth", "momentum", "mean_reversion", "insider_cluster"):
+            assert name in result.output
+
+    def test_screener_describe(self, cli_db):
+        from cents.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["screener", "describe", "value"])
+        assert result.exit_code == 0, result.output
+        assert "P/E" in result.output
+
+    def test_screener_describe_unknown(self, cli_db):
+        from cents.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["screener", "describe", "nope"])
+        assert result.exit_code != 0
+
+    def test_screener_preview_over_parent(self, cli_db, monkeypatch):
+        from cents.cli import cli
+        from cents import screeners as screener_mod
+
+        UniverseRepository().create(Universe(name="parent", symbols=["AAA", "BBB"]))
+
+        class _Fake:
+            name = "fakep"
+
+            def describe(self):
+                return {"description": "", "rules": []}
+
+            def screen(self, candidate_symbols=None):
+                return list(candidate_symbols or [])
+
+        monkeypatch.setitem(screener_mod.SCREENERS, "fakep", _Fake())
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "screener", "preview", "fakep", "--over", "parent", "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        assert payload["symbols"] == ["AAA", "BBB"]

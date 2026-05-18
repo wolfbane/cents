@@ -138,36 +138,118 @@ def _print_status(payload: dict) -> None:
     click.echo(f"Recent runs:   {len(payload['recent_runs'])}")
 
 
+VALID_ANALYZE_AXES = ("cohort", "discovery", "regime")
+LOW_N_THRESHOLD = 5
+
+
 @factory.command("analyze")
 @click.option("--since-days", type=int, default=90, help="Look-back window in days")
+@click.option(
+    "--by",
+    "by_axes",
+    default="cohort",
+    help=(
+        "Comma-separated grouping axes (cohort,discovery,regime). "
+        "Multiple axes produce a cross-tab. Default: cohort."
+    ),
+)
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def factory_analyze(since_days: int, output: str | None):
-    """Outcomes stratified by cohort."""
+def factory_analyze(since_days: int, by_axes: str, output: str | None):
+    """Outcomes stratified by one or more discovery / cohort / regime axes."""
     output = resolve_output_format(output)
+    axes = [a.strip() for a in by_axes.split(",") if a.strip()]
+    if not axes:
+        exit_with_error("--by requires at least one axis")
+    for axis in axes:
+        if axis not in VALID_ANALYZE_AXES:
+            exit_with_error(
+                f"Unknown axis '{axis}'. Valid: {', '.join(VALID_ANALYZE_AXES)}"
+            )
+
     thesis_repo = ThesisRepository()
     cutoff = datetime.now() - timedelta(days=since_days)
     position_repo = PositionRepository()
 
     factory_theses = [t for t in thesis_repo.list() if TAG_FACTORY in t.tags]
-    if cutoff:
-        factory_theses = [t for t in factory_theses if t.created_at >= cutoff]
+    factory_theses = [t for t in factory_theses if t.created_at >= cutoff]
 
-    directional = [t for t in factory_theses if t.cohort == ThesisCohort.DIRECTIONAL]
-    paired = [t for t in factory_theses if t.cohort == ThesisCohort.NEUTRAL]
+    # Pre-load all positions once to avoid quadratic queries.
+    all_positions = position_repo.list()
+
+    if axes == ["cohort"]:
+        directional = [t for t in factory_theses if t.cohort == ThesisCohort.DIRECTIONAL]
+        paired = [t for t in factory_theses if t.cohort == ThesisCohort.NEUTRAL]
+        payload = {
+            "since_days": since_days,
+            "by": ["cohort"],
+            "directional": _cohort_metrics(directional, all_positions),
+            "neutral": _cohort_metrics(paired, all_positions),
+        }
+        respond_with_output(output, payload, lambda: _print_analyze_legacy(payload))
+        return
+
+    groups: dict[tuple[str, ...], list] = {}
+    for t in factory_theses:
+        key = tuple(_axis_bucket(t, axis) for axis in axes)
+        groups.setdefault(key, []).append(t)
+
+    cells: list[dict] = []
+    for key, theses in sorted(groups.items(), key=lambda kv: kv[0]):
+        cell = {axis: key[i] for i, axis in enumerate(axes)}
+        metrics = _cohort_metrics(theses, all_positions)
+        metrics["low_n"] = metrics["opened"] < LOW_N_THRESHOLD
+        cell["metrics"] = metrics
+        cells.append(cell)
 
     payload = {
         "since_days": since_days,
-        "directional": _cohort_metrics(directional, position_repo),
-        "neutral": _cohort_metrics(paired, position_repo),
+        "by": axes,
+        "cells": cells,
     }
-    respond_with_output(
-        output,
-        payload,
-        lambda: _print_analyze(payload),
-    )
+    respond_with_output(output, payload, lambda: _print_analyze_crosstab(payload))
 
 
-def _cohort_metrics(theses, position_repo) -> dict:
+def _axis_bucket(thesis, axis: str) -> str:
+    if axis == "cohort":
+        return thesis.cohort.value
+    if axis == "discovery":
+        return thesis.discovery_source or "unspecified"
+    if axis == "regime":
+        return _regime_bucket(thesis.regime_snapshot)
+    return "unknown"
+
+
+def _regime_bucket(snapshot: dict) -> str:
+    """Bucket a regime snapshot into a stable, interpretable label.
+
+    Polarity bucket: derived from `polarity_score` ∈ {neg, zero, pos}.
+    Volume bucket: derived from `event_count` (≤10 low, 11-30 med, >30 high).
+    Result form is `polarity:volume` so it's grep-able in JSON output.
+    """
+    polarity = snapshot.get("polarity_score")
+    if polarity is None:
+        pol_label = "unknown"
+    elif polarity < -0.05:
+        pol_label = "neg"
+    elif polarity > 0.05:
+        pol_label = "pos"
+    else:
+        pol_label = "zero"
+
+    count = snapshot.get("event_count")
+    if count is None:
+        vol_label = "unknown"
+    elif count < 10:
+        vol_label = "low"
+    elif count <= 30:
+        vol_label = "med"
+    else:
+        vol_label = "high"
+
+    return f"{pol_label}:{vol_label}"
+
+
+def _cohort_metrics(theses, all_positions) -> dict:
     opened = len(theses)
     closed = [t for t in theses if t.status == ThesisStatus.CLOSED]
     preempted = [t for t in closed if t.outcome == ThesisOutcome.PREEMPTED]
@@ -177,7 +259,6 @@ def _cohort_metrics(theses, position_repo) -> dict:
 
     pnl_values: list[float] = []
     held_days_values: list[float] = []
-    all_positions = position_repo.list()
     thesis_ids = {t.id for t in theses}
     for pos in all_positions:
         if pos.thesis_id not in thesis_ids:
@@ -200,16 +281,35 @@ def _cohort_metrics(theses, position_repo) -> dict:
     }
 
 
-def _print_analyze(payload: dict) -> None:
+def _print_analyze_legacy(payload: dict) -> None:
     click.echo(f"Cohort analysis (last {payload['since_days']} days)")
     for cohort_name in ("directional", "neutral"):
         m = payload[cohort_name]
         click.echo(f"  {cohort_name}:")
-        click.echo(f"    opened:    {m['opened']}")
-        click.echo(f"    closed:    {m['closed']} (preempted: {m['preempted']})")
-        win = "n/a" if m["win_rate"] is None else f"{m['win_rate'] * 100:.1f}%"
-        avg_pnl = "n/a" if m["avg_pnl"] is None else f"${m['avg_pnl']:.2f}"
-        avg_held = "n/a" if m["avg_held_days"] is None else f"{m['avg_held_days']:.1f}d"
-        click.echo(f"    win_rate:  {win}")
-        click.echo(f"    avg_pnl:   {avg_pnl}")
-        click.echo(f"    avg_held:  {avg_held}")
+        _print_metrics(m)
+
+
+def _print_analyze_crosstab(payload: dict) -> None:
+    axes = payload["by"]
+    click.echo(
+        f"Analysis (last {payload['since_days']} days) by " + ", ".join(axes)
+    )
+    if not payload["cells"]:
+        click.echo("  (no factory theses in window)")
+        return
+    for cell in payload["cells"]:
+        key = " / ".join(f"{a}={cell[a]}" for a in axes)
+        marker = " [low N]" if cell["metrics"].get("low_n") else ""
+        click.echo(f"  {key}{marker}:")
+        _print_metrics(cell["metrics"])
+
+
+def _print_metrics(m: dict) -> None:
+    click.echo(f"    opened:    {m['opened']}")
+    click.echo(f"    closed:    {m['closed']} (preempted: {m['preempted']})")
+    win = "n/a" if m["win_rate"] is None else f"{m['win_rate'] * 100:.1f}%"
+    avg_pnl = "n/a" if m["avg_pnl"] is None else f"${m['avg_pnl']:.2f}"
+    avg_held = "n/a" if m["avg_held_days"] is None else f"{m['avg_held_days']:.1f}d"
+    click.echo(f"    win_rate:  {win}")
+    click.echo(f"    avg_pnl:   {avg_pnl}")
+    click.echo(f"    avg_held:  {avg_held}")

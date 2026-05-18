@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS theses (
     paired_thesis_id TEXT,
     premise_tags TEXT DEFAULT '[]',
     regime_snapshot TEXT DEFAULT '{}',
+    discovery_source TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -272,6 +273,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "cohort", "ALTER TABLE theses ADD COLUMN cohort TEXT DEFAULT 'directional'"),
         ("theses", "hedge_symbol", "ALTER TABLE theses ADD COLUMN hedge_symbol TEXT"),
         ("theses", "paired_thesis_id", "ALTER TABLE theses ADD COLUMN paired_thesis_id TEXT"),
+        # Add discovery_source to label which universe/screener surfaced the symbol (added in v0.9)
+        ("theses", "discovery_source", "ALTER TABLE theses ADD COLUMN discovery_source TEXT"),
     ]
 
     for table, column, sql in column_migrations:

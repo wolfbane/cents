@@ -27,12 +27,15 @@ def universe(ctx):
 @click.argument("name")
 @click.option(
     "--source",
-    type=click.Choice(["static", "watchlist", "fmp_index"]),
+    type=click.Choice(["static", "watchlist", "fmp_index", "screener"]),
     default="static",
 )
 @click.option("--symbols", help="Comma-separated symbols (for static)")
 @click.option("--from-file", "from_file", type=click.Path(exists=True), help="Read symbols from file (one per line)")
 @click.option("--index", help="Index key for fmp_index source (e.g. sp500)")
+@click.option("--strategy", help="Screener strategy name (required when --source=screener)")
+@click.option("--over", "over_universe", help="Parent universe for screener to filter")
+@click.option("--limit", type=int, default=30, show_default=True, help="Max symbols a screener universe returns")
 @click.option("--description", default="", help="Free-form description")
 def universe_create(
     name: str,
@@ -40,6 +43,9 @@ def universe_create(
     symbols: str | None,
     from_file: str | None,
     index: str | None,
+    strategy: str | None,
+    over_universe: str | None,
+    limit: int,
     description: str,
 ):
     """Create a new universe."""
@@ -62,6 +68,21 @@ def universe_create(
         if not index:
             exit_with_error("--index is required when --source=fmp_index")
         source_config["index"] = index.strip().lower()
+
+    if source_enum == UniverseSource.SCREENER:
+        if not strategy:
+            exit_with_error("--strategy is required when --source=screener")
+        from cents.screeners import SCREENERS
+        if strategy not in SCREENERS:
+            exit_with_error(
+                f"Unknown screener '{strategy}'. Available: {', '.join(sorted(SCREENERS))}"
+            )
+        source_config["strategy"] = strategy
+        source_config["limit"] = limit
+        if over_universe:
+            if repo.get(over_universe) is None:
+                exit_with_error(f"Parent universe '{over_universe}' not found.")
+            source_config["over"] = over_universe
 
     try:
         uni = Universe(

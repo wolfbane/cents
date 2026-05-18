@@ -188,6 +188,7 @@ class ThesisRepository(BaseRepository):
             ModelField("paired_thesis_id"),
             ModelField("premise_tags", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "premise_tags")),
             ModelField("regime_snapshot", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "regime_snapshot")),
+            ModelField("discovery_source"),
             ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
             ModelField("updated_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
         ],

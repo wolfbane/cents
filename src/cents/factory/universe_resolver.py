@@ -2,11 +2,12 @@
 
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 
 from cents.config import get_settings
-from cents.db import WatchlistRepository
+from cents.db import UniverseRepository, WatchlistRepository
 from cents.exceptions import ConfigurationError, DataFetchError
 from cents.models import Universe, UniverseSource
 
@@ -21,6 +22,11 @@ FMP_INDEX_ENDPOINTS: dict[str, str] = {
     "dowjones": "dowjones-constituent",
 }
 
+# A screener universe without an `over` parent would scan every US-listed symbol.
+# That's expensive and easy to trigger by accident, so it's gated behind an
+# explicit env flag. Users who really want full-universe screens set this once.
+FULL_UNIVERSE_ENV = "CENTS_SCREENER_ALLOW_FULL_UNIVERSE"
+
 
 def resolve_symbols(universe: Universe) -> list[str]:
     """Resolve a universe to its current symbol list."""
@@ -34,7 +40,51 @@ def resolve_symbols(universe: Universe) -> list[str]:
     if universe.source == UniverseSource.FMP_INDEX:
         return _resolve_fmp_index(universe)
 
+    if universe.source == UniverseSource.SCREENER:
+        return _resolve_screener(universe)
+
     raise ValueError(f"Unsupported universe source: {universe.source}")
+
+
+def _resolve_screener(universe: Universe) -> list[str]:
+    from cents.screeners import get_screener
+
+    cfg = universe.source_config
+    strategy = cfg.get("strategy")
+    if not strategy:
+        raise ValueError(
+            f"Screener universe '{universe.name}' is missing source_config['strategy']"
+        )
+
+    screener = get_screener(strategy)
+    limit = int(cfg.get("limit", 30))
+
+    over = cfg.get("over")
+    if over:
+        parent = UniverseRepository().get(over)
+        if parent is None:
+            raise ValueError(
+                f"Screener universe '{universe.name}' references unknown parent universe '{over}'"
+            )
+        if parent.name == universe.name:
+            raise ValueError(
+                f"Screener universe '{universe.name}' cannot reference itself as parent"
+            )
+        candidates = resolve_symbols(parent)
+        if not candidates:
+            return []
+    else:
+        if os.environ.get(FULL_UNIVERSE_ENV, "").lower() not in ("1", "true", "yes"):
+            raise ConfigurationError(
+                f"Screener universe '{universe.name}' has no `over` parent. "
+                f"Full-universe screens are gated by {FULL_UNIVERSE_ENV}=1 to avoid "
+                "accidental wide scans. Set the env var or add `--over <parent>` "
+                "when creating the universe."
+            )
+        candidates = None
+
+    symbols = screener.screen(candidate_symbols=candidates)
+    return symbols[:limit]
 
 
 def _resolve_fmp_index(universe: Universe) -> list[str]:

@@ -67,6 +67,8 @@ class Thesis:
     # Regime / premise tracking
     premise_tags: list[str] = field(default_factory=list)
     regime_snapshot: dict = field(default_factory=dict)
+    # Discovery (e.g. universe name or screener strategy that surfaced this symbol)
+    discovery_source: str | None = None
     # Metadata
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)
