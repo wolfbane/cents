@@ -15,7 +15,8 @@ from enum import Enum
 import click
 
 from cents.db import ThesisRepository, PositionRepository
-from cents.models import ThesisStatus, PositionStatus
+from cents.finance.triggers import stop_hit, target_hit
+from cents.models import PositionSide, ThesisStatus, PositionStatus
 
 from ._shared import resolve_output_format, respond_with_output
 
@@ -83,25 +84,27 @@ def evaluate_thesis(
         "position_size": position.size if position else None,
     }
 
-    # RULE 1: Stop loss triggered (highest priority)
-    if position and thesis.stop_price and current_price:
-        if current_price <= thesis.stop_price:
-            return Recommendation(
-                action=Action.CLOSE,
-                reason=f"Stop loss triggered (${current_price:.2f} <= ${thesis.stop_price:.2f})",
-                priority=1,
-                **base,
-            )
+    # RULE 1: Stop loss triggered (highest priority). Direction-aware — SHORT
+    # theses lose when price rises above the stop, not when it falls below.
+    if position and current_price and stop_hit(position.side, current_price, thesis.stop_price):
+        comparator = ">=" if position.side == PositionSide.SHORT else "<="
+        return Recommendation(
+            action=Action.CLOSE,
+            reason=f"Stop loss triggered (${current_price:.2f} {comparator} ${thesis.stop_price:.2f})",
+            priority=1,
+            **base,
+        )
 
-    # RULE 2: Target price reached - take profit
-    if position and thesis.target_price and current_price:
-        if current_price >= thesis.target_price:
-            return Recommendation(
-                action=Action.CLOSE,
-                reason=f"Target reached (${current_price:.2f} >= ${thesis.target_price:.2f})",
-                priority=1,
-                **base,
-            )
+    # RULE 2: Target price reached - take profit. Direction-aware — SHORT
+    # theses win when price falls below the target.
+    if position and current_price and target_hit(position.side, current_price, thesis.target_price):
+        comparator = "<=" if position.side == PositionSide.SHORT else ">="
+        return Recommendation(
+            action=Action.CLOSE,
+            reason=f"Target reached (${current_price:.2f} {comparator} ${thesis.target_price:.2f})",
+            priority=1,
+            **base,
+        )
 
     # RULE 3: Thesis invalidated
     if thesis.status == ThesisStatus.INVALIDATED:

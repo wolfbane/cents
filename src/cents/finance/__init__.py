@@ -29,6 +29,10 @@ from cents.finance.sizing import (
     realized_vol_pct,
     vol_scaled_shares,
 )
+from cents.finance.triggers import (
+    stop_hit,
+    target_hit,
+)
 
 __all__ = [
     "Cost",
@@ -44,4 +48,6 @@ __all__ = [
     "check_kill_switch",
     "realized_vol_pct",
     "vol_scaled_shares",
+    "stop_hit",
+    "target_hit",
 ]

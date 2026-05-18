@@ -152,14 +152,18 @@ class InsiderAgent(BaseAgent):
         Excludes:
         - Gifts, awards, option exercises, tax withholding
         - Trades with $0 price (non-market)
+        - Records with missing ``reportingName`` (FMP data-quality dropouts;
+          filtered here so cluster detection and per-insider aggregation see
+          the same set instead of disagreeing on what counts as a trade).
         """
         informative = []
         for t in trades:
             tx_type = t.get("transactionType", "")
             price = t.get("price", 0)
+            name = t.get("reportingName") or ""
 
-            # Only include P-Purchase or S-Sale with actual price
-            if tx_type in INFORMATIVE_TYPES and price and price > 0:
+            # Only include P-Purchase or S-Sale with actual price + named filer
+            if tx_type in INFORMATIVE_TYPES and price and price > 0 and name:
                 informative.append(t)
 
         return informative
@@ -278,9 +282,8 @@ class InsiderAgent(BaseAgent):
             return []
         agg: dict[str, dict] = {}
         for t in trades:
-            name = t.get("reportingName") or ""
-            if not name:
-                continue
+            # reportingName is guaranteed non-empty by _filter_informative_trades.
+            name = t["reportingName"]
             value = (t.get("securitiesTransacted", 0) or 0) * (t.get("price", 0) or 0)
             shares = t.get("securitiesTransacted", 0) or 0
             bucket = agg.setdefault(

@@ -551,6 +551,23 @@ class AlertRepository(BaseRepository):
         """List all alerts."""
         return self._list(self._META, limit=limit)
 
+    def find_invalidation_for(
+        self, thesis_id: str, since: datetime | None = None
+    ) -> Alert | None:
+        """Return the most-recent PREMISE_INVALIDATION alert for this thesis.
+
+        SQL-side filter on alert_type + json_extract(data, '$.thesis_id') + since
+        so the factory close-phase can't get a silent false negative once total
+        alert volume exceeds whatever limit a Python-side scan was using.
+        """
+        params: list[Any] = [AlertType.PREMISE_INVALIDATION.value, thesis_id]
+        where = "alert_type = ? AND json_extract(data, '$.thesis_id') = ?"
+        if since is not None:
+            where += " AND created_at >= ?"
+            params.append(_isoformat(since))
+        rows = self._list(self._META, where=where, params=tuple(params), limit=1)
+        return rows[0] if rows else None
+
     def mark_read(self, alert_id: str) -> bool:
         """Mark an alert as read."""
         cursor = self.conn.execute(

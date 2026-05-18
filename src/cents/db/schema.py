@@ -146,6 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_evidence_thesis ON evidence(thesis_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_thesis_timestamp ON evidence(thesis_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol);
 CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
+CREATE INDEX IF NOT EXISTS idx_alerts_type_created ON alerts(alert_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_backtests_symbol ON backtests(symbol);
 CREATE INDEX IF NOT EXISTS idx_backtest_signals_backtest ON backtest_signals(backtest_id);
 
@@ -431,6 +432,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_opens_created ON shadow_opens(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_opens_experiment ON shadow_opens(experiment_id)")
+
+    # AlertRepository.find_invalidation_for filters by alert_type and created_at
+    # window; without this composite index it scans the full alerts table and
+    # runs json_extract on every row. Some test fixtures create partial schemas
+    # without alerts, so guard the table existence.
+    has_alerts = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='alerts'"
+    ).fetchone()
+    if has_alerts:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_type_created "
+            "ON alerts(alert_type, created_at DESC)"
+        )
 
 
 def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:

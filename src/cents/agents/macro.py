@@ -55,6 +55,7 @@ MACRO_SIGNAL_CONFIG = {
                 "evidence": EvidenceType.CONTRADICTING,
                 "delta": -2,
                 "note": lambda value, change: f"Deeply inverted curve ({value:.2f}%)",
+                "level_only": True,
             },
             {
                 "signal": "steepening",
@@ -98,6 +99,7 @@ MACRO_SIGNAL_CONFIG = {
                 "evidence": EvidenceType.SUPPORTING,
                 "delta": 2,
                 "note": lambda value, change: f"Low unemployment level ({value:.1f}%, level-based signal)",
+                "level_only": True,
             },
         ],
         "fallback": {
@@ -134,6 +136,7 @@ MACRO_SIGNAL_CONFIG = {
                 "evidence": EvidenceType.NEUTRAL,
                 "delta": 1,
                 "note": lambda value, change: f"Elevated VIX ({value:.0f})",
+                "level_only": True,
             },
         ],
         "fallback": {
@@ -212,8 +215,11 @@ class MacroAgent(BaseAgent):
                 if note:
                     summaries.append(note)
 
-                # Build evidence content
-                if change is not None:
+                # Build evidence content. When the fired rule is level-only
+                # (the rule dict marks itself with `"level_only": True`),
+                # suppress the decorative 3mo change figure so a reader
+                # doesn't mistake it for the driver.
+                if change is not None and not metadata.get("level_only"):
                     change_str = f"{change:+.2f}" if series_id != "VIXCLS" else f"{change:+.1f}"
                     content = f"{name}: {current:.2f} ({change_str} over 3mo)"
                 else:
@@ -221,7 +227,7 @@ class MacroAgent(BaseAgent):
                 # Append the fired-rule reason so the [+]/[-]/[~] tag is self-
                 # explanatory — without this, readers see the change figure and
                 # assume that's what drove the signal, even when the rule fired
-                # on absolute level (e.g. UNRATE low_level, T10Y2Y deep_inversion).
+                # on absolute level.
                 if note:
                     content = f"{content} — {note}"
 
@@ -324,7 +330,10 @@ class MacroAgent(BaseAgent):
         thresholds = config["thresholds"]
         for rule in config["rules"]:
             if rule["condition"](value, change, thresholds):
-                metadata = {"signal": rule["signal"]}
+                metadata = {
+                    "signal": rule["signal"],
+                    "level_only": rule.get("level_only", False),
+                }
                 note = rule["note"](value, change)
                 return rule["evidence"], rule["delta"], note, metadata
 

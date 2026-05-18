@@ -17,9 +17,12 @@ from cents.finance import (
     passes_borrow_gate,
     passes_liquidity_gate,
     realized_vol_pct,
+    stop_hit,
+    target_hit,
     vol_scaled_shares,
 )
 from cents.finance.portfolio import DrawdownState
+from cents.models import PositionSide
 
 
 # ---- sizing (cents-wiz) -------------------------------------------------
@@ -327,3 +330,29 @@ class TestHedging:
             under.append(under[-1] * (1 + 1.5 * step + rng.uniform(-1e-5, 1e-5)))
         beta = estimate_beta(under, hedge, lookback=60, min_r_squared=0.5)
         assert beta is not None and beta > 1.0
+
+
+class TestTriggers:
+    """Direction-aware target/stop predicates (cents/finance/triggers.py)."""
+
+    def test_long_target_hit_when_price_above(self):
+        assert target_hit(PositionSide.LONG, price=110.0, target=105.0)
+        assert not target_hit(PositionSide.LONG, price=100.0, target=105.0)
+
+    def test_long_stop_hit_when_price_below(self):
+        assert stop_hit(PositionSide.LONG, price=95.0, stop=100.0)
+        assert not stop_hit(PositionSide.LONG, price=105.0, stop=100.0)
+
+    def test_short_target_hit_when_price_below(self):
+        """Short wins when price drops — target sits below entry."""
+        assert target_hit(PositionSide.SHORT, price=90.0, target=95.0)
+        assert not target_hit(PositionSide.SHORT, price=100.0, target=95.0)
+
+    def test_short_stop_hit_when_price_rises(self):
+        """Short loses when price rises — stop sits above entry."""
+        assert stop_hit(PositionSide.SHORT, price=110.0, stop=105.0)
+        assert not stop_hit(PositionSide.SHORT, price=100.0, stop=105.0)
+
+    def test_none_thresholds_never_hit(self):
+        assert not target_hit(PositionSide.LONG, price=110.0, target=None)
+        assert not stop_hit(PositionSide.SHORT, price=110.0, stop=None)

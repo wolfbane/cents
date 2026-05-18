@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import tomllib
+import typing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -140,6 +141,9 @@ class FactoryConfig:
         return self.budget_usd / self.target_positions
 
 
+_CASTERS: dict[type, type] = {str: str, int: int, float: float, bool: bool}
+
+
 def get_factory_config_path() -> Path:
     """Resolve the factory config path.
 
@@ -168,38 +172,19 @@ def load_factory_config(path: Path | None = None) -> FactoryConfig:
         logger.warning("Failed to read factory config %s: %s", target, exc)
         return FactoryConfig()
 
-    fields = {
-        "universe": data.get("universe", "default"),
-        "budget_usd": float(data.get("budget_usd", 100000.0)),
-        "target_positions": int(data.get("target_positions", 30)),
-        "entry_threshold": float(data.get("entry_threshold", 7.0)),
-        "preemption_margin": float(data.get("preemption_margin", 5.0)),
-        "cohort_mode": str(data.get("cohort_mode", "paired")),
-        "default_horizon_days": int(data.get("default_horizon_days", 30)),
-        "default_stop_pct": float(data.get("default_stop_pct", -5.0)),
-        "default_target_pct": float(data.get("default_target_pct", 10.0)),
-        "max_new_per_run": int(data.get("max_new_per_run", 5)),
-        "max_per_premise_tag": int(data.get("max_per_premise_tag", 2)),
-        # v0.10 — sizing / costs / hedging / liquidity / kill-switch.
-        "sizing_mode": str(data.get("sizing_mode", "vol_scaled")),
-        "target_vol_pct_per_position": float(data.get("target_vol_pct_per_position", 0.5)),
-        "max_position_pct": float(data.get("max_position_pct", 5.0)),
-        "vol_lookback_days": int(data.get("vol_lookback_days", 20)),
-        "commission_per_share_usd": float(data.get("commission_per_share_usd", 0.0)),
-        "slippage_bps": float(data.get("slippage_bps", 5.0)),
-        "gap_slippage_bps": float(data.get("gap_slippage_bps", 25.0)),
-        "borrow_rate_pa_pct": float(data.get("borrow_rate_pa_pct", 3.0)),
-        "beta_match_hedge": bool(data.get("beta_match_hedge", True)),
-        "default_beta": float(data.get("default_beta", 1.0)),
-        "beta_lookback_days": int(data.get("beta_lookback_days", 60)),
-        "beta_min": float(data.get("beta_min", 0.10)),
-        "beta_max": float(data.get("beta_max", 5.0)),
-        "beta_min_r_squared": float(data.get("beta_min_r_squared", 0.5)),
-        "min_adv_multiple": float(data.get("min_adv_multiple", 50.0)),
-        "liquidity_lookback_days": int(data.get("liquidity_lookback_days", 20)),
-        "max_portfolio_drawdown_pct": float(data.get("max_portfolio_drawdown_pct", 10.0)),
-        "max_daily_loss_pct": float(data.get("max_daily_loss_pct", 3.0)),
-    }
+    # Drive fallbacks off the dataclass so DEFAULT_TOML, FactoryConfig defaults,
+    # and this loader can't diverge.
+    fields: dict[str, object] = {}
+    for name, anno in typing.get_type_hints(FactoryConfig).items():
+        if name not in data:
+            continue
+        cast = _CASTERS.get(anno)
+        if cast is None:
+            raise TypeError(
+                f"FactoryConfig field {name!r} has annotation {anno!r} with no "
+                "caster; extend _CASTERS or add an explicit coercion."
+            )
+        fields[name] = cast(data[name])
     return FactoryConfig(**fields)
 
 

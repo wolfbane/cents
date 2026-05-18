@@ -37,6 +37,8 @@ from cents.finance import (
     passes_borrow_gate,
     passes_liquidity_gate,
     realized_vol_pct,
+    stop_hit,
+    target_hit,
     vol_scaled_shares,
 )
 from cents.models import (
@@ -63,7 +65,9 @@ TAG_FACTORY = "factory"
 
 
 class _OrchestratorLike(Protocol):
-    def research(self, symbol: str, thesis: Thesis | None = None): ...
+    def research(
+        self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None,
+    ): ...
 
 
 class _PriceProvider(Protocol):
@@ -485,17 +489,10 @@ class FactoryEngine:
             price = price_provider.get_latest_price(thesis.symbol)
             if price is not None:
                 direction = self._primary_direction(thesis)
-                if direction == PositionSide.SHORT:
-                    # Short thesis wins when price drops, loses when it rises.
-                    if thesis.target_price is not None and price <= thesis.target_price:
-                        return ThesisOutcome.CORRECT
-                    if thesis.stop_price is not None and price >= thesis.stop_price:
-                        return ThesisOutcome.INCORRECT
-                else:
-                    if thesis.target_price is not None and price >= thesis.target_price:
-                        return ThesisOutcome.CORRECT
-                    if thesis.stop_price is not None and price <= thesis.stop_price:
-                        return ThesisOutcome.INCORRECT
+                if target_hit(direction, price, thesis.target_price):
+                    return ThesisOutcome.CORRECT
+                if stop_hit(direction, price, thesis.stop_price):
+                    return ThesisOutcome.INCORRECT
 
         # 3. Horizon expiry
         if thesis.horizon_end is not None and self._clock() > thesis.horizon_end:
@@ -540,16 +537,14 @@ class FactoryEngine:
         self.alert_repo.create(alert)
 
     def _has_invalidation_alert(self, thesis: Thesis) -> bool:
-        """Check for a PREMISE_INVALIDATION alert targeting this thesis."""
-        for alert in self.alert_repo.list_all(limit=200):
-            if alert.alert_type != AlertType.PREMISE_INVALIDATION:
-                continue
-            if alert.data.get("thesis_id") != thesis.id:
-                continue
-            if alert.created_at < thesis.updated_at - timedelta(days=1):
-                continue
-            return True
-        return False
+        """Check for a PREMISE_INVALIDATION alert targeting this thesis.
+
+        SQL-side filter — a Python-side scan of list_all(limit=N) silently
+        produces false negatives once total alert volume exceeds N, leaving
+        invalidated theses open. Correctness, not just perf.
+        """
+        since = thesis.updated_at - timedelta(days=1)
+        return self.alert_repo.find_invalidation_for(thesis.id, since=since) is not None
 
     def _close_thesis_positions(
         self,
@@ -732,14 +727,17 @@ class FactoryEngine:
                 if history_supported else (None, None)
             )
 
+            # Record-only: borrow_rate_pa_pct is stamped on the Position below
+            # so cohort analytics can see net-of-borrow returns. Per the doc
+            # invariant ("engine doesn't filter on borrow"), we do NOT gate on
+            # borrow.passes — leaving the gate in shape was a future-trap: the
+            # moment passes_borrow_gate gets smarter (real Alpaca locate) the
+            # engine would silently start skipping shorts.
             borrow = passes_borrow_gate(
                 symbol=symbol,
                 side=primary_side.value,
                 default_borrow_rate_pa_pct=cfg.borrow_rate_pa_pct,
             )
-            if not borrow.passes:
-                logger.debug("Borrow gate failed for %s: %s", symbol, borrow.reason)
-                continue
 
             vol_pct = (
                 realized_vol_pct(primary_closes, lookback=cfg.vol_lookback_days)

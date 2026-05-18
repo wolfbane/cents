@@ -166,7 +166,8 @@ class MoatAgent(BaseAgent):
         # Determine evidence type based on average return level. Surface the
         # threshold band that fired so readers don't assume a negative value
         # is what made it [-] — the rule is "below 10% cost-of-capital floor",
-        # which fires on a positive 8% too.
+        # which fires on a positive 8% too. Boundary case avg_return == 0.10
+        # is NEUTRAL: not above the threshold, not strictly below either.
         if avg_return > 0.15:
             ev_type = EvidenceType.SUPPORTING
             delta = 4.0
@@ -175,10 +176,14 @@ class MoatAgent(BaseAgent):
             ev_type = EvidenceType.SUPPORTING
             delta = 2.0
             band = "above 10% threshold"
-        else:
+        elif avg_return < 0.10:
             ev_type = EvidenceType.CONTRADICTING
             delta = -2.0
             band = "below 10% threshold (cost-of-capital floor)"
+        else:
+            ev_type = EvidenceType.NEUTRAL
+            delta = 0.0
+            band = "at 10% threshold"
 
         dims["moat"] = delta
         # High ROIC also indicates quality

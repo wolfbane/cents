@@ -86,6 +86,7 @@ class TestInitDb:
             "idx_evidence_thesis_timestamp",
             "idx_watchlist_symbol",
             "idx_alerts_read",
+            "idx_alerts_type_created",
             "idx_backtests_symbol",
             "idx_backtest_signals_backtest",
             "idx_api_cache_lookup",

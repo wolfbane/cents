@@ -24,6 +24,7 @@ versus the act of opening theses in a momentum tape.
 from __future__ import annotations
 
 import random as _random
+from datetime import date
 
 from cents.agents.base import (
     MAX_AGGREGATE_CONVICTION_DELTA,
@@ -52,8 +53,14 @@ class RandomOrchestrator(BaseAgent):
 
     def research(
         self, symbol: str, thesis: Thesis | None = None,
+        as_of: date | None = None,
     ) -> AgentResult:
-        """Return a uniform-random AgentResult at the aggregate ±30 scale."""
+        """Return a uniform-random AgentResult at the aggregate ±30 scale.
+
+        ``as_of`` is accepted for signature parity with OrchestratorAgent so
+        the two arms are plug-replaceable; the random control deliberately
+        ignores it (the whole point is that nothing is conditioned on data).
+        """
         delta = self._rng.uniform(
             -MAX_AGGREGATE_CONVICTION_DELTA, MAX_AGGREGATE_CONVICTION_DELTA,
         )
