@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS events (
     confidence REAL DEFAULT 0.5,
     raw_text TEXT DEFAULT '',
     metadata TEXT DEFAULT '{}',
+    tag_status TEXT DEFAULT 'tagger_skipped',
     ingested_at TEXT NOT NULL,
     UNIQUE(source, source_id)
 );
@@ -369,6 +370,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("evidence", "prompt_sha256", "ALTER TABLE evidence ADD COLUMN prompt_sha256 TEXT"),
         ("evidence", "input_sha256", "ALTER TABLE evidence ADD COLUMN input_sha256 TEXT"),
         ("evidence", "output_sha256", "ALTER TABLE evidence ADD COLUMN output_sha256 TEXT"),
+        # Event tag_status distinguishes "tagger ran, no relevance" from
+        # "tagger failed" — previously both produced tags=[] and the
+        # no-thesis research path silently suppressed failures as if they
+        # were genuinely irrelevant. Default 'tagger_skipped' is the safest
+        # back-compat for rows that predate the column.
+        ("events", "tag_status", "ALTER TABLE events ADD COLUMN tag_status TEXT DEFAULT 'tagger_skipped'"),
     ]
 
     def _apply_column_migrations() -> None:

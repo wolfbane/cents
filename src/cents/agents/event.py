@@ -37,6 +37,7 @@ from cents.models import (
     EVENT_TAGS,
     Event,
     EventPolarity,
+    EventTagStatus,
     Evidence,
     EvidenceType,
     Thesis,
@@ -109,16 +110,35 @@ class EventAgent(BaseAgent):
         tags = thesis.premise_tags if thesis and thesis.premise_tags else None
         # No-thesis research path has no premise tags to filter on at the
         # repository level, so list_recent() returns the latest items
-        # regardless of regime relevance. The LLM tagger only assigns tags
-        # when a thesis depending on that regime variable would be materially
-        # affected, so an untagged event = no regime relevance = noise (e.g.
-        # "Marine Mammals; Polar Bears in Beaufort Sea"). Fetch a wider window
-        # and filter post-hoc so that a tagged event at rank 11 isn't starved
-        # by ten untagged "Special Anchorage" rules sitting in positions 1-10.
+        # regardless of regime relevance. Fetch a wider window and filter
+        # post-hoc so a tagged event at rank 11 isn't starved by ten untagged
+        # "Special Anchorage" rules at positions 1-10.
+        #
+        # Filter on tag_status, not on `tags == []` directly: an empty tag
+        # list now means three things — the tagger ran and said no relevance
+        # (drop), the tagger crashed (keep + warn so silent LLM outages don't
+        # masquerade as "no policy events match thesis premise"), or the
+        # tagger was never run (treat as no-relevance — these are events
+        # ingested before the tagger was wired up).
         fetch_limit = 50 if thesis is None else 10
         events = event_repo.list_recent(since=since, tags=tags, limit=fetch_limit)
         if thesis is None:
-            events = [e for e in events if e.tags][:10]
+            # Keep events that either carry tags OR that failed the tagger
+            # (tagger_failed events should not be silently suppressed; a
+            # global LLM outage should not look like "no policy events
+            # match thesis premise"). Back-compat: legacy events with
+            # tag_status=tagger_skipped fall through the `tags` check.
+            failed = [e for e in events if e.tag_status == EventTagStatus.TAGGER_FAILED]
+            if failed:
+                logger.warning(
+                    "EventAgent surfaced %d events with tagger_failed status; "
+                    "regime evidence may be incomplete",
+                    len(failed),
+                )
+            events = [
+                e for e in events
+                if e.tags or e.tag_status == EventTagStatus.TAGGER_FAILED
+            ][:10]
 
         if not events:
             return AgentResult(
@@ -288,9 +308,16 @@ class EventAgent(BaseAgent):
         )
 
     def _tag_event(self, event: Event) -> Event:
-        """Apply LLM tagging against the controlled vocabulary. Mutates and returns event."""
+        """Apply LLM tagging against the controlled vocabulary. Mutates and returns event.
+
+        Sets ``event.tag_status`` so a downstream consumer can distinguish
+        "tagger ran and said no tags apply" from "tagger crashed/skipped",
+        which both produce ``tags == []``. The no-thesis research path
+        deliberately drops only the first case.
+        """
         client = self._get_anthropic_client()
         if client is None:
+            event.tag_status = EventTagStatus.TAGGER_SKIPPED
             return event
 
         vocab = sorted(EVENT_TAGS)
@@ -359,15 +386,22 @@ class EventAgent(BaseAgent):
         except CostCapExceeded:
             raise
         except Exception as e:  # noqa: BLE001 — anthropic SDK raises outside RECOVERABLE_EXCEPTIONS
-            logger.debug("EventAgent LLM tagging failed: %s", e)
+            logger.warning("EventAgent LLM tagging failed for %s: %s", event.source_id, e)
+            event.tag_status = EventTagStatus.TAGGER_FAILED
             return event
 
         if not parsed:
+            event.tag_status = EventTagStatus.TAGGER_FAILED
             return event
 
         raw_tags = parsed.get("tags")
         if isinstance(raw_tags, list):
             event.tags = [t for t in raw_tags if isinstance(t, str) and t in EVENT_TAGS]
+        # Tagger ran successfully — record relevance vs no_relevance based on
+        # whether any vocabulary tag was assigned.
+        event.tag_status = (
+            EventTagStatus.TAGGED if event.tags else EventTagStatus.NO_RELEVANCE
+        )
 
         polarity = parsed.get("polarity")
         if isinstance(polarity, str):

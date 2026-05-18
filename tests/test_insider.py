@@ -383,6 +383,91 @@ class TestInsiderAgent:
         c_suite_rows = [e for e in result.evidence if "C-suite purchase" in e.content]
         assert len(c_suite_rows) >= 1
 
+    def test_large_sale_scales_with_value(self):
+        """A $200M aggregated CEO sale should fire a strictly stronger
+        (more negative) conviction delta than a $1.5M sale. Pre-D1 both
+        fired the same flat -2.0×weight; the log-scaled delta restores size
+        sensitivity above the threshold.
+        """
+        # Small aggregate (~$1.5M total): 3 small filings just over threshold.
+        small_trades = [
+            self._make_trade(tx_type="S-Sale", name="CEO Small", role="officer: CEO",
+                             shares=5000, price=100, date=f"2025-01-{d:02d}")
+            for d in (1, 8, 15)
+        ]
+        # Large aggregate (~$200M total): same CEO unloading.
+        large_trades = [
+            self._make_trade(tx_type="S-Sale", name="CEO Large", role="officer: CEO",
+                             shares=500_000, price=100, date=f"2025-01-{d:02d}")
+            for d in (1, 8, 15)
+        ]
+
+        small_agent = InsiderAgent(fundamentals_provider=self._create_mock_provider(trades=small_trades))
+        large_agent = InsiderAgent(fundamentals_provider=self._create_mock_provider(trades=large_trades))
+
+        small_result = small_agent.research("TEST")
+        large_result = large_agent.research("TEST")
+
+        # Both clear the LARGE_SALE_VALUE threshold so both should fire a
+        # contradicting row; the large one's delta must be materially more
+        # negative.
+        assert small_result.conviction_delta < 0
+        assert large_result.conviction_delta < small_result.conviction_delta - 1.0
+
+    def test_10b5_1_suffix_gated_on_form4_flag_not_filing_count(self):
+        """The "10b5-1 plan" suffix should only appear when FMP exposes the
+        actual Form 4 rule10b5-1 indicator, not from filing count alone.
+        Pre-D1 any N>1 aggregate falsely claimed "(likely 10b5-1)".
+        """
+        # Two filings WITHOUT the rule10b5-1 flag — should NOT carry the
+        # "10b5-1 plan" suffix even though count > 1.
+        trades_unflagged = [
+            self._make_trade(tx_type="S-Sale", name="CEO A", role="officer: CEO",
+                             shares=20000, price=100, date="2025-01-01"),
+            self._make_trade(tx_type="S-Sale", name="CEO A", role="officer: CEO",
+                             shares=20000, price=100, date="2025-01-15"),
+        ]
+        agent = InsiderAgent(fundamentals_provider=self._create_mock_provider(trades=trades_unflagged))
+        result = agent.research("TEST")
+        sale_rows = [e for e in result.evidence if "Large C-suite sale" in e.content]
+        assert sale_rows, "Expected a large-sale row"
+        assert "10b5-1 plan" not in sale_rows[0].content
+        # Counter-positive: same trades with the flag should carry the suffix.
+        trades_flagged = [
+            t | {"rule10b5-1": True} for t in trades_unflagged
+        ]
+        agent2 = InsiderAgent(fundamentals_provider=self._create_mock_provider(trades=trades_flagged))
+        result2 = agent2.research("TEST")
+        sale_rows2 = [e for e in result2.evidence if "Large C-suite sale" in e.content]
+        assert any("10b5-1 plan" in e.content for e in sale_rows2)
+
+    def test_discretionary_overlay_flagged_on_recent_burst(self):
+        """When most filings cluster in the trailing 14d (vs spread evenly
+        across a longer window), the row surfaces a "recent 14d burst" note
+        — the analyst's read of "this is opportunistic on top of a plan."
+        """
+        # 5 sales evenly across 3 months (no burst).
+        spread = [
+            self._make_trade(tx_type="S-Sale", name="CEO", role="officer: CEO",
+                             shares=10000, price=100, date=d)
+            for d in ("2025-01-01", "2025-01-22", "2025-02-12", "2025-03-05", "2025-03-26")
+        ]
+        spread_agent = InsiderAgent(fundamentals_provider=self._create_mock_provider(trades=spread))
+        spread_result = spread_agent.research("TEST")
+        spread_rows = [e for e in spread_result.evidence if "Large C-suite sale" in e.content]
+        assert spread_rows and "recent 14d burst" not in spread_rows[0].content
+
+        # 5 sales bunched in 10 days (burst).
+        bursty = [
+            self._make_trade(tx_type="S-Sale", name="CEO", role="officer: CEO",
+                             shares=10000, price=100, date=d)
+            for d in ("2025-03-16", "2025-03-19", "2025-03-22", "2025-03-25", "2025-03-26")
+        ]
+        bursty_agent = InsiderAgent(fundamentals_provider=self._create_mock_provider(trades=bursty))
+        bursty_result = bursty_agent.research("TEST")
+        bursty_rows = [e for e in bursty_result.evidence if "Large C-suite sale" in e.content]
+        assert bursty_rows and "recent 14d burst" in bursty_rows[0].content
+
     def test_mixed_buys_and_sells(self):
         """Summary reflects mixed activity."""
         trades = [

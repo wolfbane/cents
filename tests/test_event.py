@@ -409,6 +409,45 @@ class TestEventAgentResearch:
         assert result.evidence == []
         assert result.conviction_delta == 0
 
+    def test_research_no_thesis_keeps_tagger_failed_events(self, db_conn, monkeypatch):
+        """Tagger failures must NOT disguise as "no policy events match thesis
+        premise" — an LLM outage that wipes tags on otherwise relevant events
+        should still surface them (with a logger.warning) so the user can see
+        their regime evidence is incomplete.
+        """
+        from cents.models import EventTagStatus
+        monkeypatch.setattr(
+            "cents.agents.event.EventRepository", lambda: EventRepository(db_conn)
+        )
+        repo = EventRepository(db_conn)
+        repo.create(
+            _sample_event(
+                source_id="failed-tagger",
+                occurred_at=datetime.now() - timedelta(days=1),
+                tags=[],  # Tagger crashed before setting tags
+                tag_status=EventTagStatus.TAGGER_FAILED,
+                polarity=EventPolarity.UNCLEAR,
+                confidence=0.5,
+            )
+        )
+        repo.create(
+            _sample_event(
+                source_id="genuine-noise",
+                occurred_at=datetime.now() - timedelta(days=1),
+                title="Marine Mammals",
+                tags=[],
+                tag_status=EventTagStatus.NO_RELEVANCE,
+                polarity=EventPolarity.NEUTRAL,
+                confidence=0.5,
+            )
+        )
+
+        agent = EventAgent(anthropic_client=None)
+        result = agent.research("KVYO", thesis=None)
+        # tagger_failed event surfaces (don't hide outages); no_relevance is dropped.
+        assert len(result.evidence) == 1
+        assert "Marine Mammals" not in result.evidence[0].content
+
     def test_research_no_thesis_drops_untagged_events(self, db_conn, monkeypatch):
         """Symbol-only research must not surface regime-irrelevant events.
 

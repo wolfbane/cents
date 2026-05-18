@@ -20,6 +20,21 @@ class EventPolarity(str, Enum):
     UNCLEAR = "unclear"
 
 
+class EventTagStatus(str, Enum):
+    """How the event's ``tags`` list was populated.
+
+    ``no_relevance`` and ``tagger_failed`` both produce ``tags == []`` and were
+    previously indistinguishable — the no-thesis research path could silently
+    suppress events that lost their tags to an LLM outage as if they were
+    genuinely irrelevant. The status lets downstream filtering distinguish.
+    """
+
+    TAGGED = "tagged"           # Tagger ran, assigned >=1 vocabulary tag.
+    NO_RELEVANCE = "no_relevance"  # Tagger ran, assigned no tags by design.
+    TAGGER_FAILED = "tagger_failed"  # LLM raised / response unparseable.
+    TAGGER_SKIPPED = "tagger_skipped"  # No Anthropic client configured.
+
+
 # Controlled vocabulary for event/premise tags.
 # Both EventAgent (when tagging fetched events) and humans (when authoring
 # thesis premise_tags) draw from this set. Matching is a string intersection,
@@ -85,6 +100,11 @@ class Event:
     confidence: float = 0.5
     raw_text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Defaults to TAGGER_SKIPPED so events constructed without going through
+    # the LLM tagger (tests, manual seeding, partial fixtures) don't lie about
+    # having been tagged. The agent overwrites this when it successfully or
+    # unsuccessfully runs the tagger.
+    tag_status: EventTagStatus = EventTagStatus.TAGGER_SKIPPED
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     ingested_at: datetime = field(default_factory=datetime.now)
 
