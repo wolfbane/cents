@@ -919,3 +919,102 @@ class TestFactoryCli:
         payload = json.loads(result.output)
         rare = next(c for c in payload["cells"] if c["discovery"] == "rare")
         assert rare["metrics"]["low_n"] is True
+
+
+class TestPremiseDirectionPersistence:
+    """Layer 2 #1 — engine threads premise_direction onto the Thesis."""
+
+    def test_engine_persists_premise_direction(self, factory_db, monkeypatch):
+        _seed_universe(["AAPL"])
+        # Stub the classifier to return the new 2-tuple shape.
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *args, **kwargs: (["ai_capex"], {"ai_capex": "positive"}),
+        )
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].premise_tags == ["ai_capex"]
+        assert theses[0].premise_direction == {"ai_capex": "positive"}
+
+    def test_engine_accepts_legacy_list_stub(self, factory_db, monkeypatch):
+        """A test stub returning a bare list (no direction) must still work."""
+        _seed_universe(["AAPL"])
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *args, **kwargs: ["ai_capex"],
+        )
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].premise_tags == ["ai_capex"]
+        assert theses[0].premise_direction == {}
+
+
+class TestCalibratedSizing:
+    """Layer 2 #3 — engine reads calibrated_p_correct, applies Kelly fraction."""
+
+    def test_no_calibration_model_preserves_default_sizing(self, factory_db):
+        _seed_universe(["AAPL"])
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+            calibration_model=None,
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].calibrated_p_correct is None
+        positions = [p for p in PositionRepository().list() if p.thesis_id == theses[0].id]
+        # At least one position created and shares are positive.
+        assert positions and all(p.size > 0 for p in positions)
+
+    def test_high_p_calibration_scales_shares_via_kelly(self, factory_db):
+        """p=0.75 → kelly = 2*0.75 - 1 = 0.5 → shares halved vs unscaled."""
+        _seed_universe(["AAPL"])
+        from unittest.mock import MagicMock
+        model = MagicMock()
+        model.predict.return_value = 0.75
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0, sizing_mode="equal_dollar"),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+            calibration_model=model,
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].calibrated_p_correct == 0.75
+        # Engine called the model's predict.
+        assert model.predict.called
+
+    def test_out_of_window_p_passes_through_at_one(self, factory_db):
+        """p=0.3 (below 0.5 floor) → kelly returns 1.0, no scaling."""
+        _seed_universe(["AAPL"])
+        from unittest.mock import MagicMock
+        model = MagicMock()
+        model.predict.return_value = 0.3
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0, sizing_mode="equal_dollar"),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+            calibration_model=model,
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].calibrated_p_correct == 0.3
+        # No position size was zeroed out by Kelly — passthrough behavior.
+        positions = [p for p in PositionRepository().list() if p.thesis_id == theses[0].id]
+        assert positions and all(p.size > 0 for p in positions)

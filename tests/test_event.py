@@ -433,3 +433,96 @@ class TestThesisPremiseTags:
         got = repo.get(thesis.id)
         assert got.premise_tags == []
         assert got.regime_snapshot == {}
+
+
+class TestPolarityAwareInvalidation:
+    """Layer 2 #1 — end-to-end: polarity gates whether an event fires an alert."""
+
+    def _setup(self, db_conn, monkeypatch):
+        monkeypatch.setattr(
+            "cents.agents.event.EventRepository", lambda: EventRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.agents.event.ThesisRepository", lambda: ThesisRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.agents.event.AlertRepository", lambda: AlertRepository(db_conn)
+        )
+
+    def test_bullish_event_does_not_invalidate_positive_direction_thesis(
+        self, db_conn, monkeypatch,
+    ):
+        """positive direction + bullish event = confirmation, not invalidation."""
+        self._setup(db_conn, monkeypatch)
+        thesis_repo = ThesisRepository(db_conn)
+        thesis = Thesis(
+            title="Long-on-AI", symbol="NVDA",
+            premise_tags=["ai_capex"],
+            premise_direction={"ai_capex": "positive"},
+        )
+        thesis_repo.create(thesis)
+
+        client = _FakeAnthropic(
+            '{"tags": ["ai_capex"], "polarity": "bullish", "confidence": 0.9}'
+        )
+        agent = EventAgent(anthropic_client=client)
+        monkeypatch.setattr(
+            agent, "_fetch_federal_register", lambda since: [_stub_fed_register_doc()]
+        )
+
+        summary = agent.refresh(lookback_days=30)
+        # Event landed but no alert fired (polarity matched direction).
+        assert summary["new"] == 1
+        assert summary["alerts_fired"] == 0
+        assert AlertRepository(db_conn).list_unread() == []
+
+    def test_bearish_event_invalidates_positive_direction_thesis(
+        self, db_conn, monkeypatch,
+    ):
+        """positive direction + bearish event = invalidation."""
+        self._setup(db_conn, monkeypatch)
+        thesis_repo = ThesisRepository(db_conn)
+        thesis = Thesis(
+            title="Long-on-AI", symbol="NVDA",
+            premise_tags=["ai_capex"],
+            premise_direction={"ai_capex": "positive"},
+        )
+        thesis_repo.create(thesis)
+
+        client = _FakeAnthropic(
+            '{"tags": ["ai_capex"], "polarity": "bearish", "confidence": 0.9}'
+        )
+        agent = EventAgent(anthropic_client=client)
+        monkeypatch.setattr(
+            agent, "_fetch_federal_register", lambda since: [_stub_fed_register_doc()]
+        )
+
+        summary = agent.refresh(lookback_days=30)
+        assert summary["alerts_fired"] == 1
+        alerts = AlertRepository(db_conn).list_unread()
+        assert len(alerts) == 1
+        assert alerts[0].alert_type == AlertType.PREMISE_INVALIDATION
+
+    def test_empty_direction_falls_back_to_legacy_intersection(
+        self, db_conn, monkeypatch,
+    ):
+        """A thesis with no premise_direction set behaves like the pre-polarity flow."""
+        self._setup(db_conn, monkeypatch)
+        thesis_repo = ThesisRepository(db_conn)
+        thesis_repo.create(Thesis(
+            title="Legacy", symbol="NVDA",
+            premise_tags=["ai_capex"],
+            premise_direction={},  # empty — legacy unsigned match
+        ))
+
+        client = _FakeAnthropic(
+            '{"tags": ["ai_capex"], "polarity": "bullish", "confidence": 0.9}'
+        )
+        agent = EventAgent(anthropic_client=client)
+        monkeypatch.setattr(
+            agent, "_fetch_federal_register", lambda since: [_stub_fed_register_doc()]
+        )
+
+        summary = agent.refresh(lookback_days=30)
+        # Without direction info, bullish-on-shared-tag invalidates (legacy).
+        assert summary["alerts_fired"] == 1
