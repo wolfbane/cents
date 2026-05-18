@@ -66,9 +66,16 @@ class Thesis:
     paired_thesis_id: str | None = None
     # Regime / premise tracking
     premise_tags: list[str] = field(default_factory=list)
+    # Per-tag polarity (Layer 2 #1): "positive" = thesis benefits when this
+    # tag's events are bullish; "negative" = thesis benefits when bearish.
+    # Tags not in this dict fall back to legacy unsigned-intersection matching.
+    premise_direction: dict[str, str] = field(default_factory=dict)
     regime_snapshot: dict = field(default_factory=dict)
     # Discovery (e.g. universe name or screener strategy that surfaced this symbol)
     discovery_source: str | None = None
+    # Calibration (Layer 2 #3): logistic-regression-fit P(target hit before stop).
+    # None when no calibration model existed at thesis-open time.
+    calibrated_p_correct: float | None = None
     # Metadata
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)
@@ -84,6 +91,10 @@ class Thesis:
             raise ValueError(f"stop_price must be positive, got {self.stop_price}")
         if self.cohort == ThesisCohort.NEUTRAL and not self.hedge_symbol:
             raise ValueError("neutral cohort theses require a hedge_symbol")
+        if self.calibrated_p_correct is not None and not 0.0 <= self.calibrated_p_correct <= 1.0:
+            raise ValueError(
+                f"calibrated_p_correct must be in [0, 1], got {self.calibrated_p_correct}"
+            )
 
     def update_conviction(self, delta: float) -> None:
         """Adjust conviction score, clamping to [0, 100]."""

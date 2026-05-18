@@ -380,7 +380,7 @@ class EventAgent(BaseAgent):
         """Fire a PREMISE_INVALIDATION alert for each open thesis whose premise this event hits."""
         fired = 0
         for thesis in open_theses:
-            if not event.matches_premise(thesis.premise_tags):
+            if not event.matches_premise(thesis.premise_tags, thesis.premise_direction):
                 continue
             polarity = event.polarity.value
             message = (

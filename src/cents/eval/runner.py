@@ -252,14 +252,14 @@ def run_premise_eval(
 
     result = PremiseEvalResult(fixtures_run=0)
     for fixture in fixtures:
-        predicted = classify_premise_tags(
+        predicted_tags, _predicted_directions = classify_premise_tags(
             fixture["symbol"],
             fixture["thesis_summary"],
             fixture.get("evidence", []),
             anthropic_client=client,
         )
         expected_set = set(fixture["expected_tags"])
-        predicted_set = set(predicted)
+        predicted_set = set(predicted_tags)
         tp = len(expected_set & predicted_set)
         fp = len(predicted_set - expected_set)
         fn = len(expected_set - predicted_set)

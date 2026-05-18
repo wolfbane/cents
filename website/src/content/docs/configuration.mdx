@@ -76,6 +76,15 @@ shells, or per-portfolio profiles.
 - Scope: powers the sentiment agent's headline classification. Without it,
   sentiment falls back to keyword heuristics.
 
+Every Anthropic call is logged to an `llm_usage` row (model, agent,
+operation, token counts, timestamp) so `cents usage summary` can show
+input/output/cache tokens and estimated cost. **This log is a research
+reproducibility and cost-tracking aid, not an audit trail.** It lives in
+the user-writable `~/.cents/data/cents.db` SQLite file under default home
+permissions and can be modified or deleted; cents makes no claim of WORM
+immutability, SEC Rule 204-2 compliance, or audit-grade integrity. If you
+need regulated recordkeeping, you need a different tool.
+
 ## Verifying
 
 Once keys are set, `cents status` prints which providers are wired up and

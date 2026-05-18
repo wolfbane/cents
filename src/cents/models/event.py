@@ -94,8 +94,42 @@ class Event:
         # Normalize symbols to uppercase
         self.affected_symbols = [s.upper() for s in self.affected_symbols]
 
-    def matches_premise(self, premise_tags: list[str]) -> bool:
-        """True if any premise tag appears in this event's tags."""
-        if not premise_tags or not self.tags:
+    def matches_premise(
+        self,
+        thesis_premise_tags: list[str],
+        thesis_premise_direction: dict[str, str] | None = None,
+    ) -> bool:
+        """True if this event invalidates a thesis with the given premise.
+
+        Requires (a) at least one shared tag AND (b) when per-tag direction is
+        supplied, the event's polarity to be *opposite* the thesis's direction
+        on at least one overlapping tag. Neutral or unclear polarities never
+        invalidate — only material-and-opposite events do.
+
+        If ``thesis_premise_direction`` is None or empty, falls back to the
+        legacy unsigned set-intersection behaviour so existing callers continue
+        to work.
+        """
+        if not thesis_premise_tags or not self.tags:
             return False
-        return bool(set(self.tags) & set(premise_tags))
+        overlap = set(self.tags) & set(thesis_premise_tags)
+        if not overlap:
+            return False
+
+        # Legacy behaviour when no direction info is available.
+        if not thesis_premise_direction:
+            return True
+
+        # Polarised matching: only material (BULLISH/BEARISH) events that
+        # oppose the thesis direction on a shared tag invalidate.
+        if self.polarity == EventPolarity.BULLISH:
+            opposite = "negative"
+        elif self.polarity == EventPolarity.BEARISH:
+            opposite = "positive"
+        else:
+            return False
+
+        for tag in overlap:
+            if thesis_premise_direction.get(tag) == opposite:
+                return True
+        return False

@@ -31,8 +31,10 @@ CREATE TABLE IF NOT EXISTS theses (
     hedge_symbol TEXT,
     paired_thesis_id TEXT,
     premise_tags TEXT DEFAULT '[]',
+    premise_direction TEXT DEFAULT '{}',
     regime_snapshot TEXT DEFAULT '{}',
     discovery_source TEXT,
+    calibrated_p_correct REAL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -293,6 +295,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("positions", "realized_exit_price", "ALTER TABLE positions ADD COLUMN realized_exit_price REAL"),
         ("positions", "sizing_method", "ALTER TABLE positions ADD COLUMN sizing_method TEXT"),
         ("positions", "borrow_rate_pa_pct", "ALTER TABLE positions ADD COLUMN borrow_rate_pa_pct REAL"),
+        # Per-tag polarity (Layer 2 #1) — JSON-serialized dict.
+        ("theses", "premise_direction", "ALTER TABLE theses ADD COLUMN premise_direction TEXT DEFAULT '{}'"),
+        # Calibrated P(correct) at thesis-open time (Layer 2 #3).
+        ("theses", "calibrated_p_correct", "ALTER TABLE theses ADD COLUMN calibrated_p_correct REAL"),
         # Evidence provenance columns linking to the LLM call (added in v0.10).
         # Run BEFORE and AFTER the FK migration since that migration may recreate
         # the evidence table with the legacy column set.

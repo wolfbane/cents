@@ -18,6 +18,11 @@ from cents.db import (
 )
 from cents.factory.config import FactoryConfig, load_factory_config
 from cents.factory.premise import capture_regime_snapshot, classify_premise_tags
+from cents.finance.calibration import (
+    CalibrationModel,
+    build_predict_features,
+    load_latest_model,
+)
 from cents.factory.sector_map import hedge_etf_for
 from cents.factory.universe_resolver import resolve_symbols
 from cents.finance import (
@@ -67,6 +72,37 @@ def _is_paired(thesis: Thesis) -> bool:
     return thesis.cohort == ThesisCohort.NEUTRAL
 
 
+# Kelly window for calibrated sizing — outside this band, fall back to default.
+_CALIBRATION_KELLY_MIN_P = 0.5
+_CALIBRATION_KELLY_MAX_P = 0.95
+
+
+def _kelly_fraction(p: float | None) -> float:
+    """Translate calibrated P(correct) into a [0, 1] size multiplier.
+
+    Uses an even-money Kelly approximation ``f = 2p - 1`` clamped into
+    [0, 1] so we never lever beyond the unit-stake budget. Returns 1.0 when
+    no calibration is available (i.e. fall back to vol-scaled default size).
+    """
+    if p is None:
+        return 1.0
+    if p < _CALIBRATION_KELLY_MIN_P or p > _CALIBRATION_KELLY_MAX_P:
+        return 1.0
+    return max(0.0, min(1.0, 2.0 * p - 1.0))
+
+
+def _coerce_premise_classification(value) -> tuple[list[str], dict[str, str]]:
+    """Adapt classify_premise_tags' return to (tags, direction).
+
+    The classifier returns a 2-tuple, but legacy test stubs may return a bare
+    list of tags. Accept both shapes so test fixtures need not all change at once.
+    """
+    if isinstance(value, tuple) and len(value) == 2:
+        tags, direction = value
+        return list(tags or []), dict(direction or {})
+    return list(value or []), {}
+
+
 def _horizon_from_days(days: int) -> TimeHorizon:
     if days < 90:
         return TimeHorizon.SHORT
@@ -103,6 +139,7 @@ class FactoryEngine:
         universe_repo: UniverseRepository | None = None,
         run_repo: FactoryRunRepository | None = None,
         now: datetime | None = None,
+        calibration_model: CalibrationModel | None = None,
     ) -> None:
         self.config = config or load_factory_config()
         self._explicit_orchestrator = orchestrator
@@ -114,6 +151,14 @@ class FactoryEngine:
         self.universe_repo = universe_repo or UniverseRepository()
         self.run_repo = run_repo or FactoryRunRepository()
         self._now = now
+        # Calibration: load latest model lazily so sizing can apply Kelly.
+        if calibration_model is not None:
+            self._calibration_model = calibration_model
+        else:
+            try:
+                self._calibration_model = load_latest_model()
+            except Exception:  # pragma: no cover — defensive
+                self._calibration_model = None
 
     # ---- providers (lazy) -------------------------------------------------
 
@@ -560,10 +605,12 @@ class FactoryEngine:
 
             # Classify premise tags now (one LLM call) so we can gate on
             # per-tag concentration before paying any further setup cost.
-            premise_tags = classify_premise_tags(
-                symbol,
-                result.summary,
-                [getattr(e, "content", "") for e in (result.evidence or [])],
+            premise_tags, premise_direction = _coerce_premise_classification(
+                classify_premise_tags(
+                    symbol,
+                    result.summary,
+                    [getattr(e, "content", "") for e in (result.evidence or [])],
+                )
             )
             if cfg.max_per_premise_tag > 0 and self._exceeds_premise_concentration(
                 premise_tags, open_theses, cfg.max_per_premise_tag
@@ -697,6 +744,7 @@ class FactoryEngine:
                 price=price,
                 hedge_symbol=hedge_symbol,
                 premise_tags=premise_tags,
+                premise_direction=premise_direction,
                 discovery_source=discovery_source,
                 primary_shares=primary_shares,
                 primary_sizing_method=sizing_method,
@@ -809,6 +857,7 @@ class FactoryEngine:
         price: float | None,
         hedge_symbol: str | None,
         premise_tags: list[str] | None = None,
+        premise_direction: dict[str, str] | None = None,
         discovery_source: str | None = None,
         primary_shares: float = 0.0,
         primary_sizing_method: str = "equal_dollar",
@@ -858,6 +907,15 @@ class FactoryEngine:
 
         regime_snapshot = capture_regime_snapshot(now=now)
 
+        # Calibrated P(correct) if a calibration model exists — used both for
+        # persisting on the thesis and for Kelly-fraction sizing below.
+        calibrated_p = self._predict_calibration(
+            delta=delta,
+            regime_snapshot=regime_snapshot,
+            discovery_source=discovery_source,
+            cohort=cohort,
+        )
+
         thesis = Thesis(
             title=title,
             hypothesis=hypothesis,
@@ -871,10 +929,16 @@ class FactoryEngine:
             cohort=cohort,
             hedge_symbol=hedge_symbol,
             premise_tags=premise_tags or [],
+            premise_direction=premise_direction or {},
             regime_snapshot=regime_snapshot,
             discovery_source=discovery_source,
+            calibrated_p_correct=calibrated_p,
         )
         self.thesis_repo.create(thesis)
+
+        # Kelly fraction scales primary shares; 1.0 when no calibration.
+        kelly_mult = _kelly_fraction(calibrated_p)
+        primary_shares = primary_shares * kelly_mult
 
         positions_opened = 0
         # ---- Primary leg (cents-wiz vol-scaled sizing + cents-5s7 open cost) ----
@@ -968,3 +1032,23 @@ class FactoryEngine:
                     positions_opened += 1
 
         return {"theses_opened": 1, "positions_opened": positions_opened}
+
+    def _predict_calibration(
+        self,
+        *,
+        delta: float,
+        regime_snapshot: dict,
+        discovery_source: str | None,
+        cohort: ThesisCohort,
+    ) -> float | None:
+        """Return calibrated ``P(target hit)`` for a candidate thesis, or None."""
+        model = self._calibration_model
+        if model is None:
+            return None
+        features = build_predict_features(
+            delta=delta,
+            regime_snapshot=regime_snapshot,
+            discovery_source=discovery_source,
+            cohort=cohort.value if cohort is not None else None,
+        )
+        return float(model.predict(features))
