@@ -26,12 +26,25 @@ cents universe create my_value --source screener --strategy value --over sp500
 cents universe set-default my_value
 cents factory init
 cents factory run --dry-run
-cents factory run
+cents factory run                       # vol-scaled, beta-hedged, cost-aware, kill-switch-gated
+cents factory run --max-cost-usd 5.00   # abort if cumulative LLM spend would exceed this
 cents factory status
 cents factory analyze --by discovery,cohort,regime
 
-# Cost tracking
+# Cost tracking + reproducibility
 cents usage summary --by agent
+cents evidence trace <evidence_id>      # reconstruct the original LLM call from prompt/output hashes
+
+# Calibration (Layer 2 #3)
+cents calibration refit                 # fit logistic regression on closed-thesis outcomes
+cents calibration report                # coefficients + Brier + AUC + reliability buckets
+
+# Evals (Layer 2 #4)
+cents eval golden show --set premise
+cents eval run --set all                # runs the live API against golden fixtures
+
+# Signal output (NOT advice — see /scope/)
+cents recommend NVDA                    # emits bullish_signal / bearish_signal / neutral_signal
 ```
 
 Use `--output json` for machine-readable output. Run `cents --help` or `cents <command> --help` for full options.
@@ -40,8 +53,8 @@ Use `--output json` for machine-readable output. Run `cents --help` or `cents <c
 
 ```bash
 pip install -e ".[dev]"       # Install with test deps
-pip install -e ".[broker]"    # Add Alpaca trading
-pytest                        # Full suite (~560+ tests, ~20s)
+pip install -e ".[broker]"    # Add Alpaca trading (paper only — see /scope/)
+pytest                        # Full suite (~700 tests, ~30s)
 pytest tests/test_factory.py  # Single file
 pytest -k "premise"           # By keyword
 pytest --lf                   # Re-run last failures
@@ -51,7 +64,7 @@ A reinstall (`pip install -e .`) is required after switching the working tree be
 
 ## High-level architecture
 
-cents is structured as **four cooperating layers**. The discovery → evaluation → invalidation → analytics path is the load-bearing flow; everything else hangs off it.
+cents is structured as **four cooperating layers** + a transversal **finance substrate**. The discovery → evaluation → invalidation → analytics path is the load-bearing flow; finance/ supplies the risk/cost primitives the factory leans on.
 
 ```
 1. Discovery
@@ -69,25 +82,48 @@ cents is structured as **four cooperating layers**. The discovery → evaluation
 3. Invalidation
    EventAgent.refresh() ingests policy events tagged against EVENT_TAGS
    (cents/models/event.py) and fires AlertType.PREMISE_INVALIDATION when an
-   event's tags intersect an open thesis's premise_tags.
+   event's tags intersect an open thesis's premise_tags AND the event's
+   polarity opposes the thesis's premise_direction on the shared tag.
 
 4. Autonomous loop + analytics
    FactoryEngine (cents/factory/engine.py) walks a universe, runs the
    close phase (target/stop/expiry/INVALIDATED/PREEMPTED), then open phase
-   (entry threshold → premise classification → concentration cap →
-   budget / conviction-weighted preemption). Records discovery_source
-   + regime_snapshot on every thesis.
+   (drawdown kill-switch → liquidity gate → borrow gate → vol-scaled
+   sizing → premise classification → concentration cap → budget /
+   conviction-weighted preemption → beta-matched hedge leg). Records
+   discovery_source + regime_snapshot + calibrated_p_correct +
+   premise_direction on every thesis.
    cents factory analyze --by {cohort,discovery,regime} stratifies outcomes.
+
+Transversal: cents/finance/
+   - sizing.py: vol_scaled_shares (inverse-vol toward target_vol_pct_per_position)
+   - costs.py: apply_open_cost / apply_close_cost (commission + slippage + short borrow + gap penalty)
+   - hedging.py: estimate_beta + beta_match_ratio (60d OLS, R² gate, clamped)
+   - liquidity.py: passes_liquidity_gate (median 20d $-ADV) + passes_borrow_gate
+   - portfolio.py: compute_drawdown + check_kill_switch (budget_usd denominator)
+   - calibration.py: CalibrationModel + fit_calibration + Kelly fraction sizing
 ```
 
 ### Things that aren't obvious from a single file
 
 - **The orchestrator's `AgentResult` has a different clamp from individual agents.** Per-agent `conviction_delta` clamps to ±10 (`MAX_CONVICTION_DELTA`); the orchestrator's aggregate (constructed with `aggregate=True`) clamps to ±30 (`MAX_AGGREGATE_CONVICTION_DELTA`) so strong consensus isn't quantized to ±10. See `cents/agents/base.py`.
-- **Premise tags are a controlled vocabulary** (`EVENT_TAGS` in `cents/models/event.py`). Both the EventAgent (tagging fetched events) and the premise classifier (`cents/factory/premise.py`) draw from this single list — that's what makes intersection matching work. **Adding tags is safe; renaming them is not.**
+- **Premise tags are a controlled vocabulary** (`EVENT_TAGS` in `cents/models/event.py`). Both the EventAgent (tagging fetched events) and the premise classifier (`cents/factory/premise.py`) draw from this single list. **Adding tags is safe; renaming them is not.**
+- **Premise invalidation is polarity-aware.** `Event.matches_premise(tags, direction)` requires (a) tag overlap AND (b) event polarity opposite the thesis's `premise_direction` on a shared tag. A bullish event on a "positive"-direction thesis does NOT invalidate it (it confirms). Neutral/unclear polarities never invalidate. Empty `premise_direction` falls back to legacy unsigned intersection for back-compat.
+- **`classify_premise_tags` returns a 2-tuple `(tags, direction)`** — `direction` is `{tag: "positive"|"negative"}`. The factory engine uses `_coerce_premise_classification` to accept legacy bare-list stubs from older tests.
 - **A neutral-cohort thesis owns BOTH legs** as two `Position` rows on the same `thesis_id` (one LONG on `symbol`, one SHORT on `hedge_symbol`). It is NOT two linked theses. Closing the thesis closes both legs naturally.
+- **The hedge leg is beta-matched, not dollar-matched.** `cents/finance/hedging.py:estimate_beta` does 60-day OLS of log returns vs the hedge ETF (default `XL*` from sector_map; falls back to SPY). Beta is clamped to `[beta_min, beta_max]` (default `[0.10, 5.0]`) and the R² gate (`beta_min_r_squared`, default 0.5) returns None when the fit is poor — caller falls back to `default_beta`.
 - **Direction follows signal sign.** Bullish `conviction_delta` opens LONG underlying (+ SHORT hedge in paired mode); bearish opens SHORT underlying (+ LONG hedge). Target/stop semantics flip — short theses' target sits *below* entry, stop above.
 - **`cohort_mode=paired` is the factory default** for measurement reasons (the neutral cohort is the control group for separating skill from regime beta). Both the scaffolded `factory init` config and `FactoryConfig` ship `paired`. Switch to `directional_only` only when you don't want a hedge leg per thesis.
+- **Sizing is vol-scaled, not equal-dollar.** `vol_scaled_shares` targets `target_vol_pct_per_position` (% of `budget_usd`) of annualized $-volatility, capped at `max_position_pct` of budget. When historical vol is unavailable (test stubs / missing data), falls back to equal-dollar via `fallback_position_usd`. **When a calibration model exists**, primary_shares is then multiplied by Kelly fraction `f = 2p - 1` (clamped `[0, 1]`) for `p` in `[0.5, 0.95]`; otherwise passthrough at 1.0.
+- **`Position.pnl` is NET of costs.** `Position.gross_pnl` is the pre-cost figure. `costs_applied_usd` accumulates commission + slippage + short borrow + gap penalty across both open and close. Cohort analytics should always use `pnl`, not `gross_pnl`.
+- **Stop fills are gap-aware.** When closing on a stop trigger (`ThesisOutcome.INCORRECT`), `realized_exit_price = min/max(mark, stop_price)` (worst-for-position direction) plus `gap_slippage_bps`. Position stores both the signal `exit_price` and the modeled `realized_exit_price`.
+- **The portfolio kill switch normalizes to `budget_usd`, not cost basis.** `compute_drawdown(open_positions, closed_today, price_provider, budget_usd=...)` divides both `unrealized_drawdown_pct` and `realized_loss_today_pct` by budget; paired legs sharing a `thesis_id` are netted via `abs(long_notional - short_notional)` so a $5k long + $5k short doesn't double-count as $10k.
+- **Live (non-paper) trading is hard-gated.** `AlpacaClient(paper=False)` raises `BrokerError` unless BOTH `CENTS_ALLOW_LIVE_TRADING=1` AND `CENTS_LIVE_TRADING_ACK` matches `LIVE_TRADING_ACK_PHRASE` verbatim (27 words). All factory + CLI broker callers hard-code `paper=True`. See `/scope/` — real-money trading is explicitly out of scope.
+- **LLM call provenance is reproducibility, not audit-grade.** Every Anthropic call writes a gzipped JSONL blob to `~/.cents/data/llm_calls/YYYYMMDD/<call_id>.json.gz` plus a row in `llm_usage`. Evidence rows persist `llm_call_id` + model + 3 SHA256 hashes (prompt/input/output). `cents evidence trace <id>` reconstructs the call. **Files are user-writable** — this is a research log, not Rule 204-2 recordkeeping. See `cents/llm_usage.py:persist_call_blob`.
+- **Pre-flight LLM cost cap.** `cents factory run --max-cost-usd N` and the `max_llm_spend_usd_per_day` config knob are enforced PRE-call via `check_cost_cap` in `cents/llm_usage.py`. Estimate uses a 4-chars/token heuristic on `max_tokens` + message content; raises `CostCapExceeded` before the offending API call is made.
+- **Untrusted text is delimited with a per-call nonce.** `cents/agents/base.py:safe_delimit(text, tag)` wraps news article / Federal Register / thesis text in `<{tag}-{nonce}>...</{tag}-{nonce}>` and escapes literal `</{tag}` substrings. System prompts reference the nonce-tagged form.
 - **`Thesis.discovery_source = <universe_name>`** is the link between the discovery layer and outcome analytics. Without it, `cents factory analyze --by discovery` has nothing to stratify on. The factory engine sets it automatically; manually-created theses leave it `None`.
+- **`factory analyze` low-N flag gates on `judged`, not `opened`.** A cohort with 50 opened but only 2 closed-and-judged is still low-N. Threshold is `LOW_N_THRESHOLD = 30` in `cents/cli/_disclosures.py`.
 - **The api_cache table has no TTL.** Daily-mutable endpoints (FMP TTM ratios, profile) use `daily_key=True` in `_fetch_json` to inject today's date into the cache key. Alpaca `get_history` is keyed by `today` (or supplied `as_of`) for the same reason. Don't cache TTM data with a stable key — it will go stale.
 
 ### Repository + persistence
