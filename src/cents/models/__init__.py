@@ -11,6 +11,7 @@ from cents.models.event import Event, EventPolarity, EVENT_TAGS
 from cents.models.llm_usage import LLMUsage
 from cents.models.universe import Universe, UniverseSource
 from cents.models.factory_run import FactoryRun
+from cents.models.experiment import Experiment
 
 __all__ = [
     "Thesis",
@@ -39,4 +40,5 @@ __all__ = [
     "Universe",
     "UniverseSource",
     "FactoryRun",
+    "Experiment",
 ]

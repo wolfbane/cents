@@ -80,6 +80,13 @@ class Thesis:
     # touched so `factory analyze` can stratify outcomes by which calibration
     # produced them and surface model-staleness regressions. ISO timestamp.
     calibration_fit_at: str | None = None
+    # Which orchestrator opened this thesis ("llm" default, "random" for the
+    # control arm). Lets cohort analytics ask: does the LLM-arm cohort beat
+    # the random-arm cohort? See cents/agents/random_orchestrator.py.
+    orchestrator_label: str = "llm"
+    # Which registered experiment was active when this thesis was opened.
+    # None when no experiment is registered. See cents/experiments/.
+    experiment_id: str | None = None
     # Metadata
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)

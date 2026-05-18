@@ -95,6 +95,7 @@ class TestInitDb:
             "idx_llm_usage_agent",
             "idx_universes_default",
             "idx_factory_runs_started",
+            "idx_experiments_status",
         }
         assert expected_indexes == indexes
         conn.close()

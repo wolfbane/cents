@@ -62,17 +62,44 @@ def factory_init(force: bool):
         "never made."
     ),
 )
+@click.option(
+    "--orchestrator",
+    type=click.Choice(["llm", "random"]),
+    default="llm",
+    show_default=True,
+    help=(
+        "Which orchestrator to use. 'llm' = the real multi-agent stack. "
+        "'random' = the control arm (uniform conviction_delta, no LLM calls); "
+        "use this to generate the baseline cohort that the LLM arm must beat."
+    ),
+)
+@click.option(
+    "--orchestrator-seed",
+    type=int,
+    default=None,
+    help="RNG seed for --orchestrator random (reproducibility).",
+)
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
 def factory_run(
     dry_run: bool,
     universe_name: str | None,
     max_cost_usd: float | None,
+    orchestrator: str,
+    orchestrator_seed: int | None,
     output: str | None,
 ):
     """Run the factory engine once."""
     output = resolve_output_format(output)
     config = load_factory_config()
-    engine = FactoryEngine(config=config)
+    if orchestrator == "random":
+        from cents.agents.random_orchestrator import RandomOrchestrator
+
+        engine = FactoryEngine(
+            config=config,
+            orchestrator=RandomOrchestrator(seed=orchestrator_seed),
+        )
+    else:
+        engine = FactoryEngine(config=config)
 
     try:
         with cost_cap(max_cost_usd):

@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS theses (
     discovery_source TEXT,
     calibrated_p_correct REAL,
     calibration_fit_at TEXT,
+    orchestrator_label TEXT DEFAULT 'llm',
+    experiment_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -232,6 +234,22 @@ CREATE TABLE IF NOT EXISTS factory_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_factory_runs_started ON factory_runs(started_at);
+
+CREATE TABLE IF NOT EXISTS experiments (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    hypothesis TEXT NOT NULL,
+    primary_metric TEXT NOT NULL,
+    minimum_n_per_arm INTEGER NOT NULL,
+    stopping_rule TEXT,
+    frozen_config_sha TEXT NOT NULL,
+    frozen_config_json TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finalized_at TEXT,
+    verdict_json TEXT,
+    status TEXT DEFAULT 'active'
+);
+CREATE INDEX IF NOT EXISTS idx_experiments_status ON experiments(status);
 """
 
 
@@ -302,6 +320,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "calibrated_p_correct", "ALTER TABLE theses ADD COLUMN calibrated_p_correct REAL"),
         # Calibration model vintage (Bug E, r3) — ISO fit_at of the model used.
         ("theses", "calibration_fit_at", "ALTER TABLE theses ADD COLUMN calibration_fit_at TEXT"),
+        # Orchestrator label (research experiment) — "llm" default, "random" for control arm.
+        ("theses", "orchestrator_label", "ALTER TABLE theses ADD COLUMN orchestrator_label TEXT DEFAULT 'llm'"),
+        # Experiment registration (cents-hvz) — which active experiment a thesis was opened under.
+        ("theses", "experiment_id", "ALTER TABLE theses ADD COLUMN experiment_id TEXT"),
         # Evidence provenance columns linking to the LLM call (added in v0.10).
         # Run BEFORE and AFTER the FK migration since that migration may recreate
         # the evidence table with the legacy column set.

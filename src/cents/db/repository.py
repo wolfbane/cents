@@ -1,5 +1,7 @@
 """Repository layer for CRUD operations with shared helpers."""
 
+from __future__ import annotations
+
 import json
 import logging
 import sqlite3
@@ -18,6 +20,7 @@ from cents.models import (
     EventPolarity,
     Evidence,
     EvidenceType,
+    Experiment,
     FactoryRun,
     LLMUsage,
     ThesisDimension,
@@ -192,6 +195,8 @@ class ThesisRepository(BaseRepository):
             ModelField("discovery_source"),
             ModelField("calibrated_p_correct"),
             ModelField("calibration_fit_at"),
+            ModelField("orchestrator_label"),
+            ModelField("experiment_id"),
             ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
             ModelField("updated_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
         ],
@@ -930,3 +935,51 @@ class FactoryRunRepository(BaseRepository):
 
     def delete(self, run_id: str) -> bool:
         return self._delete(self._META, "id = ?", (run_id,)) > 0
+
+
+class ExperimentRepository(BaseRepository):
+    """CRUD operations for registered experiments (cents-hvz)."""
+
+    _META = ModelMeta(
+        table="experiments",
+        model=Experiment,
+        fields=[
+            ModelField("id"),
+            ModelField("name"),
+            ModelField("hypothesis"),
+            ModelField("primary_metric"),
+            ModelField("minimum_n_per_arm"),
+            ModelField("stopping_rule"),
+            ModelField("frozen_config_sha"),
+            ModelField("frozen_config_json"),
+            ModelField("started_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
+            ModelField("finalized_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw) if raw else None),
+            ModelField("verdict_json"),
+            ModelField("status"),
+        ],
+        default_order="started_at DESC",
+    )
+
+    def create(self, exp: Experiment) -> Experiment:
+        return self._insert(self._META, exp)
+
+    def update(self, exp: Experiment) -> Experiment:
+        return self._update(self._META, exp)
+
+    def get(self, exp_id: str) -> Experiment | None:
+        return self._get_by_id(self._META, exp_id)
+
+    def get_by_name(self, name: str) -> Experiment | None:
+        rows = self._list(self._META, where="name = ?", params=(name,), limit=1)
+        return rows[0] if rows else None
+
+    def list(self, status: str | None = None) -> list[Experiment]:
+        if status:
+            return self._list(self._META, where="status = ?", params=(status,))
+        return self._list(self._META)
+
+    def list_active(self) -> list[Experiment]:
+        return self.list(status="active")
+
+    def delete(self, exp_id: str) -> bool:
+        return self._delete(self._META, "id = ?", (exp_id,)) > 0

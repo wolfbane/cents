@@ -209,6 +209,36 @@ class FactoryEngine:
                         age_days, fit_at.isoformat(),
                     )
 
+        # Active experiment context (cents-hvz). If an experiment is
+        # registered, every thesis we open gets stamped with its id, and
+        # we warn loudly when factory.toml has drifted from the frozen SHA.
+        # Lazy import to avoid an engine ↔ experiments cycle at module load.
+        try:
+            from cents.experiments import (
+                compute_factory_config_sha,
+                get_active_experiment,
+            )
+            self._active_experiment = get_active_experiment()
+        except Exception:  # pragma: no cover — defensive
+            self._active_experiment = None
+        if self._active_experiment is not None:
+            try:
+                current_sha, _ = compute_factory_config_sha()
+            except Exception:  # pragma: no cover — defensive
+                current_sha = None
+            if (
+                current_sha is not None
+                and current_sha != self._active_experiment.frozen_config_sha
+            ):
+                logger.warning(
+                    "factory.toml SHA has drifted from experiment %r "
+                    "(frozen %s, current %s). Treat config changes mid-experiment "
+                    "as a discipline violation.",
+                    self._active_experiment.name,
+                    self._active_experiment.frozen_config_sha[:12],
+                    current_sha[:12],
+                )
+
     # ---- providers (lazy) -------------------------------------------------
 
     def _make_orchestrator(self):
@@ -598,6 +628,11 @@ class FactoryEngine:
         opened_this_run = 0
 
         orchestrator = self._make_orchestrator()
+        # Each thesis is labeled with which orchestrator opened it so the
+        # cohort analytics can compare LLM-arm vs random-arm outcomes.
+        # Defensive against MagicMock fixtures (which auto-create attrs).
+        _olabel = getattr(orchestrator, "orchestrator_label", "llm")
+        orchestrator_label = _olabel if isinstance(_olabel, str) else "llm"
         price_provider = self._make_price_provider()
 
         # Note (research-mode): we intentionally do NOT gate the open phase
@@ -761,6 +796,7 @@ class FactoryEngine:
                 primary_sizing_method=sizing_method,
                 primary_closes=primary_closes,
                 borrow_rate_pa_pct=borrow.borrow_rate_pa_pct,
+                orchestrator_label=orchestrator_label,
             )
             theses_opened += new_open["theses_opened"]
             positions_opened += new_open["positions_opened"]
@@ -889,6 +925,7 @@ class FactoryEngine:
         primary_sizing_method: str = "equal_dollar",
         primary_closes: list[float] | None = None,
         borrow_rate_pa_pct: float = 0.0,
+        orchestrator_label: str = "llm",
     ) -> dict:
         """Persist a new factory thesis and its position(s), oriented by signal sign.
 
@@ -966,6 +1003,8 @@ class FactoryEngine:
             discovery_source=discovery_source,
             calibrated_p_correct=calibrated_p,
             calibration_fit_at=calibration_fit_at,
+            orchestrator_label=orchestrator_label,
+            experiment_id=self._active_experiment.id if self._active_experiment else None,
         )
         self.thesis_repo.create(thesis)
 
