@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
 
 from cents.db import ExperimentRepository, ThesisRepository
-from cents.factory.config import get_factory_config_path
+from cents.factory.config import get_factory_config_path, load_factory_config
 from cents.models import Experiment, ThesisStatus
 
 
@@ -28,18 +29,29 @@ class ExperimentSpecError(ValueError):
 
 
 def compute_factory_config_sha(config_path: Path | None = None) -> tuple[str, str]:
-    """Return ``(sha256, raw_text)`` of the factory config file.
+    """Return ``(sha256, raw_text)`` capturing the *effective* factory config.
 
-    Used to freeze the config in effect at experiment registration time.
+    Hashes the resolved ``FactoryConfig`` dataclass (canonical JSON via
+    ``dataclasses.asdict`` + sorted keys), not the toml file text. A user
+    hand-editing the toml to omit a key used to leave the file-text SHA
+    stable while changing behavior; the resolved-config SHA catches it.
+
+    ``raw_text`` is also kept (toml when present, or the JSON snapshot
+    otherwise) so the experiments table can show a human-readable view of
+    what was registered. The SHA is the load-bearing audit field.
     """
     path = config_path or get_factory_config_path()
-    if not path.exists():
-        # An experiment can still be registered without a written config —
-        # the engine's defaults are the frozen baseline.
-        raw = "# (no factory.toml present — defaults in effect)"
-    else:
+    cfg = load_factory_config(path) if path.exists() else load_factory_config()
+    effective = dataclasses.asdict(cfg)
+    canonical = json.dumps(effective, sort_keys=True, separators=(",", ":"))
+    sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if path.exists():
         raw = path.read_text()
-    sha = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    else:
+        raw = (
+            "# (no factory.toml present — defaults in effect)\n"
+            f"# effective_config = {canonical}\n"
+        )
     return sha, raw
 
 

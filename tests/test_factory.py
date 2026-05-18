@@ -540,6 +540,48 @@ class TestCloseTriggers:
         reloaded = ThesisRepository().get(t.id)
         assert reloaded.outcome == ThesisOutcome.UNCLEAR
 
+    def test_invalidation_alert_stale_by_one_day_is_ignored(self, factory_db):
+        """The engine's 1-day staleness window says an alert older than
+        ``thesis.updated_at - 1d`` should not invalidate. With wall-clock
+        ``datetime.now()`` the boundary is untestable; freeze the clock
+        so the relationship is pinned by elapsed time, not test runtime.
+        """
+        from freezegun import freeze_time
+
+        _seed_universe([])
+
+        # Set the clock so the thesis updated_at is exactly the reference
+        # moment, and the alert is 25h old — outside the 1-day window.
+        with freeze_time("2026-05-18 12:00:00"):
+            t = self._seed_open_thesis()
+            trepo = ThesisRepository()
+            reloaded = trepo.get(t.id)
+            reloaded.updated_at = datetime.now()
+            trepo.update(reloaded)
+
+        # Step back to seed the older alert.
+        with freeze_time("2026-05-17 11:00:00"):
+            AlertRepository().create(Alert(
+                symbol="T",
+                alert_type=AlertType.PREMISE_INVALIDATION,
+                message="stale",
+                data={"thesis_id": t.id},
+                created_at=datetime.now(),
+            ))
+
+        # Re-enter the post-update window — the alert is now ~25h before
+        # the thesis updated_at, outside the 1-day window.
+        with freeze_time("2026-05-18 12:00:00"):
+            engine = FactoryEngine(
+                config=_config(entry_threshold=99.0),
+                orchestrator=_orchestrator(),
+                price_provider=_price_provider({"T": 100.0}),
+            )
+            engine.run()
+
+        # Outcome should not be INVALIDATED — the stale alert must not fire.
+        assert ThesisRepository().get(t.id).outcome != ThesisOutcome.INVALIDATED
+
     def test_invalidation_alert_closes_as_invalidated(self, factory_db):
         _seed_universe([])
         t = self._seed_open_thesis()
