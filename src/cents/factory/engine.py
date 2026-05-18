@@ -13,6 +13,7 @@ from cents.db import (
     FactoryRunRepository,
     LLMUsageRepository,
     PositionRepository,
+    ShadowOpenRepository,
     ThesisRepository,
     UniverseRepository,
 )
@@ -45,6 +46,7 @@ from cents.models import (
     Position,
     PositionSide,
     PositionStatus,
+    ShadowOpen,
     Thesis,
     ThesisCohort,
     ThesisOutcome,
@@ -175,6 +177,7 @@ class FactoryEngine:
         alert_repo: AlertRepository | None = None,
         universe_repo: UniverseRepository | None = None,
         run_repo: FactoryRunRepository | None = None,
+        shadow_repo: ShadowOpenRepository | None = None,
         now: datetime | None = None,
         calibration_model: CalibrationModel | None = None,
     ) -> None:
@@ -187,6 +190,7 @@ class FactoryEngine:
         self.alert_repo = alert_repo or AlertRepository()
         self.universe_repo = universe_repo or UniverseRepository()
         self.run_repo = run_repo or FactoryRunRepository()
+        self.shadow_repo = shadow_repo or ShadowOpenRepository()
         self._now = now
         # Calibration: load latest model lazily so sizing can gate on Kelly.
         if calibration_model is not None:
@@ -337,6 +341,7 @@ class FactoryEngine:
                 proposals,
                 skip_symbols=closed_results["invalidated_symbols"],
                 discovery_source=universe_name,
+                run_id=run.id,
             )
             run.theses_opened += open_results["theses_opened"]
             run.positions_opened += open_results["positions_opened"]
@@ -610,6 +615,7 @@ class FactoryEngine:
         *,
         skip_symbols: set[str] | None = None,
         discovery_source: str | None = None,
+        run_id: str | None = None,
     ) -> dict:
         """Open new theses where the orchestrator signals strongly enough."""
         cfg = self.config
@@ -651,6 +657,18 @@ class FactoryEngine:
 
             result = orchestrator.research(symbol, None)
             if abs(result.conviction_delta) < cfg.entry_threshold:
+                self._record_shadow(
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    symbol=symbol,
+                    conviction_delta=result.conviction_delta,
+                    reason="below_threshold",
+                    price=price_provider.get_latest_price(symbol),
+                    premise_tags=[],
+                    premise_direction={},
+                    discovery_source=discovery_source,
+                    orchestrator_label=orchestrator_label,
+                )
                 continue
 
             new_conviction = max(0.0, min(100.0, 50.0 + result.conviction_delta))
@@ -678,6 +696,18 @@ class FactoryEngine:
                 logger.debug(
                     "Skipping %s — premise tags %s already at concentration cap",
                     symbol, premise_tags,
+                )
+                self._record_shadow(
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    symbol=symbol,
+                    conviction_delta=result.conviction_delta,
+                    reason="concentration_cap",
+                    price=price,
+                    premise_tags=premise_tags,
+                    premise_direction=premise_direction,
+                    discovery_source=discovery_source,
+                    orchestrator_label=orchestrator_label,
                 )
                 continue
 
@@ -748,6 +778,18 @@ class FactoryEngine:
                 )
                 if preemption_target is None:
                     # Budget locked and no candidate cheap enough — skip
+                    self._record_shadow(
+                        dry_run=dry_run,
+                        run_id=run_id,
+                        symbol=symbol,
+                        conviction_delta=result.conviction_delta,
+                        reason="budget_locked",
+                        price=price,
+                        premise_tags=premise_tags,
+                        premise_direction=premise_direction,
+                        discovery_source=discovery_source,
+                        orchestrator_label=orchestrator_label,
+                    )
                     continue
 
             if dry_run:
@@ -879,6 +921,49 @@ class FactoryEngine:
             mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
             freed += mark * pos.size
         return freed
+
+    def _record_shadow(
+        self,
+        *,
+        dry_run: bool,
+        run_id: str | None,
+        symbol: str,
+        conviction_delta: float,
+        reason: str,
+        price: float | None,
+        premise_tags: list[str],
+        premise_direction: dict[str, str],
+        discovery_source: str | None,
+        orchestrator_label: str,
+    ) -> None:
+        """Persist a rejected candidate to shadow_opens (cents-3mo).
+
+        Skips writes during dry-run. Failures are logged but never raised —
+        a broken shadow log must not abort a factory run.
+        """
+        if dry_run:
+            return
+        cfg = self.config
+        side = "SHORT" if conviction_delta < 0 else "LONG"
+        try:
+            self.shadow_repo.create(ShadowOpen(
+                run_id=run_id,
+                symbol=symbol,
+                conviction_delta=conviction_delta,
+                reason=reason,
+                would_be_entry_price=price,
+                primary_side=side,
+                premise_tags=premise_tags or [],
+                premise_direction=premise_direction or {},
+                regime_snapshot=capture_regime_snapshot(now=self._clock()),
+                orchestrator_label=orchestrator_label,
+                experiment_id=self._active_experiment.id if self._active_experiment else None,
+                discovery_source=discovery_source,
+                horizon_days=cfg.default_horizon_days,
+                created_at=self._clock(),
+            ))
+        except Exception:  # pragma: no cover — observability must not break runs
+            logger.exception("Failed to record shadow_open for %s", symbol)
 
     def _exceeds_premise_concentration(
         self,

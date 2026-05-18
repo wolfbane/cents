@@ -14,6 +14,8 @@ from cents.db.repository import (
     UniverseRepository,
     FactoryRunRepository,
     ExperimentRepository,
+    DelistingsRepository,
+    ShadowOpenRepository,
 )
 
 __all__ = [
@@ -33,4 +35,6 @@ __all__ = [
     "UniverseRepository",
     "FactoryRunRepository",
     "ExperimentRepository",
+    "DelistingsRepository",
+    "ShadowOpenRepository",
 ]

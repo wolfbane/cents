@@ -201,12 +201,14 @@ class TestCLI:
         assert payload["name"] == "flow-test"
         assert payload["minimum_n_per_arm"] == 50
 
-        # finalize
+        # finalize — flow has zero opened theses, so verdict_ready is
+        # False; --force is required to abandon early (cents-1qp).
         verdict_path = tmp_path / "v.json"
         verdict_path.write_text(json.dumps({"primary_metric_value": 0.0}))
         r = runner.invoke(cli, [
             "experiment", "finalize", "flow-test",
             "--verdict", str(verdict_path),
+            "--force",
         ])
         assert r.exit_code == 0, r.output
         assert "Finalized" in r.output
@@ -278,3 +280,222 @@ class TestEngineIntegration:
         theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
         assert len(theses) == 1
         assert theses[0].experiment_id == exp.id
+
+
+class TestVerdictReady:
+    """Sample-size refusal-to-conclude (cents-1qp).
+
+    ``verdict_ready`` gates on three discipline checks: minimum N per arm,
+    a minimum elapsed-days floor (default 14), and no factory.toml SHA
+    drift since registration.
+    """
+
+    def _small_n_spec(self, name: str = "vr") -> str:
+        # Tiny N so we can saturate it in a test without seeding hundreds
+        # of rows. Real experiments use N >= 50.
+        return (
+            f"experiment: {name}\nhypothesis: h\nprimary_metric: m\n"
+            f"minimum_n_per_arm: 2\n"
+        )
+
+    def test_status_snapshot_includes_verdict_ready_field(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+        path = tmp_path / "e.yaml"
+        path.write_text(self._small_n_spec("vr-1"))
+        exp = register_experiment(spec_path=path)
+
+        snap = status_snapshot(exp)
+        assert "verdict_ready" in snap
+        assert "verdict_ready_reason" in snap
+        assert isinstance(snap["verdict_ready"], bool)
+        assert isinstance(snap["verdict_ready_reason"], str)
+
+    def test_verdict_ready_false_below_minimum_n(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+        path = tmp_path / "e.yaml"
+        path.write_text(self._small_n_spec("vr-n"))
+        exp = register_experiment(spec_path=path)
+
+        # Seed a single closed thesis on llm arm; target is 2 per arm.
+        trepo = ThesisRepository()
+        t = Thesis(title="t", symbol="A", experiment_id=exp.id, orchestrator_label="llm")
+        trepo.create(t)
+        t.status = ThesisStatus.CLOSED
+        trepo.update(t)
+
+        snap = status_snapshot(exp)
+        assert snap["verdict_ready"] is False
+        assert "1/2" in snap["verdict_ready_reason"]
+        assert "llm" in snap["verdict_ready_reason"]
+
+    def test_verdict_ready_false_below_elapsed_days_floor(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        from cents.experiments.registry import MINIMUM_ELAPSED_DAYS
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+        path = tmp_path / "e.yaml"
+        path.write_text(self._small_n_spec("vr-e"))
+        exp = register_experiment(spec_path=path)
+
+        # Saturate minimum N per arm on both arms.
+        trepo = ThesisRepository()
+        for arm in ("llm", "random"):
+            for i in range(2):
+                t = Thesis(
+                    title=f"{arm}-{i}", symbol=f"{arm[0].upper()}{i}",
+                    experiment_id=exp.id, orchestrator_label=arm,
+                )
+                trepo.create(t)
+                t.status = ThesisStatus.CLOSED
+                trepo.update(t)
+
+        # N is satisfied, but elapsed_days is 0 < MINIMUM_ELAPSED_DAYS.
+        snap = status_snapshot(exp, now=exp.started_at + timedelta(days=1))
+        assert snap["minimum_n_per_arm_reached"] is True
+        assert snap["verdict_ready"] is False
+        assert f"{MINIMUM_ELAPSED_DAYS}" in snap["verdict_ready_reason"]
+
+    def test_verdict_ready_false_on_sha_drift(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        # Point factory config at a real file with content A.
+        cfg = tmp_path / "factory.toml"
+        cfg.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg))
+
+        path = tmp_path / "e.yaml"
+        path.write_text(self._small_n_spec("vr-s"))
+        exp = register_experiment(spec_path=path)
+
+        # Saturate N on both arms.
+        trepo = ThesisRepository()
+        for arm in ("llm", "random"):
+            for i in range(2):
+                t = Thesis(
+                    title=f"{arm}-{i}", symbol=f"{arm[0].upper()}{i}",
+                    experiment_id=exp.id, orchestrator_label=arm,
+                )
+                trepo.create(t)
+                t.status = ThesisStatus.CLOSED
+                trepo.update(t)
+
+        # Drift the config — same path, different SHA.
+        cfg.write_text("budget_usd = 99999\n# drifted\n")
+
+        from cents.experiments.registry import MINIMUM_ELAPSED_DAYS
+
+        # Push the clock past the elapsed-days floor so SHA drift is the
+        # only remaining blocker.
+        snap = status_snapshot(
+            exp, now=exp.started_at + timedelta(days=MINIMUM_ELAPSED_DAYS + 1)
+        )
+        assert snap["config_sha_drift"] is True
+        assert snap["verdict_ready"] is False
+        assert "drift" in snap["verdict_ready_reason"].lower()
+
+    def test_verdict_ready_true_when_all_gates_pass(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        cfg = tmp_path / "factory.toml"
+        cfg.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg))
+
+        path = tmp_path / "e.yaml"
+        path.write_text(self._small_n_spec("vr-ok"))
+        exp = register_experiment(spec_path=path)
+
+        trepo = ThesisRepository()
+        for arm in ("llm", "random"):
+            for i in range(2):
+                t = Thesis(
+                    title=f"{arm}-{i}", symbol=f"{arm[0].upper()}{i}",
+                    experiment_id=exp.id, orchestrator_label=arm,
+                )
+                trepo.create(t)
+                t.status = ThesisStatus.CLOSED
+                trepo.update(t)
+
+        from cents.experiments.registry import MINIMUM_ELAPSED_DAYS
+
+        snap = status_snapshot(
+            exp, now=exp.started_at + timedelta(days=MINIMUM_ELAPSED_DAYS + 1)
+        )
+        assert snap["verdict_ready"] is True
+        assert snap["config_sha_drift"] is False
+
+
+class TestFinalizeGating:
+    """Finalize is gated on verdict_ready unless --force is supplied (cents-1qp)."""
+
+    def test_finalize_without_force_errors_when_not_ready(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+        spec = tmp_path / "exp.yaml"
+        spec.write_text(_yaml_spec("gate-block"))
+        runner = CliRunner()
+        r = runner.invoke(cli, ["experiment", "register", str(spec)])
+        assert r.exit_code == 0
+
+        r = runner.invoke(cli, ["experiment", "finalize", "gate-block"])
+        assert r.exit_code != 0
+        assert "not verdict-ready" in r.output.lower()
+        assert "--force" in r.output
+
+    def test_finalize_force_succeeds_and_records_forced_flag(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        from cents.cli import cli
+        from cents.db import ExperimentRepository
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+        spec = tmp_path / "exp.yaml"
+        spec.write_text(_yaml_spec("gate-force"))
+        runner = CliRunner()
+        r = runner.invoke(cli, ["experiment", "register", str(spec)])
+        assert r.exit_code == 0
+
+        r = runner.invoke(cli, ["experiment", "finalize", "gate-force", "--force"])
+        assert r.exit_code == 0, r.output
+
+        exp = ExperimentRepository().get_by_name("gate-force")
+        assert exp is not None
+        assert exp.status == "finalized"
+        verdict = json.loads(exp.verdict_json)
+        assert verdict["forced"] is True
+        # The recorded forced_reason should explain WHY the verdict wasn't
+        # ready — that's the audit trail for a discipline-violating close.
+        assert "forced_reason" in verdict
+        assert verdict["forced_reason"]  # non-empty
+
+    def test_finalize_force_merges_with_verdict_file(
+        self, db_conn, tmp_path: Path, monkeypatch
+    ):
+        from cents.cli import cli
+        from cents.db import ExperimentRepository
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+        spec = tmp_path / "exp.yaml"
+        spec.write_text(_yaml_spec("gate-merge"))
+        runner = CliRunner()
+        runner.invoke(cli, ["experiment", "register", str(spec)])
+
+        verdict_file = tmp_path / "v.json"
+        verdict_file.write_text(json.dumps({"primary_metric_value": 0.05}))
+        r = runner.invoke(cli, [
+            "experiment", "finalize", "gate-merge",
+            "--verdict", str(verdict_file), "--force",
+        ])
+        assert r.exit_code == 0, r.output
+
+        exp = ExperimentRepository().get_by_name("gate-merge")
+        verdict = json.loads(exp.verdict_json)
+        assert verdict["forced"] is True
+        assert verdict["primary_metric_value"] == 0.05

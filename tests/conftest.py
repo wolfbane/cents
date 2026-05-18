@@ -7,6 +7,27 @@ from cents.db.schema import init_db, close_connection, SCHEMA
 from cents.llm_usage import reset_cost_cap_state
 
 
+def pytest_addoption(parser):
+    """Add custom command-line flags.
+
+    ``--runlookahead`` opts into the lookahead-leak audit (cents-ekd),
+    which hits the live Anthropic API. See ``tests/test_lookahead_audit.py``.
+    """
+    parser.addoption(
+        "--runlookahead",
+        action="store_true",
+        default=False,
+        help="Run the live lookahead-leak audit (requires ANTHROPIC_API_KEY).",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "lookahead_audit: lookahead-leak audit on the sentiment agent (cents-ekd).",
+    )
+
+
 @pytest.fixture(autouse=True)
 def reset_db_connection():
     """Reset the singleton database connection before each test.

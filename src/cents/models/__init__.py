@@ -12,6 +12,8 @@ from cents.models.llm_usage import LLMUsage
 from cents.models.universe import Universe, UniverseSource
 from cents.models.factory_run import FactoryRun
 from cents.models.experiment import Experiment
+from cents.models.delisting import Delisting
+from cents.models.shadow_open import ShadowOpen
 
 __all__ = [
     "Thesis",
@@ -41,4 +43,6 @@ __all__ = [
     "UniverseSource",
     "FactoryRun",
     "Experiment",
+    "Delisting",
+    "ShadowOpen",
 ]

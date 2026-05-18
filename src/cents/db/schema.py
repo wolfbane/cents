@@ -250,6 +250,38 @@ CREATE TABLE IF NOT EXISTS experiments (
     status TEXT DEFAULT 'active'
 );
 CREATE INDEX IF NOT EXISTS idx_experiments_status ON experiments(status);
+
+CREATE TABLE IF NOT EXISTS delistings (
+    symbol TEXT PRIMARY KEY,
+    delisted_on TEXT NOT NULL,
+    last_close REAL,
+    source TEXT DEFAULT 'fmp',
+    ingested_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_delistings_delisted_on ON delistings(delisted_on);
+
+CREATE TABLE IF NOT EXISTS shadow_opens (
+    id TEXT PRIMARY KEY,
+    run_id TEXT,
+    symbol TEXT NOT NULL,
+    would_be_entry_price REAL,
+    conviction_delta REAL NOT NULL,
+    primary_side TEXT,
+    premise_tags TEXT DEFAULT '[]',
+    premise_direction TEXT DEFAULT '{}',
+    regime_snapshot TEXT DEFAULT '{}',
+    reason TEXT NOT NULL,
+    orchestrator_label TEXT DEFAULT 'llm',
+    experiment_id TEXT,
+    discovery_source TEXT,
+    horizon_days INTEGER,
+    forward_return_30d REAL,
+    forward_return_60d REAL,
+    backfilled_at TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_shadow_opens_created ON shadow_opens(created_at);
+CREATE INDEX IF NOT EXISTS idx_shadow_opens_experiment ON shadow_opens(experiment_id);
 """
 
 
@@ -352,6 +384,49 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # Re-apply column adds — the FK migration may have recreated tables
     # without the v0.10 columns.
     _apply_column_migrations()
+
+    # Idempotent CREATE TABLE for tables added after the FK migration was
+    # established. New tables go here rather than in column_migrations.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS delistings (
+            symbol TEXT PRIMARY KEY,
+            delisted_on TEXT NOT NULL,
+            last_close REAL,
+            source TEXT DEFAULT 'fmp',
+            ingested_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_delistings_delisted_on ON delistings(delisted_on)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shadow_opens (
+            id TEXT PRIMARY KEY,
+            run_id TEXT,
+            symbol TEXT NOT NULL,
+            would_be_entry_price REAL,
+            conviction_delta REAL NOT NULL,
+            primary_side TEXT,
+            premise_tags TEXT DEFAULT '[]',
+            premise_direction TEXT DEFAULT '{}',
+            regime_snapshot TEXT DEFAULT '{}',
+            reason TEXT NOT NULL,
+            orchestrator_label TEXT DEFAULT 'llm',
+            experiment_id TEXT,
+            discovery_source TEXT,
+            horizon_days INTEGER,
+            forward_return_30d REAL,
+            forward_return_60d REAL,
+            backfilled_at TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_opens_created ON shadow_opens(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_opens_experiment ON shadow_opens(experiment_id)")
 
 
 def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:

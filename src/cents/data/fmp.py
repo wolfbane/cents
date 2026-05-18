@@ -349,6 +349,63 @@ class FMPFundamentalsProvider:
             records = [r for r in records if r.get("date", "") <= as_of_str]
         return records
 
+    def get_delistings(self, since: date) -> list:
+        """Fetch recently delisted companies from FMP.
+
+        Args:
+            since: Only return delistings on or after this date.
+
+        Returns:
+            List of Delisting models. Returns [] when the endpoint is
+            unavailable, the response is empty, or no API key is configured
+            (the latter is enforced at construction time, but the method
+            stays defensive).
+        """
+        # Lazy import to avoid circular imports through cents.models
+        from cents.models import Delisting
+
+        if not self._api_key:
+            return []
+
+        # FMP's stable API exposes this as `delisted-companies`. Cache
+        # daily — the endpoint is small and slow-changing, and we want
+        # repeated runs in a day to hit cache.
+        data = self._fetch_json(
+            "delisted-companies", use_cache=True, daily_key=True
+        )
+        if not data or not isinstance(data, list):
+            return []
+
+        results: list[Delisting] = []
+        since_str = since.isoformat()
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            symbol = (row.get("symbol") or "").strip().upper()
+            delisted_raw = (row.get("delistedDate") or row.get("delisted_date") or "").strip()
+            if not symbol or not delisted_raw:
+                continue
+            try:
+                delisted_on = date.fromisoformat(delisted_raw[:10])
+            except ValueError:
+                logger.debug("Skipping delisting with bad date: %r", delisted_raw)
+                continue
+            if delisted_on.isoformat() < since_str:
+                continue
+            try:
+                results.append(
+                    Delisting(
+                        symbol=symbol,
+                        delisted_on=delisted_on,
+                        last_close=None,
+                        source="fmp",
+                    )
+                )
+            except ValueError:
+                # Skip malformed rows but keep going.
+                continue
+        return results
+
     def get_insider_trades(
         self, symbol: str, limit: int = 100, as_of: date | None = None
     ) -> list[dict]:

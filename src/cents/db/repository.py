@@ -18,10 +18,12 @@ from cents.models import (
     BacktestSignal,
     Event,
     EventPolarity,
+    Delisting,
     Evidence,
     EvidenceType,
     Experiment,
     FactoryRun,
+    ShadowOpen,
     LLMUsage,
     ThesisDimension,
     Universe,
@@ -983,3 +985,161 @@ class ExperimentRepository(BaseRepository):
 
     def delete(self, exp_id: str) -> bool:
         return self._delete(self._META, "id = ?", (exp_id,)) > 0
+
+
+class DelistingsRepository(BaseRepository):
+    """CRUD operations for tracked delistings (cents-5fh).
+
+    Used by the universe resolver to reconstruct point-in-time membership of
+    screener-sourced universes — symbols delisted between the as-of date and
+    today still need to appear in the resolved member list, otherwise every
+    backtest is biased toward survivors.
+    """
+
+    _META = ModelMeta(
+        table="delistings",
+        model=Delisting,
+        fields=[
+            ModelField("symbol", serialize=lambda v: v.upper()),
+            ModelField(
+                "delisted_on",
+                serialize=_isoformat,
+                deserialize=lambda raw: date.fromisoformat(raw),
+            ),
+            ModelField("last_close"),
+            ModelField("source"),
+            ModelField(
+                "ingested_at",
+                serialize=_isoformat,
+                deserialize=lambda raw: datetime.fromisoformat(raw),
+            ),
+        ],
+        default_order="delisted_on DESC",
+    )
+
+    def upsert(self, delisting: Delisting) -> Delisting:
+        """Insert or replace a delisting record by symbol."""
+        return self._insert(self._META, delisting, replace=True)
+
+    def get(self, symbol: str) -> Delisting | None:
+        return self._get_by_id(self._META, symbol.strip().upper(), key_column="symbol")
+
+    def list_since(self, since: date) -> list[Delisting]:
+        return self._list(
+            self._META,
+            where="delisted_on >= ?",
+            params=(since.isoformat(),),
+        )
+
+    def list_all(self) -> list[Delisting]:
+        return self._list(self._META)
+
+    def delete(self, symbol: str) -> bool:
+        return self._delete(
+            self._META, "symbol = ?", (symbol.strip().upper(),),
+        ) > 0
+class ShadowOpenRepository(BaseRepository):
+    """CRUD operations for shadow-opens (rejected factory candidates)."""
+
+    _META = ModelMeta(
+        table="shadow_opens",
+        model=ShadowOpen,
+        fields=[
+            ModelField("id"),
+            ModelField("run_id"),
+            ModelField("symbol", serialize=lambda v: v.upper() if v else None),
+            ModelField("would_be_entry_price"),
+            ModelField("conviction_delta"),
+            ModelField("primary_side"),
+            ModelField(
+                "premise_tags",
+                serialize=BaseRepository.dumps_json,
+                deserialize=lambda raw: BaseRepository.loads_json(raw, [], "premise_tags"),
+            ),
+            ModelField(
+                "premise_direction",
+                serialize=BaseRepository.dumps_json,
+                deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "premise_direction"),
+            ),
+            ModelField(
+                "regime_snapshot",
+                serialize=BaseRepository.dumps_json,
+                deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "regime_snapshot"),
+            ),
+            ModelField("reason"),
+            ModelField("orchestrator_label"),
+            ModelField("experiment_id"),
+            ModelField("discovery_source"),
+            ModelField("horizon_days"),
+            ModelField("forward_return_30d"),
+            ModelField("forward_return_60d"),
+            ModelField(
+                "backfilled_at",
+                serialize=_isoformat,
+                deserialize=lambda raw: datetime.fromisoformat(raw) if raw else None,
+            ),
+            ModelField(
+                "created_at",
+                serialize=_isoformat,
+                deserialize=lambda raw: datetime.fromisoformat(raw),
+                update=False,
+            ),
+        ],
+        default_order="created_at DESC",
+    )
+
+    def create(self, shadow: ShadowOpen) -> ShadowOpen:
+        """Insert a new shadow-open row."""
+        return self._insert(self._META, shadow)
+
+    def get(self, shadow_id: str) -> ShadowOpen | None:
+        """Get a shadow-open row by ID."""
+        return self._get_by_id(self._META, shadow_id)
+
+    def update(self, shadow: ShadowOpen) -> ShadowOpen:
+        """Update an existing shadow-open row (e.g. after backfill)."""
+        return self._update(self._META, shadow)
+
+    def list(
+        self,
+        *,
+        reason: str | None = None,
+        run_id: str | None = None,
+        limit: int | None = None,
+    ) -> "list[ShadowOpen]":
+        """List shadow-opens, optionally filtered by reason or run_id."""
+        clauses: "list[str]" = []
+        params: "list[Any]" = []
+        if reason is not None:
+            clauses.append("reason = ?")
+            params.append(reason)
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            params.append(run_id)
+        where = " AND ".join(clauses) if clauses else None
+        return self._list(self._META, where=where, params=params, limit=limit)
+
+    def list_pending_backfill(
+        self,
+        *,
+        since: datetime | None = None,
+        horizon_days: int = 30,
+    ) -> "list[ShadowOpen]":
+        """List shadow-opens older than `horizon_days` whose forward return is unset.
+
+        Args:
+            since: Only include rows created at-or-after this datetime (optional bound).
+            horizon_days: Which horizon column to check (30 or 60). Default 30.
+        """
+        column = "forward_return_60d" if horizon_days >= 60 else "forward_return_30d"
+        clauses: "list[str]" = [f"{column} IS NULL"]
+        params: "list[Any]" = []
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(since.isoformat())
+        where = " AND ".join(clauses)
+        return self._list(self._META, where=where, params=params)
+
+    def delete(self, shadow_id: str) -> bool:
+        """Delete a shadow-open row by ID."""
+        return self._delete(self._META, "id = ?", (shadow_id,)) > 0

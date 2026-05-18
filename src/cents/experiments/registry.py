@@ -14,6 +14,13 @@ from cents.models import Experiment, ThesisStatus
 
 REQUIRED_FIELDS = ("name", "hypothesis", "primary_metric", "minimum_n_per_arm")
 
+# Sample-size refusal-to-conclude (cents-1qp). An experiment is only
+# "verdict_ready" once at least this many calendar days have elapsed
+# since registration — prevents same-week conclusions even when the
+# minimum N has been reached. Set deliberately short so it doesn't
+# fight against legitimate small-N hypothesis tests.
+MINIMUM_ELAPSED_DAYS = 14
+
 
 class ExperimentSpecError(ValueError):
     """Raised when an experiment YAML/dict is malformed."""
@@ -168,8 +175,15 @@ def status_snapshot(
     *,
     thesis_repo: ThesisRepository | None = None,
     now: datetime | None = None,
+    config_path: Path | None = None,
 ) -> dict:
-    """Return a dict summarising progress against the experiment's targets."""
+    """Return a dict summarising progress against the experiment's targets.
+
+    The snapshot includes a ``verdict_ready`` flag (cents-1qp) — True only
+    when the experiment has enough N per arm AND has been running long
+    enough to call AND the factory.toml SHA hasn't drifted from the frozen
+    registration-time SHA. ``verdict_ready_reason`` explains why.
+    """
     thesis_repo = thesis_repo or ThesisRepository()
     theses = thesis_repo.list()
     in_exp = [t for t in theses if getattr(t, "experiment_id", None) == exp.id]
@@ -196,6 +210,21 @@ def status_snapshot(
         closed_by_arm.get(arm, 0) >= exp.minimum_n_per_arm
         for arm in (by_arm.keys() or ["llm"])
     )
+
+    # SHA drift: compute the SHA of the current factory.toml and compare
+    # to the SHA frozen at registration time.
+    current_sha, _ = compute_factory_config_sha(config_path=config_path)
+    config_sha_drift = current_sha != exp.frozen_config_sha
+
+    verdict_ready, verdict_ready_reason = _evaluate_verdict_ready(
+        target_reached=target_reached,
+        closed_by_arm=closed_by_arm,
+        by_arm=by_arm,
+        minimum_n_per_arm=exp.minimum_n_per_arm,
+        elapsed_days=elapsed_days,
+        config_sha_drift=config_sha_drift,
+    )
+
     return {
         "experiment_id": exp.id,
         "name": exp.name,
@@ -205,6 +234,7 @@ def status_snapshot(
         "minimum_n_per_arm": exp.minimum_n_per_arm,
         "started_at": exp.started_at.isoformat(),
         "elapsed_days": elapsed_days,
+        "minimum_elapsed_days": MINIMUM_ELAPSED_DAYS,
         "opened_by_arm": by_arm,
         "closed_by_arm": closed_by_arm,
         "cadence_per_day": round(cadence_per_day, 2),
@@ -212,7 +242,58 @@ def status_snapshot(
             round(days_to_target, 1) if days_to_target is not None else None
         ),
         "minimum_n_per_arm_reached": target_reached,
+        "frozen_config_sha": exp.frozen_config_sha,
+        "current_config_sha": current_sha,
+        "config_sha_drift": config_sha_drift,
+        "verdict_ready": verdict_ready,
+        "verdict_ready_reason": verdict_ready_reason,
     }
+
+
+def _evaluate_verdict_ready(
+    *,
+    target_reached: bool,
+    closed_by_arm: dict[str, int],
+    by_arm: dict[str, int],
+    minimum_n_per_arm: int,
+    elapsed_days: int,
+    config_sha_drift: bool,
+) -> tuple[bool, str]:
+    """Return ``(verdict_ready, reason)`` for a status snapshot (cents-1qp).
+
+    Verdict is only "ready" when all three discipline gates pass:
+      1. Minimum N per arm reached on every arm with theses
+      2. At least MINIMUM_ELAPSED_DAYS days have passed since registration
+      3. No SHA drift from the frozen factory.toml
+
+    Reason is human-readable and points at the next blocker.
+    """
+    if not target_reached:
+        # Find the most-behind arm to make the message actionable.
+        arms = by_arm.keys() or ["llm"]
+        worst = min(
+            arms,
+            key=lambda a: closed_by_arm.get(a, 0),
+        )
+        n = closed_by_arm.get(worst, 0)
+        return (
+            False,
+            f"n={n}/{minimum_n_per_arm} on {worst} arm; "
+            f"reach {minimum_n_per_arm} to enable.",
+        )
+    if elapsed_days < MINIMUM_ELAPSED_DAYS:
+        return (
+            False,
+            f"only {elapsed_days} days elapsed; "
+            f"wait at least {MINIMUM_ELAPSED_DAYS} since registration.",
+        )
+    if config_sha_drift:
+        return (
+            False,
+            "factory.toml SHA has drifted since registration — "
+            "this is a discipline violation and invalidates the verdict.",
+        )
+    return True, "minimum N reached, elapsed-day floor cleared, no SHA drift."
 
 
 def finalize_experiment(

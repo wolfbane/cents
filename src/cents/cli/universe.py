@@ -1,10 +1,11 @@
 """Universe management CLI commands."""
 
+from datetime import date, timedelta
 from pathlib import Path
 
 import click
 
-from cents.db import UniverseRepository
+from cents.db import DelistingsRepository, UniverseRepository
 from cents.factory.universe_resolver import resolve_symbols
 from cents.models import Universe, UniverseSource
 from cents.serialization import serialize
@@ -12,6 +13,7 @@ from cents.serialization import serialize
 from ._shared import (
     default_subcommand,
     exit_with_error,
+    parse_date,
     resolve_output_format,
     respond_with_output,
     validate_symbol,
@@ -127,20 +129,59 @@ def _print_universes(universes: list[Universe]) -> None:
 
 @universe.command("show")
 @click.argument("name")
+@click.option(
+    "--as-of",
+    "as_of",
+    help="Resolve point-in-time membership as of YYYY-MM-DD (screener universes only).",
+)
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def universe_show(name: str, output: str | None):
-    """Show a universe's details and resolved symbols."""
+def universe_show(name: str, as_of: str | None, output: str | None):
+    """Show a universe's details and resolved symbols.
+
+    With ``--as-of YYYY-MM-DD``, screener universes are reconstructed at
+    that point in time: the current screener output is augmented with
+    symbols whose tracked delisting date is on/after the requested date
+    (those were members on that day even though they aren't today).
+    """
     output = resolve_output_format(output)
     repo = UniverseRepository()
     uni = repo.get(name)
     if uni is None:
         exit_with_error(f"Universe '{name}' not found.")
 
+    asof_date = parse_date(as_of, "as-of") if as_of else None
+
+    if asof_date is not None:
+        try:
+            resolved = resolve_symbols(uni, asof_date=asof_date)
+        except Exception as exc:
+            exit_with_error(f"Resolution failed: {exc}")
+        payload = serialize(uni)
+        payload["as_of"] = asof_date.isoformat()
+        payload["resolved_symbols"] = resolved
+        respond_with_output(
+            output,
+            payload,
+            lambda: _print_universe_asof(uni, asof_date, resolved),
+        )
+        return
+
     respond_with_output(
         output,
         serialize(uni),
         lambda: _print_universe(uni),
     )
+
+
+def _print_universe_asof(uni: Universe, asof_date: date, resolved: list[str]) -> None:
+    click.echo(f"Name:        {uni.name}")
+    click.echo(f"Source:      {uni.source.value}")
+    click.echo(f"As-of:       {asof_date.isoformat()}")
+    click.echo(f"Symbols:     {len(resolved)}")
+    if resolved:
+        click.echo("  " + ", ".join(resolved[:20]))
+        if len(resolved) > 20:
+            click.echo(f"  ... and {len(resolved) - 20} more")
 
 
 def _print_universe(uni: Universe) -> None:
@@ -211,3 +252,72 @@ def universe_delete(name: str, force: bool):
         click.confirm(f"Delete universe '{uni.name}'?", abort=True)
     repo.delete(uni.name)
     click.echo(f"Deleted universe '{uni.name}'")
+
+
+@universe.command("ingest-delistings")
+@click.option(
+    "--since",
+    help="Pull delistings dated on/after this YYYY-MM-DD (default: 1 year ago).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Fetch and report counts without writing to the delistings table.",
+)
+@click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
+def universe_ingest_delistings(since: str | None, dry_run: bool, output: str | None):
+    """Pull recent delistings from FMP and persist them.
+
+    Stored delistings are used by ``cents universe show --as-of`` and by
+    point-in-time backtests to reconstruct universes without survivorship
+    bias. Without an FMP API key, the command no-ops with a clear message.
+    """
+    output = resolve_output_format(output)
+    since_date = parse_date(since, "since") if since else (date.today() - timedelta(days=365))
+
+    try:
+        from cents.data.fmp import FMPFundamentalsProvider
+        provider = FMPFundamentalsProvider()
+    except Exception as exc:
+        # No API key (ConfigurationError) or other init error — surface a
+        # friendly note and exit cleanly. This keeps the command safe to
+        # script even in environments without FMP access.
+        payload = {
+            "ingested": 0,
+            "skipped": 0,
+            "since": since_date.isoformat(),
+            "reason": str(exc),
+        }
+        respond_with_output(
+            output,
+            payload,
+            lambda: click.echo(f"Skipped: {exc}"),
+        )
+        return
+
+    try:
+        delistings = provider.get_delistings(since_date)
+    except Exception as exc:
+        exit_with_error(f"Fetch failed: {exc}")
+
+    repo = DelistingsRepository()
+    ingested = 0
+    if not dry_run:
+        for d in delistings:
+            repo.upsert(d)
+            ingested += 1
+
+    payload = {
+        "since": since_date.isoformat(),
+        "fetched": len(delistings),
+        "ingested": ingested,
+        "dry_run": dry_run,
+    }
+    respond_with_output(
+        output,
+        payload,
+        lambda: click.echo(
+            f"Fetched {len(delistings)} delistings since {since_date.isoformat()}"
+            + (f"; ingested {ingested}" if not dry_run else " (dry run, nothing written)")
+        ),
+    )

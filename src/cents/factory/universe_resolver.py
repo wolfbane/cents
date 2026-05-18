@@ -5,9 +5,10 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from datetime import date
 
 from cents.config import get_settings
-from cents.db import UniverseRepository, WatchlistRepository
+from cents.db import DelistingsRepository, UniverseRepository, WatchlistRepository
 from cents.exceptions import ConfigurationError, DataFetchError
 from cents.models import Universe, UniverseSource
 
@@ -28,11 +29,23 @@ FMP_INDEX_ENDPOINTS: dict[str, str] = {
 FULL_UNIVERSE_ENV = "CENTS_SCREENER_ALLOW_FULL_UNIVERSE"
 
 
-def resolve_symbols(universe: Universe, _visited: frozenset[str] = frozenset()) -> list[str]:
+def resolve_symbols(
+    universe: Universe,
+    _visited: frozenset[str] = frozenset(),
+    asof_date: date | None = None,
+) -> list[str]:
     """Resolve a universe to its current symbol list.
 
     ``_visited`` carries the names of universes currently being resolved on
     this call stack so screener parent-chains can't form a cycle.
+
+    ``asof_date``, when provided, layers survivorship-bias correction onto
+    SCREENER-sourced universes: the resolved member list is the screener's
+    current output PLUS any tracked delistings whose ``delisted_on`` is
+    on/after ``asof_date`` (those symbols were members of the screened
+    universe as of that date even though they have since fallen out).
+    Other sources are unaffected — STATIC/WATCHLIST/FMP_INDEX members are
+    already specified explicitly and don't need reconstruction.
     """
     if universe.source == UniverseSource.STATIC:
         return list(universe.symbols)
@@ -45,12 +58,16 @@ def resolve_symbols(universe: Universe, _visited: frozenset[str] = frozenset()) 
         return _resolve_fmp_index(universe)
 
     if universe.source == UniverseSource.SCREENER:
-        return _resolve_screener(universe, _visited)
+        return _resolve_screener(universe, _visited, asof_date=asof_date)
 
     raise ValueError(f"Unsupported universe source: {universe.source}")
 
 
-def _resolve_screener(universe: Universe, visited: frozenset[str]) -> list[str]:
+def _resolve_screener(
+    universe: Universe,
+    visited: frozenset[str],
+    asof_date: date | None = None,
+) -> list[str]:
     from cents.screeners import get_screener
 
     cfg = universe.source_config
@@ -92,7 +109,25 @@ def _resolve_screener(universe: Universe, visited: frozenset[str]) -> list[str]:
         candidates = None
 
     symbols = screener.screen(candidate_symbols=candidates)
-    return symbols[:limit]
+    symbols = symbols[:limit]
+
+    if asof_date is not None:
+        # Layer in tracked delistings so the resolved member list reflects
+        # point-in-time membership rather than current survivors. A symbol
+        # that was delisted on/after asof_date was still listed on that day
+        # and so was screenable in principle.
+        try:
+            delistings = DelistingsRepository().list_since(asof_date)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning("Delistings lookup failed for asof %s: %s", asof_date, exc)
+            delistings = []
+        seen = set(symbols)
+        for d in delistings:
+            if d.symbol not in seen:
+                symbols.append(d.symbol)
+                seen.add(d.symbol)
+
+    return symbols
 
 
 def _resolve_fmp_index(universe: Universe) -> list[str]:

@@ -131,6 +131,19 @@ def _print_status(snap: dict) -> None:
     click.echo(f"  Started:         {snap['started_at']}  ({snap['elapsed_days']} days elapsed)")
     click.echo(f"  Cadence:         {snap['cadence_per_day']} closed theses/day")
     click.echo()
+    # Verdict-ready (cents-1qp) — surface this prominently BEFORE the
+    # raw N counts so operators don't over-interpret an unfinished sample.
+    if snap.get("verdict_ready"):
+        click.echo("  VERDICT READY: yes — finalize is unblocked.")
+    else:
+        click.echo("  VERDICT READY: no — finalize is blocked.")
+    click.echo(f"  Reason:          {snap.get('verdict_ready_reason', '')}")
+    if snap.get("config_sha_drift"):
+        click.echo(
+            "  WARNING: factory.toml SHA has drifted from the frozen "
+            "registration-time SHA. This invalidates the experiment."
+        )
+    click.echo()
     click.echo("  Opened by arm:")
     for arm, n in (snap["opened_by_arm"] or {}).items():
         click.echo(f"    {arm:>8s}: {n}")
@@ -139,7 +152,7 @@ def _print_status(snap: dict) -> None:
         click.echo(f"    {arm:>8s}: {n}")
     click.echo()
     if snap["minimum_n_per_arm_reached"]:
-        click.echo("  ✓ Minimum N reached on all arms — primary metric is now meaningful.")
+        click.echo("  Minimum N reached on all arms.")
     elif snap["projected_days_to_target"] is not None:
         click.echo(f"  Projected days to target N: {snap['projected_days_to_target']}")
     else:
@@ -154,9 +167,29 @@ def _print_status(snap: dict) -> None:
     type=click.Path(exists=True, path_type=Path),
     help="JSON file with the verdict on the primary metric.",
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help=(
+        "Bypass the verdict-ready check and finalize early. The recorded "
+        "verdict will be tagged with 'forced': true so downstream analytics "
+        "can flag the cohort as below-discipline."
+    ),
+)
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def experiment_finalize(name: str, verdict_path: Path | None, output: str | None):
-    """Finalize an experiment (lock its status and optionally record a verdict)."""
+def experiment_finalize(
+    name: str,
+    verdict_path: Path | None,
+    force: bool,
+    output: str | None,
+):
+    """Finalize an experiment (lock its status and optionally record a verdict).
+
+    Blocks by default when the experiment is not verdict-ready (insufficient
+    N per arm, too-recent registration, or factory.toml SHA drift). Pass
+    ``--force`` to override; the verdict will be tagged ``forced: true``.
+    """
     output = resolve_output_format(output)
     repo = ExperimentRepository()
     exp = repo.get_by_name(name)
@@ -165,14 +198,31 @@ def experiment_finalize(name: str, verdict_path: Path | None, output: str | None
     if not exp.is_active:
         exit_with_error(f"Experiment {name!r} is already {exp.status}.")
 
-    verdict: dict | None = None
+    # Discipline gate (cents-1qp): refuse to conclude until the experiment
+    # is verdict-ready, unless the operator explicitly forces an early end.
+    snap = status_snapshot(exp)
+    if not snap["verdict_ready"] and not force:
+        exit_with_error(
+            f"Experiment {name!r} is NOT verdict-ready: "
+            f"{snap['verdict_ready_reason']} "
+            f"Run `cents experiment status` for full details. "
+            f"Use --force to finalize early (verdict will be tagged forced=true)."
+        )
+
+    verdict: dict = {}
     if verdict_path is not None:
         try:
             verdict = json.loads(verdict_path.read_text())
         except json.JSONDecodeError as exc:
             exit_with_error(f"Verdict file is not valid JSON: {exc}")
+        if not isinstance(verdict, dict):
+            exit_with_error("Verdict file must contain a JSON object.")
+    if force:
+        verdict["forced"] = True
+        verdict["forced_reason"] = snap["verdict_ready_reason"]
 
-    exp = finalize_experiment(exp, verdict=verdict, repo=repo, now=datetime.now())
+    final_verdict = verdict if (verdict_path is not None or force) else None
+    exp = finalize_experiment(exp, verdict=final_verdict, repo=repo, now=datetime.now())
     payload = serialize(exp)
     respond_with_output(
         output, payload,

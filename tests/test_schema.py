@@ -96,6 +96,9 @@ class TestInitDb:
             "idx_universes_default",
             "idx_factory_runs_started",
             "idx_experiments_status",
+            "idx_delistings_delisted_on",
+            "idx_shadow_opens_created",
+            "idx_shadow_opens_experiment",
         }
         assert expected_indexes == indexes
         conn.close()
