@@ -76,6 +76,10 @@ class Thesis:
     # Calibration (Layer 2 #3): logistic-regression-fit P(target hit before stop).
     # None when no calibration model existed at thesis-open time.
     calibrated_p_correct: float | None = None
+    # Calibration model vintage — stamp the model's fit_at on every thesis it
+    # touched so `factory analyze` can stratify outcomes by which calibration
+    # produced them and surface model-staleness regressions. ISO timestamp.
+    calibration_fit_at: str | None = None
     # Metadata
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     created_at: datetime = field(default_factory=datetime.now)

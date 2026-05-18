@@ -54,7 +54,17 @@ def _closed_decided_theses(repo: ThesisRepository) -> list:
     show_default=True,
     help="Minimum number of decided theses required to fit.",
 )
-def calibration_refit(output: str | None, min_observations: int):
+@click.option(
+    "--holdout-pct",
+    type=float,
+    default=0.2,
+    show_default=True,
+    help=(
+        "Fraction of observations held out for honest generalisation metrics. "
+        "0.0 disables; the report then carries only in-sample numbers."
+    ),
+)
+def calibration_refit(output: str | None, min_observations: int, holdout_pct: float):
     """Fit a fresh calibration model against the current outcomes dataset."""
     output = resolve_output_format(output)
     repo = ThesisRepository()
@@ -65,31 +75,52 @@ def calibration_refit(output: str | None, min_observations: int):
             f"need {min_observations}. Run the factory longer or lower --min-observations."
         )
 
-    model = fit_calibration(theses, min_observations=min_observations)
+    model = fit_calibration(
+        theses, min_observations=min_observations, holdout_pct=holdout_pct,
+    )
     if model is None:
-        # `fit_calibration` only returns None when below threshold, but the
-        # build_feature_rows step may drop rows with non-decided outcomes,
-        # which the precount above already excludes. Surface explicitly.
-        exit_with_error("Calibration fit returned no model — insufficient signal.")
+        # `fit_calibration` returns None when train split falls below
+        # min_observations after the holdout cut.
+        exit_with_error(
+            "Calibration fit returned no model — train split below threshold "
+            "after holdout. Try a smaller --holdout-pct or run the factory longer."
+        )
 
     path = save_model(model)
     payload = {
         "model_path": str(path),
         "n_observations": model.n_observations,
-        "brier_score": model.brier_score,
-        "auc": model.auc,
+        "n_train": model.n_train,
+        "n_holdout": model.n_holdout,
+        "brier_score_in_sample": model.brier_score,
+        "auc_in_sample": model.auc,
+        "brier_score_holdout": model.brier_holdout,
+        "auc_holdout": model.auc_holdout,
         "intercept": model.intercept,
         "coef": model.coef,
         "fit_at": model.fit_at.isoformat(),
+        "_caveat": (
+            "Targets/stops are chosen by the engine itself, so this model "
+            "fits the asymmetry of a fixed bracket — Brier/AUC look better "
+            "than out-of-sample edge will be. See /scope/."
+        ),
     }
     respond_with_output(output, payload, lambda: _print_refit(payload))
 
 
 def _print_refit(payload: dict) -> None:
-    click.echo(f"Fitted calibration model on {payload['n_observations']} observations.")
-    click.echo(f"  Brier score: {payload['brier_score']:.4f} (lower is better)")
-    click.echo(f"  AUC:         {payload['auc']:.4f}")
-    click.echo(f"  Saved to:    {payload['model_path']}")
+    n = payload["n_observations"]
+    n_train = payload.get("n_train") or n
+    n_holdout = payload.get("n_holdout") or 0
+    click.echo(f"Fitted calibration on {n} observations (train={n_train}, holdout={n_holdout}).")
+    click.echo(f"  Brier (in-sample): {payload['brier_score_in_sample']:.4f}")
+    click.echo(f"  AUC   (in-sample): {payload['auc_in_sample']:.4f}")
+    if payload.get("brier_score_holdout") is not None:
+        click.echo(f"  Brier (held-out):  {payload['brier_score_holdout']:.4f}  ← honest metric")
+        click.echo(f"  AUC   (held-out):  {payload['auc_holdout']:.4f}")
+    click.echo(f"  Saved to:          {payload['model_path']}")
+    click.echo()
+    click.echo(f"  Note: {payload['_caveat']}")
 
 
 @calibration.command("report")

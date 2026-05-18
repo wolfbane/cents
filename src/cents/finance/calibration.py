@@ -75,11 +75,18 @@ class CalibrationModel:
 
     coef: dict[str, float]
     intercept: float
-    brier_score: float
-    auc: float
-    n_observations: int
+    brier_score: float  # in-sample (training set)
+    auc: float          # in-sample (training set)
+    n_observations: int  # total observations used (train + holdout)
     fit_at: datetime
     feature_names: list[str] = field(default_factory=list)
+    # Bug F (r3): held-out metrics — None when no holdout was requested.
+    # When set, these are the honest generalisation estimates; the
+    # ``brier_score``/``auc`` fields above remain in-sample for back-compat.
+    brier_holdout: float | None = None
+    auc_holdout: float | None = None
+    n_train: int | None = None
+    n_holdout: int | None = None
 
     def predict(self, features: dict[str, float]) -> float:
         """Return P(label = 1) ∈ [0, 1] for a feature vector."""
@@ -264,13 +271,38 @@ def _fit_irls(
     return coefs, intercept
 
 
+def _score_logistic(matrix: list[list[float]], coef_vec, intercept) -> list[float]:
+    """Compute sigmoid probabilities over a dense feature matrix."""
+    probs = []
+    for row in matrix:
+        z = intercept + sum(c * x for c, x in zip(coef_vec, row))
+        if z >= 0:
+            p = 1.0 / (1.0 + math.exp(-z))
+        else:
+            ez = math.exp(z)
+            p = ez / (1.0 + ez)
+        probs.append(p)
+    return probs
+
+
 def fit_calibration(
-    closed_theses: list[Thesis], *, min_observations: int = 30
+    closed_theses: list[Thesis],
+    *,
+    min_observations: int = 30,
+    holdout_pct: float = 0.0,
+    holdout_seed: int = 17,
 ) -> CalibrationModel | None:
     """Fit a calibration model over closed (CORRECT / INCORRECT) theses.
 
     Returns ``None`` when fewer than ``min_observations`` rows have a
     decided outcome — the model would just memorise noise.
+
+    Bug F (r3): when ``holdout_pct > 0``, a random ``holdout_pct`` fraction
+    of the observations is held out, the model is fit on the remainder, and
+    ``brier_holdout`` / ``auc_holdout`` carry the honest generalisation
+    metrics. The original ``brier_score`` / ``auc`` fields remain in-sample
+    so existing callers continue to work. Holdout split is reproducible
+    via ``holdout_seed``.
     """
     rows, labels = _build_feature_rows(closed_theses)
     if len(rows) < min_observations:
@@ -278,33 +310,51 @@ def fit_calibration(
 
     matrix, feature_names = _dense_matrix(rows)
 
+    # Optional holdout split (Bug F).
+    holdout_matrix: list[list[float]] = []
+    holdout_labels: list[int] = []
+    if holdout_pct > 0.0:
+        import random
+        n = len(matrix)
+        n_holdout = max(1, int(round(n * holdout_pct)))
+        rng = random.Random(holdout_seed)
+        indices = list(range(n))
+        rng.shuffle(indices)
+        holdout_idx = set(indices[:n_holdout])
+        train_matrix = [m for i, m in enumerate(matrix) if i not in holdout_idx]
+        train_labels = [l for i, l in enumerate(labels) if i not in holdout_idx]
+        holdout_matrix = [m for i, m in enumerate(matrix) if i in holdout_idx]
+        holdout_labels = [l for i, l in enumerate(labels) if i in holdout_idx]
+        # Refuse to fit if either split is too small to be informative.
+        if len(train_matrix) < min_observations:
+            return None
+    else:
+        train_matrix, train_labels = matrix, labels
+
     if _HAS_SKLEARN:  # pragma: no cover — covered by environments with sklearn
         import numpy as np  # local — numpy is already a transitive dep
 
         clf = LogisticRegression(max_iter=200, C=1.0)
-        X = np.asarray(matrix)
-        y = np.asarray(labels)
+        X = np.asarray(train_matrix)
+        y = np.asarray(train_labels)
         clf.fit(X, y)
         coef_vec = clf.coef_[0].tolist()
         intercept = float(clf.intercept_[0])
         probs = clf.predict_proba(X)[:, 1].tolist()
         brier = float(brier_score_loss(y, probs))
-        auc = float(roc_auc_score(y, probs)) if len(set(labels)) > 1 else 0.5
+        auc = float(roc_auc_score(y, probs)) if len(set(train_labels)) > 1 else 0.5
     else:
-        coef_vec, intercept = _fit_irls(matrix, labels)
-        # Score on training set (good enough for the report; users
-        # who care about generalisation should hold out manually).
-        probs = []
-        for row in matrix:
-            z = intercept + sum(c * x for c, x in zip(coef_vec, row))
-            if z >= 0:
-                p = 1.0 / (1.0 + math.exp(-z))
-            else:
-                ez = math.exp(z)
-                p = ez / (1.0 + ez)
-            probs.append(p)
-        brier = _brier(probs, labels)
-        auc = _auc(probs, labels)
+        coef_vec, intercept = _fit_irls(train_matrix, train_labels)
+        probs = _score_logistic(train_matrix, coef_vec, intercept)
+        brier = _brier(probs, train_labels)
+        auc = _auc(probs, train_labels)
+
+    brier_holdout = None
+    auc_holdout = None
+    if holdout_matrix:
+        ho_probs = _score_logistic(holdout_matrix, coef_vec, intercept)
+        brier_holdout = _brier(ho_probs, holdout_labels)
+        auc_holdout = _auc(ho_probs, holdout_labels) if len(set(holdout_labels)) > 1 else 0.5
 
     coef_map = {name: float(c) for name, c in zip(feature_names, coef_vec)}
     return CalibrationModel(
@@ -315,6 +365,10 @@ def fit_calibration(
         n_observations=len(rows),
         fit_at=datetime.now(),
         feature_names=feature_names,
+        brier_holdout=brier_holdout,
+        auc_holdout=auc_holdout,
+        n_train=len(train_matrix),
+        n_holdout=len(holdout_matrix) if holdout_matrix else None,
     )
 
 

@@ -73,22 +73,59 @@ def _is_paired(thesis: Thesis) -> bool:
 
 
 # Kelly window for calibrated sizing — outside this band, fall back to default.
-_CALIBRATION_KELLY_MIN_P = 0.5
-_CALIBRATION_KELLY_MAX_P = 0.95
+# Minimum margin above payoff-adjusted break-even probability before we open.
+# Setting this to a positive number ensures we don't open at zero edge.
+_CALIBRATION_KELLY_MARGIN = 0.02
+# Upper bound — when p is implausibly high, the model is probably overfit;
+# fall back to "no calibration signal" rather than trust it.
+_CALIBRATION_MAX_TRUSTED_P = 0.95
 
 
-def _kelly_fraction(p: float | None) -> float:
-    """Translate calibrated P(correct) into a [0, 1] size multiplier.
+def _break_even_probability(target_pct: float, stop_pct: float) -> float:
+    """Break-even P(correct) for an asymmetric payoff.
 
-    Uses an even-money Kelly approximation ``f = 2p - 1`` clamped into
-    [0, 1] so we never lever beyond the unit-stake budget. Returns 1.0 when
-    no calibration is available (i.e. fall back to vol-scaled default size).
+    For target_pct=+10 and stop_pct=-5, payoff ratio b = 2; break-even p* =
+    |stop| / (target + |stop|) = 5 / 15 = 0.333. A calibrated probability
+    must clear this AND a small margin before opening makes positive-EV sense.
+    """
+    target = abs(target_pct)
+    stop = abs(stop_pct)
+    if target + stop <= 0:
+        return 0.5  # Degenerate input — fall back to coin-flip threshold.
+    return stop / (target + stop)
+
+
+def _calibration_passes_gate(
+    p: float | None,
+    *,
+    target_pct: float,
+    stop_pct: float,
+    margin: float = _CALIBRATION_KELLY_MARGIN,
+    max_trusted_p: float = _CALIBRATION_MAX_TRUSTED_P,
+) -> bool:
+    """Kelly gate: open only when p clears break-even + margin.
+
+    Bug B fix (PM/Risk round 3): the prior implementation multiplied
+    vol-scaled shares by a ``2p - 1`` Kelly multiplier — double-shrinking on
+    top of vol scaling and assuming even-money payoffs. The fix removes the
+    multiplier entirely and uses calibration as a GATE: vol-sized shares
+    pass through unchanged when the calibrated probability clears the
+    payoff-adjusted break-even threshold; the open is skipped otherwise.
+
+    Returns True (open) when:
+      - p is None (no calibration → no gating, preserves prior behavior)
+      - p clears ``break_even + margin`` AND p ≤ ``max_trusted_p``
+
+    Returns False (skip) when:
+      - p ≤ break_even + margin (insufficient edge given the bracket)
+      - p > max_trusted_p (model probably overfit; don't trust)
     """
     if p is None:
-        return 1.0
-    if p < _CALIBRATION_KELLY_MIN_P or p > _CALIBRATION_KELLY_MAX_P:
-        return 1.0
-    return max(0.0, min(1.0, 2.0 * p - 1.0))
+        return True
+    if p > max_trusted_p:
+        return False
+    break_even = _break_even_probability(target_pct, stop_pct)
+    return p >= break_even + margin
 
 
 def _coerce_premise_classification(value) -> tuple[list[str], dict[str, str]]:
@@ -151,7 +188,7 @@ class FactoryEngine:
         self.universe_repo = universe_repo or UniverseRepository()
         self.run_repo = run_repo or FactoryRunRepository()
         self._now = now
-        # Calibration: load latest model lazily so sizing can apply Kelly.
+        # Calibration: load latest model lazily so sizing can gate on Kelly.
         if calibration_model is not None:
             self._calibration_model = calibration_model
         else:
@@ -159,6 +196,18 @@ class FactoryEngine:
                 self._calibration_model = load_latest_model()
             except Exception:  # pragma: no cover — defensive
                 self._calibration_model = None
+        # Bug E (r3): warn loudly when the loaded model is older than 30 days.
+        # A stale model in a regime change silently drives wrong-direction sizing.
+        if self._calibration_model is not None:
+            fit_at = getattr(self._calibration_model, "fit_at", None)
+            if isinstance(fit_at, datetime):
+                age_days = (datetime.now() - fit_at).days
+                if age_days > 30:
+                    logger.warning(
+                        "Calibration model is %d days old (fit_at=%s); "
+                        "consider `cents calibration refit`",
+                        age_days, fit_at.isoformat(),
+                    )
 
     # ---- providers (lazy) -------------------------------------------------
 
@@ -613,7 +662,8 @@ class FactoryEngine:
                 )
             )
             if cfg.max_per_premise_tag > 0 and self._exceeds_premise_concentration(
-                premise_tags, open_theses, cfg.max_per_premise_tag
+                premise_tags, open_theses, cfg.max_per_premise_tag,
+                candidate_direction=premise_direction,
             ):
                 logger.debug(
                     "Skipping %s — premise tags %s already at concentration cap",
@@ -838,15 +888,30 @@ class FactoryEngine:
         candidate_tags: list[str],
         open_theses: list[Thesis],
         cap: int,
+        candidate_direction: dict[str, str] | None = None,
     ) -> bool:
-        """True if any candidate tag is already at the per-tag cap across open theses."""
+        """True if any candidate tag+direction is already at the per-tag cap.
+
+        Bug D fix: a bullish ai_capex thesis and a bearish ai_capex thesis no
+        longer count against each other — that's a spread, not concentration.
+        Buckets on ``(tag, direction)`` instead of bare ``tag``. When a thesis
+        has no recorded direction for a tag, it counts under the legacy
+        ``(tag, "*")`` bucket so behavior is preserved for older rows.
+        """
         if not candidate_tags:
             return False
-        counts: dict[str, int] = {}
+        counts: dict[tuple[str, str], int] = {}
         for t in open_theses:
+            t_dir = t.premise_direction or {}
             for tag in t.premise_tags:
-                counts[tag] = counts.get(tag, 0) + 1
-        return any(counts.get(tag, 0) >= cap for tag in candidate_tags)
+                key = (tag, t_dir.get(tag, "*"))
+                counts[key] = counts.get(key, 0) + 1
+        candidate_direction = candidate_direction or {}
+        for tag in candidate_tags:
+            key = (tag, candidate_direction.get(tag, "*"))
+            if counts.get(key, 0) >= cap:
+                return True
+        return False
 
     def _open_new_thesis(
         self,
@@ -916,6 +981,12 @@ class FactoryEngine:
             cohort=cohort,
         )
 
+        calibration_fit_at = None
+        if self._calibration_model is not None:
+            fit_at_dt = getattr(self._calibration_model, "fit_at", None)
+            if isinstance(fit_at_dt, datetime):
+                calibration_fit_at = fit_at_dt.isoformat()
+
         thesis = Thesis(
             title=title,
             hypothesis=hypothesis,
@@ -933,12 +1004,27 @@ class FactoryEngine:
             regime_snapshot=regime_snapshot,
             discovery_source=discovery_source,
             calibrated_p_correct=calibrated_p,
+            calibration_fit_at=calibration_fit_at,
         )
         self.thesis_repo.create(thesis)
 
-        # Kelly fraction scales primary shares; 1.0 when no calibration.
-        kelly_mult = _kelly_fraction(calibrated_p)
-        primary_shares = primary_shares * kelly_mult
+        # Bug B (PM/Risk r3): Kelly is a GATE, not a sizing multiplier.
+        # Vol-scaled shares pass through unchanged when the calibrated
+        # probability clears the payoff-adjusted break-even + margin.
+        # We've already persisted the thesis with calibrated_p_correct so
+        # the gating decision is auditable; we just won't open positions.
+        if not _calibration_passes_gate(
+            calibrated_p,
+            target_pct=cfg.default_target_pct,
+            stop_pct=cfg.default_stop_pct,
+        ):
+            logger.debug(
+                "Skipping %s positions: calibrated_p=%.3f below break-even+margin "
+                "(target=%.1f stop=%.1f)",
+                symbol, calibrated_p or 0.0,
+                cfg.default_target_pct, cfg.default_stop_pct,
+            )
+            return {"theses_opened": 1, "positions_opened": 0}
 
         positions_opened = 0
         # ---- Primary leg (cents-wiz vol-scaled sizing + cents-5s7 open cost) ----
@@ -976,17 +1062,32 @@ class FactoryEngine:
                 # Beta-match the hedge leg notional. Falls back to default_beta
                 # when history is insufficient (cents-t8r — strictly an
                 # improvement on the previous dollar-for-dollar match).
+                #
+                # Bug C fix: when beta_match_hedge is on AND we DO have history
+                # AND estimate_beta returns None (R² gate rejected the fit),
+                # silently falling back to default_beta=1.0 reintroduces the
+                # dollar-match bug. Skip the hedge leg in that case so the
+                # gate fails safe rather than failing to the worst behavior.
                 beta = None
+                history_available = False
                 if cfg.beta_match_hedge:
                     hedge_closes, _ = self._get_history(
                         hedge_symbol, cfg.beta_lookback_days * 2
                     )
                     if primary_closes is not None and hedge_closes is not None:
+                        history_available = True
                         beta = estimate_beta(
                             primary_closes, hedge_closes,
                             lookback=cfg.beta_lookback_days,
                             min_r_squared=cfg.beta_min_r_squared,
                         )
+                if cfg.beta_match_hedge and history_available and beta is None:
+                    # R² gate rejected the fit; skip the hedge leg entirely.
+                    logger.debug(
+                        "Skipping hedge leg for %s: %s R² below %.2f gate",
+                        symbol, hedge_symbol, cfg.beta_min_r_squared,
+                    )
+                    return {"theses_opened": 1, "positions_opened": positions_opened}
                 ratio = beta_match_ratio(
                     beta=beta,
                     default_beta=cfg.default_beta,

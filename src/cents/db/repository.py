@@ -191,6 +191,7 @@ class ThesisRepository(BaseRepository):
             ModelField("regime_snapshot", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "regime_snapshot")),
             ModelField("discovery_source"),
             ModelField("calibrated_p_correct"),
+            ModelField("calibration_fit_at"),
             ModelField("created_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw), update=False),
             ModelField("updated_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
         ],

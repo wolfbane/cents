@@ -980,8 +980,12 @@ class TestCalibratedSizing:
         # At least one position created and shares are positive.
         assert positions and all(p.size > 0 for p in positions)
 
-    def test_high_p_calibration_scales_shares_via_kelly(self, factory_db):
-        """p=0.75 → kelly = 2*0.75 - 1 = 0.5 → shares halved vs unscaled."""
+    def test_high_p_calibration_passes_gate_full_size(self, factory_db):
+        """Bug B (r3): Kelly is a gate, not a multiplier.
+
+        p=0.75 with default +10/-10 bracket → break_even=0.5, margin=0.02 →
+        0.75 ≥ 0.52, gate passes → positions open at full vol-sized notional.
+        """
         _seed_universe(["AAPL"])
         from unittest.mock import MagicMock
         model = MagicMock()
@@ -996,11 +1000,18 @@ class TestCalibratedSizing:
         theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
         assert len(theses) == 1
         assert theses[0].calibrated_p_correct == 0.75
-        # Engine called the model's predict.
         assert model.predict.called
+        positions = [p for p in PositionRepository().list() if p.thesis_id == theses[0].id]
+        assert positions and all(p.size > 0 for p in positions)
 
-    def test_out_of_window_p_passes_through_at_one(self, factory_db):
-        """p=0.3 (below 0.5 floor) → kelly returns 1.0, no scaling."""
+    def test_low_p_calibration_fails_gate_no_positions(self, factory_db):
+        """Bug B (r3): a thesis below break-even+margin opens with ZERO positions.
+
+        p=0.3 with default +10/-10 bracket → break_even=0.5, margin=0.02 →
+        0.3 < 0.52 → gate fails. The thesis is still persisted (auditable),
+        but no positions open. Previously this thesis would have opened at
+        full vol-sized notional (kelly multiplier returned 1.0 as passthrough).
+        """
         _seed_universe(["AAPL"])
         from unittest.mock import MagicMock
         model = MagicMock()
@@ -1015,6 +1026,34 @@ class TestCalibratedSizing:
         theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
         assert len(theses) == 1
         assert theses[0].calibrated_p_correct == 0.3
-        # No position size was zeroed out by Kelly — passthrough behavior.
+        # Gate failed — no positions opened despite the thesis being persisted.
+        positions = [p for p in PositionRepository().list() if p.thesis_id == theses[0].id]
+        assert positions == []
+
+    def test_asymmetric_payoff_lowers_breakeven(self, factory_db):
+        """Bug B (r3): payoff-adjusted gate uses target/stop ratio, not even-money.
+
+        With +20% target and -5% stop, break_even = 5/(20+5) = 0.2. A p=0.30
+        thesis should pass the gate (0.30 > 0.22), where under even-money
+        (break_even=0.5) it would have failed.
+        """
+        _seed_universe(["AAPL"])
+        from unittest.mock import MagicMock
+        model = MagicMock()
+        model.predict.return_value = 0.30
+        engine = FactoryEngine(
+            config=_config(
+                entry_threshold=5.0,
+                sizing_mode="equal_dollar",
+                default_target_pct=20.0,
+                default_stop_pct=-5.0,
+            ),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+            calibration_model=model,
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
         positions = [p for p in PositionRepository().list() if p.thesis_id == theses[0].id]
         assert positions and all(p.size > 0 for p in positions)

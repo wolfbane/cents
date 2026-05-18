@@ -503,6 +503,35 @@ class TestPolarityAwareInvalidation:
         assert len(alerts) == 1
         assert alerts[0].alert_type == AlertType.PREMISE_INVALIDATION
 
+    def test_neutral_polarity_falls_back_to_unsigned_intersection(
+        self, db_conn, monkeypatch,
+    ):
+        """Bug A: an ambiguous (NEUTRAL) event must still alert direction-aware theses.
+
+        Previously, NEUTRAL/UNCLEAR polarity silently failed to invalidate.
+        That traded false positives for silent false negatives — exactly the
+        wrong default for an alerting surface. Now NEUTRAL falls back to
+        legacy unsigned-intersection matching so the user still sees the event.
+        """
+        self._setup(db_conn, monkeypatch)
+        thesis_repo = ThesisRepository(db_conn)
+        thesis_repo.create(Thesis(
+            title="Long-on-AI", symbol="NVDA",
+            premise_tags=["ai_capex"],
+            premise_direction={"ai_capex": "positive"},
+        ))
+
+        client = _FakeAnthropic(
+            '{"tags": ["ai_capex"], "polarity": "neutral", "confidence": 0.5}'
+        )
+        agent = EventAgent(anthropic_client=client)
+        monkeypatch.setattr(
+            agent, "_fetch_federal_register", lambda since: [_stub_fed_register_doc()]
+        )
+
+        summary = agent.refresh(lookback_days=30)
+        assert summary["alerts_fired"] == 1
+
     def test_empty_direction_falls_back_to_legacy_intersection(
         self, db_conn, monkeypatch,
     ):

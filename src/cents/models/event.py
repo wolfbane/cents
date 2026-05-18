@@ -120,15 +120,19 @@ class Event:
         if not thesis_premise_direction:
             return True
 
+        # When the event's polarity is ambiguous (NEUTRAL/UNCLEAR), we cannot
+        # tell whether it confirms or contradicts the thesis. The conservative
+        # choice — and the choice that preserves prior alerting behaviour — is
+        # to fall back to legacy unsigned-intersection matching. Failing
+        # closed here means a tariff-ambiguity event silently fails to alert
+        # a thesis that depends on tariff policy; that's the wrong default
+        # for an invalidation surface.
+        if self.polarity not in (EventPolarity.BULLISH, EventPolarity.BEARISH):
+            return True
+
         # Polarised matching: only material (BULLISH/BEARISH) events that
         # oppose the thesis direction on a shared tag invalidate.
-        if self.polarity == EventPolarity.BULLISH:
-            opposite = "negative"
-        elif self.polarity == EventPolarity.BEARISH:
-            opposite = "positive"
-        else:
-            return False
-
+        opposite = "negative" if self.polarity == EventPolarity.BULLISH else "positive"
         for tag in overlap:
             if thesis_premise_direction.get(tag) == opposite:
                 return True

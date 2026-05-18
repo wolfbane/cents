@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS theses (
     regime_snapshot TEXT DEFAULT '{}',
     discovery_source TEXT,
     calibrated_p_correct REAL,
+    calibration_fit_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -299,6 +300,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "premise_direction", "ALTER TABLE theses ADD COLUMN premise_direction TEXT DEFAULT '{}'"),
         # Calibrated P(correct) at thesis-open time (Layer 2 #3).
         ("theses", "calibrated_p_correct", "ALTER TABLE theses ADD COLUMN calibrated_p_correct REAL"),
+        # Calibration model vintage (Bug E, r3) — ISO fit_at of the model used.
+        ("theses", "calibration_fit_at", "ALTER TABLE theses ADD COLUMN calibration_fit_at TEXT"),
         # Evidence provenance columns linking to the LLM call (added in v0.10).
         # Run BEFORE and AFTER the FK migration since that migration may recreate
         # the evidence table with the legacy column set.
