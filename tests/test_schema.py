@@ -323,6 +323,92 @@ class TestMigrateSchema:
         assert row[1] == "Test Thesis"
         conn.close()
 
+    def test_preserves_v010_evidence_provenance_through_fk_migration(self, tmp_path):
+        """The FK migration's evidence table rebuild must preserve v0.10
+        provenance columns (llm_call_id, model_snapshot, *_sha256). Previously
+        the static 10-column INSERT silently dropped them; populated provenance
+        data would survive _apply_column_migrations but vanish on the next FK
+        migration pass.
+        """
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(db_path)
+
+        # Pre-FK-migration schema with evidence already carrying provenance
+        # columns (simulating a DB that ran v0.10 column-adds before reaching
+        # this migration). thesis_id is NOT NULL — the pre-FK shape.
+        conn.executescript("""
+            CREATE TABLE theses (
+                id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT,
+                symbol TEXT, business_quality TEXT, valuation TEXT, moat TEXT,
+                time_horizon TEXT, horizon_end TEXT, key_risks TEXT,
+                target_price REAL, stop_price REAL, outcome TEXT, closed_at TEXT
+            );
+            CREATE TABLE evidence (
+                id TEXT PRIMARY KEY,
+                thesis_id TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                type TEXT DEFAULT 'neutral',
+                content TEXT NOT NULL,
+                source TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                dimension TEXT,
+                metadata TEXT DEFAULT '{}',
+                timestamp TEXT NOT NULL,
+                llm_call_id TEXT,
+                model_snapshot TEXT,
+                prompt_sha256 TEXT,
+                input_sha256 TEXT,
+                output_sha256 TEXT
+            );
+            CREATE TABLE positions (
+                id TEXT PRIMARY KEY, thesis_id TEXT NOT NULL, symbol TEXT,
+                side TEXT, entry_price REAL, entry_date TEXT, size REAL,
+                status TEXT, exit_price REAL, exit_date TEXT,
+                paper INTEGER, notes TEXT, created_at TEXT
+            );
+            CREATE TABLE outcomes (
+                id TEXT PRIMARY KEY, position_id TEXT NOT NULL, pnl REAL,
+                pnl_pct REAL, thesis_accuracy TEXT, agent_performance TEXT,
+                retrospective TEXT, recorded_at TEXT
+            );
+            CREATE TABLE watchlist (
+                id TEXT PRIMARY KEY, symbol TEXT UNIQUE, notes TEXT,
+                thesis_id TEXT, threshold REAL, alert_destination TEXT,
+                last_scanned TEXT, created_at TEXT
+            );
+            INSERT INTO theses (id, title, created_at, updated_at)
+                VALUES ('t1', 'T', '2024-01-01', '2024-01-01');
+            INSERT INTO evidence (
+                id, thesis_id, agent, type, content, source, confidence,
+                dimension, metadata, timestamp,
+                llm_call_id, model_snapshot, prompt_sha256, input_sha256, output_sha256
+            ) VALUES (
+                'e1', 't1', 'sentiment', 'supporting', 'body', 'newsapi', 0.7,
+                'sentiment', '{}', '2024-01-01',
+                'call-abc', 'claude-haiku-4-5-20251001',
+                'p_hash', 'i_hash', 'o_hash'
+            );
+        """)
+        conn.commit()
+
+        _migrate_schema(conn)
+
+        # Verify both schema (the columns exist post-migration) and data
+        # (the row we inserted survived with provenance intact).
+        cursor = conn.execute("PRAGMA table_info(evidence)")
+        cols = {row[1] for row in cursor.fetchall()}
+        assert {
+            "llm_call_id", "model_snapshot",
+            "prompt_sha256", "input_sha256", "output_sha256",
+        } <= cols
+        row = conn.execute(
+            "SELECT llm_call_id, model_snapshot, prompt_sha256, "
+            "input_sha256, output_sha256 FROM evidence WHERE id = 'e1'"
+        ).fetchone()
+        assert row == ("call-abc", "claude-haiku-4-5-20251001",
+                       "p_hash", "i_hash", "o_hash")
+        conn.close()
+
 
 class TestSchemaIntegrity:
     """Tests for overall schema integrity."""

@@ -472,45 +472,72 @@ class TestForwardReturnsContinuity:
     signal_date + 20d share the same adjustment basis, so the computed
     return reflects real market move, not the split ratio."""
 
-    def test_no_phantom_drop_across_synthetic_split(self):
-        """Synthetic NVDA-shaped bars: 10:1 split midway through window,
-        but post-split bars retroactively adjusted (as Alpaca returns
-        them when adjustment=SPLIT). Forward return must be near zero,
-        not ~-90%."""
-        from cents.cli.backtest import _calculate_forward_returns
+    def _build_bars(self, signal_date: date, *, split_factor: float | None) -> "PriceHistory":
+        """Build 70 daily bars across the signal window.
 
-        signal_date = date(2024, 5, 26)
+        ``split_factor=None`` returns continuous adjusted bars (the
+        SPLIT-adjusted shape Alpaca returns post-fix). ``split_factor=10``
+        returns RAW unadjusted bars with a 10:1 split at index 30 — pre-split
+        bars stay at the nominal $1130 level, post-split bars drop to $113.
+        That is the literal bug shape that produced the -87.7% artifact.
+        """
+        from cents.data.providers import PriceBar, PriceHistory
 
-        # Build 70 bars of split-adjusted data: pre-split prices divided
-        # by 10 retroactively, so the series is continuous around the split.
-        # Real NVDA on 2024-05-26 ≈ $113 (pre-split nominal ~$1130).
-        # Real NVDA on 2024-06-25 ≈ $118.
         bars = []
+        # Index 0..29 is pre-split, 30..69 is post-split. Signal_date is at
+        # index 10 (10 days before is index 0); 20-day-forward lands at
+        # index 30 — i.e. right after the split bar lands.
         for i in range(70):
             d = signal_date - timedelta(days=10) + timedelta(days=i)
-            # Smooth ramp 110 -> 120 across the window (no split artifact)
-            close = 110.0 + (i / 70.0) * 10.0
+            if split_factor and i < 30:
+                # RAW pre-split bars sit at the unadjusted $1130 level.
+                close = 1130.0 + (i / 30.0) * 100.0
+            elif split_factor:
+                # RAW post-split bars drop to $113 — the unadjusted discontinuity.
+                close = 113.0 + ((i - 30) / 40.0) * 5.0
+            else:
+                # Continuous SPLIT-adjusted ramp at the post-split scale.
+                close = 113.0 + (i / 70.0) * 5.0
             bars.append(
                 PriceBar(
                     timestamp=datetime.combine(d, datetime.min.time()),
-                    open=close,
-                    high=close,
-                    low=close,
-                    close=close,
+                    open=close, high=close, low=close, close=close,
                     volume=10_000_000,
                 )
             )
+        return PriceHistory(symbol="NVDA", bars=bars)
 
-        history = PriceHistory(symbol="NVDA", bars=bars)
+    def test_unadjusted_bars_reproduce_phantom_drop(self):
+        """Without split adjustment, the 10:1 NVDA-shaped discontinuity
+        produces the documented ~-90% artifact. This pins the bug shape so
+        a future regression in the consumer is detectable from the test.
+        """
+        from cents.cli.backtest import _calculate_forward_returns
 
+        signal_date = date(2024, 5, 26)
         provider = MagicMock()
-        provider.get_history.return_value = history
+        provider.get_history.return_value = self._build_bars(signal_date, split_factor=10)
 
         returns = _calculate_forward_returns("NVDA", signal_date, provider)
 
-        # Bug surfaced as -87.7%. Adjusted data should be <10% over 20d.
+        # The bug surfaced as -87.7%; assert we're firmly in the phantom-drop
+        # regime so this test would have failed *before* the bc6c140 fix.
         assert "20d" in returns
-        assert abs(returns["20d"]) < 0.20, (
+        assert returns["20d"] < -0.80
+
+    def test_split_adjusted_bars_produce_continuous_return(self):
+        """With consistently SPLIT-adjusted bars, the same window returns a
+        near-zero forward move — the property the fix delivers."""
+        from cents.cli.backtest import _calculate_forward_returns
+
+        signal_date = date(2024, 5, 26)
+        provider = MagicMock()
+        provider.get_history.return_value = self._build_bars(signal_date, split_factor=None)
+
+        returns = _calculate_forward_returns("NVDA", signal_date, provider)
+
+        assert "20d" in returns
+        assert abs(returns["20d"]) < 0.10, (
             f"20d return {returns['20d']:.2%} suggests a split-adjustment "
             "regression — adjusted bars should never show ~-90% artifacts"
         )

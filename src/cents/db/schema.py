@@ -474,7 +474,11 @@ def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = OFF")
 
     try:
-        # Migrate evidence table (ON DELETE SET NULL, nullable thesis_id, add symbol)
+        # Migrate evidence table (ON DELETE SET NULL, nullable thesis_id, add
+        # symbol + v0.10 provenance columns). The CREATE includes the v0.10
+        # provenance columns so any data already populated in evidence_old for
+        # those columns is preserved by the dynamic-column INSERT below; the
+        # previous static 10-column INSERT silently dropped them.
         conn.execute("ALTER TABLE evidence RENAME TO evidence_old")
         conn.execute("""
             CREATE TABLE evidence (
@@ -489,14 +493,21 @@ def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
                 dimension TEXT,
                 metadata TEXT DEFAULT '{}',
                 timestamp TEXT NOT NULL,
+                llm_call_id TEXT,
+                model_snapshot TEXT,
+                prompt_sha256 TEXT,
+                input_sha256 TEXT,
+                output_sha256 TEXT,
                 FOREIGN KEY (thesis_id) REFERENCES theses(id) ON DELETE SET NULL
             )
         """)
-        conn.execute("""
-            INSERT INTO evidence (id, thesis_id, agent, type, content, source, confidence, dimension, metadata, timestamp)
-            SELECT id, thesis_id, agent, type, content, source, confidence, dimension, metadata, timestamp
-            FROM evidence_old
-        """)
+        # Introspect evidence_old's column set so any v0.10 provenance columns
+        # added by earlier column-migrations carry over. Mirrors the positions
+        # migration pattern above.
+        cursor = conn.execute("PRAGMA table_info(evidence_old)")
+        old_cols = [row[1] for row in cursor.fetchall()]
+        col_csv = ", ".join(old_cols)
+        conn.execute(f"INSERT INTO evidence ({col_csv}) SELECT {col_csv} FROM evidence_old")
         conn.execute("DROP TABLE evidence_old")
 
         # Migrate positions table (ON DELETE SET NULL)
