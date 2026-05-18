@@ -921,6 +921,294 @@ class TestFactoryCli:
         rare = next(c for c in payload["cells"] if c["discovery"] == "rare")
         assert rare["metrics"]["low_n"] is True
 
+    def test_analyze_cost_flag_off_by_default(self, factory_db, monkeypatch, tmp_path):
+        """Without --include-cost-per-outcome, no new fields appear (back-compat)."""
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        trepo.create(Thesis(
+            title="factory:A",
+            symbol="A",
+            tags=[TAG_FACTORY],
+            discovery_source="value",
+        ))
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze", "--by", "discovery", "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        cell = payload["cells"][0]
+        assert "llm_cost_per_opened" not in cell["metrics"]
+        assert "llm_cost_per_judged" not in cell["metrics"]
+        assert "llm_cost_per_correct" not in cell["metrics"]
+        assert "unattributable_cost_usd" not in payload
+        # And the cohort-default path is unchanged too.
+        result2 = runner.invoke(cli, ["factory", "analyze", "--output", "json"])
+        payload2 = json.loads(result2.output)
+        assert "llm_cost_per_opened" not in payload2["directional"]
+        assert "unattributable_cost_usd" not in payload2
+
+    def test_analyze_cost_per_outcome_attribution(self, factory_db, monkeypatch, tmp_path):
+        """LLM spend on a thesis's symbol during its open window is attributed
+        to that thesis; ratios divide by opened/judged/correct."""
+        from cents.cli import cli
+        from cents.db import LLMUsageRepository
+        from cents.models import LLMUsage
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        usage_repo = LLMUsageRepository()
+        now = datetime.now()
+
+        # Two LLM-arm theses on symbol A: 1 correct, 1 incorrect → 2 opened, 2 judged, 1 correct.
+        t_correct = Thesis(
+            title="factory:A1",
+            symbol="A",
+            tags=[TAG_FACTORY],
+            discovery_source="value",
+            orchestrator_label="llm",
+        )
+        # Force the lifetime so we can pin LLM-call timestamps inside it.
+        t_correct.created_at = now - timedelta(days=10)
+        t_correct.closed_at = now - timedelta(days=8)
+        trepo.create(t_correct)
+        t_correct.close(ThesisOutcome.CORRECT)
+        # Re-set closed_at after close() overwrites it with `now`.
+        t_correct.closed_at = now - timedelta(days=8)
+        trepo.update(t_correct)
+
+        t_incorrect = Thesis(
+            title="factory:A2",
+            symbol="A",
+            tags=[TAG_FACTORY],
+            discovery_source="value",
+            orchestrator_label="llm",
+        )
+        t_incorrect.created_at = now - timedelta(days=5)
+        t_incorrect.closed_at = now - timedelta(days=3)
+        trepo.create(t_incorrect)
+        t_incorrect.close(ThesisOutcome.INCORRECT)
+        t_incorrect.closed_at = now - timedelta(days=3)
+        trepo.update(t_incorrect)
+
+        # 1M input + 1M output tokens on haiku-4-5 = $1 + $5 = $6 per call.
+        # Stamp each call inside the corresponding thesis's lifetime.
+        usage_repo.create(LLMUsage(
+            model="claude-haiku-4-5",
+            agent="sentiment",
+            operation="score_article",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            context="A",
+            called_at=now - timedelta(days=9),  # inside t_correct's lifetime
+        ))
+        usage_repo.create(LLMUsage(
+            model="claude-haiku-4-5",
+            agent="sentiment",
+            operation="score_article",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            context="A",
+            called_at=now - timedelta(days=4),  # inside t_incorrect's lifetime
+        ))
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze",
+            "--by", "discovery",
+            "--include-cost-per-outcome",
+            "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        cell = next(c for c in payload["cells"] if c["discovery"] == "value")
+        m = cell["metrics"]
+        # 2 opened, 2 judged, 1 correct, total spend = $12.
+        assert m["opened"] == 2
+        assert m["judged"] == 2
+        assert m["llm_cost_per_opened"] == pytest.approx(6.0, rel=1e-6)
+        assert m["llm_cost_per_judged"] == pytest.approx(6.0, rel=1e-6)
+        assert m["llm_cost_per_correct"] == pytest.approx(12.0, rel=1e-6)
+        # Top-level unattributable bucket exists and is zero in this fixture.
+        assert payload["unattributable_cost_usd"] == 0.0
+
+    def test_analyze_cost_random_arm_is_zero(self, factory_db, monkeypatch, tmp_path):
+        """Random-arm cells accrue $0 cost because the random orchestrator emits
+        no LLM calls (no row in llm_usage has the random thesis's symbol)."""
+        from cents.cli import cli
+        from cents.db import LLMUsageRepository
+        from cents.models import LLMUsage
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        usage_repo = LLMUsageRepository()
+        now = datetime.now()
+
+        # LLM arm thesis on AAA.
+        llm_t = Thesis(
+            title="factory:AAA",
+            symbol="AAA",
+            tags=[TAG_FACTORY],
+            orchestrator_label="llm",
+        )
+        llm_t.created_at = now - timedelta(days=10)
+        trepo.create(llm_t)
+
+        # Random arm thesis on BBB. Symbol differs; no LLM rows ever target it.
+        rand_t = Thesis(
+            title="factory:BBB",
+            symbol="BBB",
+            tags=[TAG_FACTORY],
+            orchestrator_label="random",
+        )
+        rand_t.created_at = now - timedelta(days=10)
+        trepo.create(rand_t)
+
+        # Only the LLM arm's symbol has any usage rows.
+        usage_repo.create(LLMUsage(
+            model="claude-haiku-4-5",
+            agent="sentiment",
+            operation="score_article",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            context="AAA",
+            called_at=now - timedelta(days=5),
+        ))
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze",
+            "--by", "orchestrator",
+            "--include-cost-per-outcome",
+            "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        cells = {c["orchestrator"]: c["metrics"] for c in payload["cells"]}
+        assert cells["random"]["llm_cost_per_opened"] == 0.0
+        assert cells["random"]["llm_cost_per_judged"] is None  # no judged in fixture
+        assert cells["random"]["llm_cost_per_correct"] is None
+        assert cells["llm"]["llm_cost_per_opened"] == pytest.approx(6.0, rel=1e-6)
+
+    def test_analyze_unattributable_cost_surfaced(self, factory_db, monkeypatch, tmp_path):
+        """LLM calls with no thesis_id/symbol match show up in `unattributable_cost_usd`,
+        NOT in any cell's per-cost figures."""
+        from cents.cli import cli
+        from cents.db import LLMUsageRepository
+        from cents.models import LLMUsage
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        usage_repo = LLMUsageRepository()
+        now = datetime.now()
+
+        # One factory thesis on symbol X.
+        t = Thesis(
+            title="factory:X",
+            symbol="X",
+            tags=[TAG_FACTORY],
+            discovery_source="value",
+            orchestrator_label="llm",
+        )
+        t.created_at = now - timedelta(days=10)
+        trepo.create(t)
+
+        # Ad-hoc call: context is a symbol no factory thesis owns.
+        usage_repo.create(LLMUsage(
+            model="claude-haiku-4-5",
+            agent="sentiment",
+            operation="score_article",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            context="UNRELATED",
+            called_at=now - timedelta(days=5),
+        ))
+        # No-context call (e.g., a tagging sweep) — also unattributable.
+        usage_repo.create(LLMUsage(
+            model="claude-haiku-4-5",
+            agent="event",
+            operation="tag_event",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            context=None,
+            called_at=now - timedelta(days=5),
+        ))
+        # And one legitimately attributable call on X for contrast.
+        usage_repo.create(LLMUsage(
+            model="claude-haiku-4-5",
+            agent="sentiment",
+            operation="score_article",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            context="X",
+            called_at=now - timedelta(days=5),
+        ))
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze",
+            "--by", "discovery",
+            "--include-cost-per-outcome",
+            "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        # Two of three rows are unattributable: 2 × $6 = $12.
+        assert payload["unattributable_cost_usd"] == pytest.approx(12.0, rel=1e-6)
+        # The attributable row lands on the value cell.
+        value_cell = next(c for c in payload["cells"] if c["discovery"] == "value")
+        assert value_cell["metrics"]["llm_cost_per_opened"] == pytest.approx(6.0, rel=1e-6)
+
+    def test_analyze_cost_legacy_cohort_path(self, factory_db, monkeypatch, tmp_path):
+        """The single-axis cohort path (no `--by`) also emits cost fields when the flag is set."""
+        from cents.cli import cli
+        from cents.db import LLMUsageRepository
+        from cents.models import LLMUsage
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        usage_repo = LLMUsageRepository()
+        now = datetime.now()
+
+        t = Thesis(
+            title="factory:Q",
+            symbol="Q",
+            tags=[TAG_FACTORY],
+            orchestrator_label="llm",
+        )
+        t.created_at = now - timedelta(days=10)
+        trepo.create(t)
+
+        usage_repo.create(LLMUsage(
+            model="claude-haiku-4-5",
+            agent="sentiment",
+            operation="score_article",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            context="Q",
+            called_at=now - timedelta(days=5),
+        ))
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze",
+            "--include-cost-per-outcome",
+            "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        assert payload["directional"]["llm_cost_per_opened"] == pytest.approx(6.0, rel=1e-6)
+        # No neutral-cohort theses → opened=0 → ratio None.
+        assert payload["neutral"]["llm_cost_per_opened"] is None
+        assert payload["unattributable_cost_usd"] == 0.0
+
 
 class TestPremiseDirectionPersistence:
     """Layer 2 #1 — engine threads premise_direction onto the Thesis."""

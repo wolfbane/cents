@@ -8,6 +8,7 @@ import click
 
 from cents.db import (
     FactoryRunRepository,
+    LLMUsageRepository,
     PositionRepository,
     ThesisRepository,
     UniverseRepository,
@@ -21,6 +22,7 @@ from cents.factory.config import (
 from cents.factory.engine import FactoryEngine, TAG_FACTORY
 from cents.llm_usage import cost_cap, current_run_cap_usd, current_run_spend_usd
 from cents.models import PositionStatus, ThesisCohort, ThesisOutcome, ThesisStatus
+from cents.pricing import estimate_cost_usd
 from cents.serialization import serialize
 
 from ._disclosures import LOW_N_THRESHOLD, disclosure_text, low_n_warning
@@ -205,6 +207,7 @@ class AnalyzeAxis(str, Enum):
     COHORT = "cohort"
     DISCOVERY = "discovery"
     REGIME = "regime"
+    ORCHESTRATOR = "orchestrator"
 
 
 # Per-axis bucketing — extending the analyze surface = add a case here.
@@ -212,6 +215,7 @@ _AXIS_BUCKET = {
     AnalyzeAxis.COHORT: lambda t: t.cohort.value,
     AnalyzeAxis.DISCOVERY: lambda t: t.discovery_source or "unspecified",
     AnalyzeAxis.REGIME: lambda t: _regime_bucket(t.regime_snapshot),
+    AnalyzeAxis.ORCHESTRATOR: lambda t: t.orchestrator_label or "unspecified",
 }
 
 
@@ -222,12 +226,30 @@ _AXIS_BUCKET = {
     "by_axes",
     default="cohort",
     help=(
-        "Comma-separated grouping axes (cohort,discovery,regime). "
+        "Comma-separated grouping axes (cohort,discovery,regime,orchestrator). "
         "Multiple axes produce a cross-tab. Default: cohort."
     ),
 )
+@click.option(
+    "--include-cost-per-outcome",
+    "include_cost",
+    is_flag=True,
+    default=False,
+    help=(
+        "Augment each cell with LLM cost per opened / judged / correct thesis. "
+        "Lets the operator see whether spend per outcome exceeds the average "
+        "P&L per outcome (negative-EV pipeline check). Adds an "
+        "`unattributable_cost_usd` top-level field for LLM spend that could "
+        "not be attributed to any thesis in the window."
+    ),
+)
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def factory_analyze(since_days: int, by_axes: str, output: str | None):
+def factory_analyze(
+    since_days: int,
+    by_axes: str,
+    include_cost: bool,
+    output: str | None,
+):
     """Outcomes stratified by one or more discovery / cohort / regime axes."""
     output = resolve_output_format(output)
     axis_strs = [a.strip() for a in by_axes.split(",") if a.strip()]
@@ -252,6 +274,15 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
         if pos.thesis_id:
             positions_by_thesis.setdefault(pos.thesis_id, []).append(pos)
 
+    # Per-thesis LLM cost attribution (only when the operator opts in — the
+    # join is cheap but we don't want to alter the default wire shape).
+    cost_by_thesis: dict[str, float] = {}
+    unattributable_cost_usd = 0.0
+    if include_cost:
+        cost_by_thesis, unattributable_cost_usd = _attribute_llm_cost(
+            cutoff=cutoff, factory_theses=factory_theses
+        )
+
     if axes == [AnalyzeAxis.COHORT]:
         directional = [t for t in factory_theses if t.cohort == ThesisCohort.DIRECTIONAL]
         paired = [t for t in factory_theses if t.cohort == ThesisCohort.NEUTRAL]
@@ -259,6 +290,9 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
         n_metrics = _cohort_metrics(paired, positions_by_thesis)
         d_metrics["low_n"] = d_metrics["judged"] < LOW_N_THRESHOLD
         n_metrics["low_n"] = n_metrics["judged"] < LOW_N_THRESHOLD
+        if include_cost:
+            _augment_with_cost(d_metrics, directional, cost_by_thesis)
+            _augment_with_cost(n_metrics, paired, cost_by_thesis)
         any_low_n = d_metrics["low_n"] or n_metrics["low_n"]
         payload = {
             "since_days": since_days,
@@ -268,7 +302,13 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
             "_disclosure": disclosure_text(),
             "_low_n": any_low_n,
         }
-        respond_with_output(output, payload, lambda: _print_analyze_legacy(payload))
+        if include_cost:
+            payload["unattributable_cost_usd"] = round(unattributable_cost_usd, 6)
+        respond_with_output(
+            output,
+            payload,
+            lambda: _print_analyze_legacy(payload, include_cost=include_cost),
+        )
         return
 
     groups: dict[tuple[str, ...], list] = {}
@@ -282,6 +322,8 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
         cell = {axis.value: key[i] for i, axis in enumerate(axes)}
         metrics = _cohort_metrics(theses, positions_by_thesis)
         metrics["low_n"] = metrics["judged"] < LOW_N_THRESHOLD
+        if include_cost:
+            _augment_with_cost(metrics, theses, cost_by_thesis)
         any_low_n = any_low_n or metrics["low_n"]
         cell["metrics"] = metrics
         cells.append(cell)
@@ -293,7 +335,13 @@ def factory_analyze(since_days: int, by_axes: str, output: str | None):
         "_disclosure": disclosure_text(),
         "_low_n": any_low_n,
     }
-    respond_with_output(output, payload, lambda: _print_analyze_crosstab(payload))
+    if include_cost:
+        payload["unattributable_cost_usd"] = round(unattributable_cost_usd, 6)
+    respond_with_output(
+        output,
+        payload,
+        lambda: _print_analyze_crosstab(payload, include_cost=include_cost),
+    )
 
 
 def _regime_bucket(snapshot: dict) -> str:
@@ -357,35 +405,125 @@ def _cohort_metrics(theses, positions_by_thesis: dict) -> dict:
     }
 
 
-def _print_analyze_legacy(payload: dict) -> None:
+def _attribute_llm_cost(
+    *,
+    cutoff: datetime,
+    factory_theses: list,
+) -> tuple[dict[str, float], float]:
+    """Build a `{thesis_id: total_cost_usd}` mapping from llm_usage rows.
+
+    Attribution rules:
+    1. If a row's `context` matches a known `thesis.id` directly, attribute
+       to that thesis (future-proof for explicit thesis_id contexts).
+    2. Else if `context` matches a `thesis.symbol` AND the call's `called_at`
+       falls within the thesis's open lifetime, attribute to that thesis.
+       Lifetime = ``thesis.created_at <= called_at <= (thesis.closed_at or now)``.
+    3. Otherwise the row contributes to ``unattributable_cost_usd``
+       (ad-hoc research calls, scan sweeps, anything not tied to a thesis).
+
+    Random-arm theses naturally accrue zero cost because the random
+    orchestrator never emits LLM calls.
+
+    Returns (cost_by_thesis, unattributable_cost_usd).
+    """
+    usage_rows = LLMUsageRepository().list_recent(since=cutoff, limit=None)
+    by_id = {t.id: t for t in factory_theses}
+    by_symbol: dict[str, list] = {}
+    for t in factory_theses:
+        if t.symbol:
+            by_symbol.setdefault(t.symbol, []).append(t)
+
+    cost_by_thesis: dict[str, float] = {}
+    unattributable = 0.0
+    for row in usage_rows:
+        cost = estimate_cost_usd(
+            row.model,
+            row.input_tokens,
+            row.output_tokens,
+            cache_read=row.cache_read_input_tokens,
+            cache_write=row.cache_creation_input_tokens,
+        )
+        if cost is None:
+            # Unknown model — surface as unattributable rather than silently
+            # treating as zero so we don't underreport spend.
+            continue
+        attributed = False
+        ctx = row.context
+        if ctx:
+            # Rule 1: exact thesis_id match.
+            thesis = by_id.get(ctx)
+            if thesis is not None:
+                cost_by_thesis[thesis.id] = cost_by_thesis.get(thesis.id, 0.0) + cost
+                attributed = True
+            else:
+                # Rule 2: symbol + lifetime match.
+                candidates = by_symbol.get(ctx, [])
+                for t in candidates:
+                    end = t.closed_at or datetime.now()
+                    if t.created_at <= row.called_at <= end:
+                        cost_by_thesis[t.id] = cost_by_thesis.get(t.id, 0.0) + cost
+                        attributed = True
+                        break
+        if not attributed:
+            unattributable += cost
+    return cost_by_thesis, unattributable
+
+
+def _augment_with_cost(
+    metrics: dict,
+    theses: list,
+    cost_by_thesis: dict[str, float],
+) -> None:
+    """Mutate `metrics` to add cost-per-outcome fields for the given theses."""
+    total = sum(cost_by_thesis.get(t.id, 0.0) for t in theses)
+    opened = metrics["opened"]
+    judged = metrics["judged"]
+    correct = sum(
+        1
+        for t in theses
+        if t.status == ThesisStatus.CLOSED and t.outcome == ThesisOutcome.CORRECT
+    )
+    metrics["llm_cost_total_usd"] = round(total, 6)
+    metrics["llm_cost_per_opened"] = round(total / opened, 6) if opened else None
+    metrics["llm_cost_per_judged"] = round(total / judged, 6) if judged else None
+    metrics["llm_cost_per_correct"] = round(total / correct, 6) if correct else None
+
+
+def _print_analyze_legacy(payload: dict, *, include_cost: bool = False) -> None:
     click.echo(f"Cohort analysis (last {payload['since_days']} days)")
     for cohort_name in ("directional", "neutral"):
         m = payload[cohort_name]
         click.echo(f"  {cohort_name}:")
-        _print_metrics(m)
+        _print_metrics(m, include_cost=include_cost)
         warning = low_n_warning(m["judged"])
         if warning:
             click.echo(f"    {warning}")
+    if include_cost:
+        _print_unattributable_footer(payload)
     _print_disclosure_footer()
 
 
-def _print_analyze_crosstab(payload: dict) -> None:
+def _print_analyze_crosstab(payload: dict, *, include_cost: bool = False) -> None:
     axes = payload["by"]
     click.echo(
         f"Analysis (last {payload['since_days']} days) by " + ", ".join(axes)
     )
     if not payload["cells"]:
         click.echo("  (no factory theses in window)")
+        if include_cost:
+            _print_unattributable_footer(payload)
         _print_disclosure_footer()
         return
     for cell in payload["cells"]:
         key = " / ".join(f"{a}={cell[a]}" for a in axes)
         marker = " [low N]" if cell["metrics"].get("low_n") else ""
         click.echo(f"  {key}{marker}:")
-        _print_metrics(cell["metrics"])
+        _print_metrics(cell["metrics"], include_cost=include_cost)
         warning = low_n_warning(cell["metrics"]["judged"])
         if warning:
             click.echo(f"    {warning}")
+    if include_cost:
+        _print_unattributable_footer(payload)
     _print_disclosure_footer()
 
 
@@ -394,7 +532,19 @@ def _print_disclosure_footer() -> None:
     click.echo(disclosure_text())
 
 
-def _print_metrics(m: dict) -> None:
+def _print_unattributable_footer(payload: dict) -> None:
+    """Render the unattributable-cost line shown only when --include-cost-per-outcome is set."""
+    unattr = payload.get("unattributable_cost_usd", 0.0) or 0.0
+    click.echo(f"  unattributable LLM spend (no thesis): ${unattr:.4f}")
+
+
+def _format_cost_field(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"${value:.4f}"
+
+
+def _print_metrics(m: dict, *, include_cost: bool = False) -> None:
     click.echo(f"    opened:    {m['opened']}")
     click.echo(f"    closed:    {m['closed']} (preempted: {m['preempted']})")
     win = "n/a" if m["win_rate"] is None else f"{m['win_rate'] * 100:.1f}%"
@@ -403,3 +553,10 @@ def _print_metrics(m: dict) -> None:
     click.echo(f"    win_rate:  {win}")
     click.echo(f"    avg_pnl:   {avg_pnl}")
     click.echo(f"    avg_held:  {avg_held}")
+    if include_cost:
+        cpo = _format_cost_field(m.get("llm_cost_per_opened"))
+        cpj = _format_cost_field(m.get("llm_cost_per_judged"))
+        cpc = _format_cost_field(m.get("llm_cost_per_correct"))
+        click.echo(
+            f"    llm $/outcome: opened={cpo} judged={cpj} correct={cpc}"
+        )

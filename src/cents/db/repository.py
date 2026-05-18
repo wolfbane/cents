@@ -781,9 +781,13 @@ class LLMUsageRepository(BaseRepository):
     def list_recent(
         self,
         since: datetime | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[LLMUsage]:
-        """List usage records since a given time, newest first."""
+        """List usage records since a given time, newest first.
+
+        Pass ``limit=None`` to disable the limit (used by per-thesis attribution
+        in ``factory analyze`` which needs to walk the full window).
+        """
         if since is not None:
             return self._list(
                 self._META, where="called_at >= ?", params=(since.isoformat(),), limit=limit
