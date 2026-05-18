@@ -200,7 +200,7 @@ class TestPremiseConcentration:
 
         _seed_universe(["C", "D"])
         # Make the premise classifier return 'fed_policy' for C and an unrelated tag for D
-        def fake_classify(symbol, summary, evidence_texts):
+        def fake_classify(symbol, summary, evidence_texts, **kwargs):
             return ["fed_policy"] if symbol == "C" else ["semis_policy"]
         monkeypatch.setattr(
             "cents.factory.engine.classify_premise_tags", fake_classify

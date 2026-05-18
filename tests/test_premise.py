@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from cents.db import EventRepository
-from cents.factory.premise import capture_regime_snapshot, classify_premise_tags
+from cents.factory.premise import (
+    SECTOR_FALLBACK_TAGS,
+    capture_regime_snapshot,
+    classify_premise_tags,
+)
 from cents.models import EVENT_TAGS, Event, EventPolarity
 
 
@@ -158,6 +162,114 @@ class TestClassifyPremiseTags:
         assert usage[0].agent == "factory"
         assert usage[0].operation == "classify_premise"
         assert usage[0].context == "NVDA"
+
+
+class TestSectorFallback:
+    """Sector-tag fallback when thesis text is too thin for the LLM (cents-heo).
+
+    Without this, control-arm theses (random orchestrator, summary is one
+    boilerplate line) silently get premise_tags=[], so EventAgent can never
+    invalidate them — asymmetrically inflating the random arm's hit rate.
+    """
+
+    def test_sector_tags_used_when_summary_is_empty_and_no_client(
+        self, db_conn, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        # JPM is Financial Services → XLF. No client, sparse summary, side=long.
+        monkeypatch.setattr(
+            "cents.factory.sector_map.hedge_etf_for", lambda sym: "XLF"
+        )
+        tags, directions = classify_premise_tags(
+            "JPM", "", [], anthropic_client=None, side="long"
+        )
+        assert tags == SECTOR_FALLBACK_TAGS["XLF"]
+        # Long thesis → "positive" on every tag (BEARISH event invalidates).
+        assert directions == {t: "positive" for t in tags}
+        assert all(t in EVENT_TAGS for t in tags)
+
+    def test_short_side_emits_negative_direction(self, db_conn, monkeypatch):
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.factory.sector_map.hedge_etf_for", lambda sym: "XLK"
+        )
+        tags, directions = classify_premise_tags(
+            "NVDA", "x", [], anthropic_client=None, side="short"
+        )
+        assert tags == SECTOR_FALLBACK_TAGS["XLK"]
+        # Short thesis → "negative" on every tag (BULLISH event invalidates).
+        assert directions == {t: "negative" for t in tags}
+
+    def test_falls_back_when_llm_returns_empty_on_sparse_text(
+        self, db_conn, monkeypatch
+    ):
+        """The LLM-arm path also falls back to sector tags on sparse input.
+
+        Real-world case: a synthetic summary that happens to still go through
+        the LLM (e.g. a tiny custom orchestrator with anthropic client wired
+        in) should still get sector tags rather than nothing.
+        """
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.factory.sector_map.hedge_etf_for", lambda sym: "XLF"
+        )
+        client = _FakeAnthropic('{"tags": [], "directions": {}}')
+        tags, directions = classify_premise_tags(
+            "JPM", "short signal", [], anthropic_client=client, side="long"
+        )
+        assert tags == SECTOR_FALLBACK_TAGS["XLF"]
+        assert directions == {t: "positive" for t in tags}
+
+    def test_no_fallback_when_summary_has_real_content(
+        self, db_conn, monkeypatch
+    ):
+        """LLM's "no regime dependency" answer on real text is respected.
+
+        Above the sparseness threshold, an empty LLM result is meaningful —
+        the thesis genuinely doesn't depend on any of the policy tags. Don't
+        paper over that with a sector default.
+        """
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        long_summary = "A " * 200  # well above the sparse threshold
+        client = _FakeAnthropic('{"tags": [], "directions": {}}')
+        tags, directions = classify_premise_tags(
+            "JPM", long_summary, [], anthropic_client=client, side="long"
+        )
+        assert tags == []
+        assert directions == {}
+
+    def test_no_fallback_without_side_hint(self, db_conn, monkeypatch):
+        """Back-compat: callers that don't pass `side` keep legacy ([], {})."""
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        tags, directions = classify_premise_tags(
+            "JPM", "", [], anthropic_client=None
+        )
+        assert tags == []
+        assert directions == {}
+
+    def test_sector_tags_remain_a_subset_of_event_tags(self):
+        """Regression: every fallback tag must exist in EVENT_TAGS verbatim.
+
+        EVENT_TAGS is the controlled vocabulary that EventAgent tags events
+        against. A typo here would silently produce premise_tags that never
+        match any event — exactly the bug this fix is solving.
+        """
+        for etf, tags in SECTOR_FALLBACK_TAGS.items():
+            for tag in tags:
+                assert tag in EVENT_TAGS, (
+                    f"SECTOR_FALLBACK_TAGS[{etf!r}] contains {tag!r} "
+                    f"which is not in EVENT_TAGS"
+                )
 
 
 class TestCaptureRegimeSnapshot:

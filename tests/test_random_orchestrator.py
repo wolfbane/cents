@@ -124,6 +124,60 @@ class TestRandomOrchestratorEngineIntegration:
             ThesisRepository().delete(theses[0].id) if theses else None
         pytest.fail("No random-arm seed produced an open in 10 tries — extremely unlikely")
 
+    def test_random_arm_theses_get_sector_premise_tags(
+        self, factory_db, monkeypatch
+    ):
+        """Regression for cents-heo selection bias.
+
+        Random-orchestrator theses have one-line synthetic summaries, so the
+        LLM classifier (when wired in) has nothing to anchor on and used to
+        return premise_tags=[]. Without premise_tags, EventAgent's
+        PREMISE_INVALIDATION never fires on the random arm — asymmetrically
+        favouring its hit rate vs the LLM arm in the two-arm forward test.
+
+        Fix: when the thesis summary is sparse, fall back to sector-derived
+        tags so the random arm is invalidatable by events on the same footing
+        as the LLM arm. This test asserts the engine path now records
+        non-empty premise_tags for random-arm opens.
+        """
+        # Undo the autouse classifier stub — we want the real fallback path.
+        # The classifier has no LLM client (no anthropic_api_key in test env)
+        # so it goes straight to the sparse-summary fallback branch.
+        from cents.factory.premise import (
+            SECTOR_FALLBACK_TAGS,
+            classify_premise_tags,
+        )
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags", classify_premise_tags
+        )
+        # Pin sector lookup so we don't hit FMP — JPM as a financial.
+        monkeypatch.setattr(
+            "cents.factory.sector_map.hedge_etf_for", lambda sym: "XLF"
+        )
+
+        _seed_universe(["JPM"])
+        # Iterate seeds until one clears the entry threshold so we can
+        # actually inspect the opened thesis. Same pattern as the test above.
+        for seed in range(10):
+            engine = FactoryEngine(
+                config=_config(entry_threshold=5.0),
+                orchestrator=RandomOrchestrator(seed=seed),
+                price_provider=_price_provider({"JPM": 100.0}),
+            )
+            engine.run()
+            theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+            if theses:
+                t = theses[0]
+                assert t.orchestrator_label == "random"
+                assert t.premise_tags == SECTOR_FALLBACK_TAGS["XLF"]
+                # Direction polarity must match the side the random arm took.
+                # Either all "positive" (long) or all "negative" (short).
+                assert t.premise_direction
+                polarities = set(t.premise_direction.values())
+                assert polarities in ({"positive"}, {"negative"})
+                return
+        pytest.fail("No random-arm seed produced an open in 10 tries")
+
     def test_default_engine_labels_theses_as_llm(self, factory_db):
         """Sanity: when no random orchestrator is injected, the label defaults to 'llm'."""
         from unittest.mock import MagicMock

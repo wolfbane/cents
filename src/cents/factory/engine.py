@@ -682,11 +682,17 @@ class FactoryEngine:
 
             # Classify premise tags now (one LLM call) so we can gate on
             # per-tag concentration before paying any further setup cost.
+            # Pass side so the classifier can fall back to sector-derived
+            # tags when the thesis text is too thin for the LLM to anchor
+            # on (e.g. random-arm control theses) — without that fallback,
+            # the random arm is silently un-invalidatable by events.
+            side_hint = "short" if result.conviction_delta < 0 else "long"
             premise_tags, premise_direction = _coerce_premise_classification(
                 classify_premise_tags(
                     symbol,
                     result.summary,
                     [getattr(e, "content", "") for e in (result.evidence or [])],
+                    side=side_hint,
                 )
             )
             if cfg.max_per_premise_tag > 0 and self._exceeds_premise_concentration(
