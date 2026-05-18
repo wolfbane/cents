@@ -3,7 +3,12 @@
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
+from cents.agents.base import (
+    BaseAgent,
+    AgentResult,
+    RECOVERABLE_EXCEPTIONS,
+    sanitize_metadata_string,
+)
 from cents.models import EvidenceType, Thesis, ThesisDimension
 
 # Transaction types to include (informative open market trades)
@@ -183,7 +188,9 @@ class InsiderAgent(BaseAgent):
         if len(buys) >= 2:
             buy_cluster = self._find_cluster(buys)
             if buy_cluster:
-                unique_insiders = len(set(t["reportingName"] for t in buy_cluster))
+                # Key on CIK (with normalized-name fallback) so the same
+                # person under two name spellings doesn't inflate the count.
+                unique_insiders = len({self._insider_dedup_key(t) for t in buy_cluster})
                 if unique_insiders >= 3:
                     delta += 5.0
                     evidence.append(self.create_evidence(
@@ -218,7 +225,7 @@ class InsiderAgent(BaseAgent):
         if len(sells) >= 3:
             sell_cluster = self._find_cluster(sells)
             if sell_cluster:
-                unique_insiders = len(set(t["reportingName"] for t in sell_cluster))
+                unique_insiders = len({self._insider_dedup_key(t) for t in sell_cluster})
                 if unique_insiders >= 3:
                     delta -= 3.0
                     evidence.append(self.create_evidence(
@@ -269,33 +276,65 @@ class InsiderAgent(BaseAgent):
 
         return cluster
 
+    def _insider_dedup_key(self, trade: dict) -> str:
+        """Stable per-insider identifier.
+
+        Prefer FMP's ``reportingCik`` — the SEC's immutable insider ID — and
+        fall back to a normalised reportingName when CIK is absent (older
+        records, partial-payload responses). The normalisation collapses
+        casing/punctuation differences so that "BIALECKI ANDREW" and
+        "Bialecki, Andrew J" don't dedupe as two different people.
+        """
+        cik = trade.get("reportingCik") or trade.get("cik")
+        if cik:
+            return f"cik:{cik}"
+        name = trade.get("reportingName") or ""
+        normalised = "".join(c.upper() for c in name if c.isalnum())
+        return f"name:{normalised}"
+
     def _aggregate_by_insider(self, trades: list[dict]) -> list[dict]:
-        """Aggregate trades by ``reportingName`` so a 10b5-1 program (one
+        """Aggregate trades by a stable insider key so a 10b5-1 program (one
         decision, many filings) becomes a single row rather than N rows that
         each get individually weighted into conviction_delta.
 
         Returns a list of synthetic trade dicts with summed ``value`` and a
-        ``trade_count`` field. Role/owner-type is taken from the first record
-        for the insider (they don't change role mid-window).
+        ``trade_count`` field. Keying on CIK (with normalised-name fallback)
+        avoids inflation from name-spelling variance. Role weight tracks the
+        most senior role observed across the window — CFO→CEO transitions
+        should land on the higher-weight role, not whichever filing FMP
+        returned first.
         """
         if not trades:
             return []
         agg: dict[str, dict] = {}
         for t in trades:
             # reportingName is guaranteed non-empty by _filter_informative_trades.
-            name = t["reportingName"]
+            # Sanitize the FMP-supplied strings here so all downstream evidence
+            # content interpolations are safe — Form 4 reportingName is filer-
+            # self-typed and an injection vector if it ever flows raw into a
+            # prompt the orchestrator's LLM consumes.
+            name = sanitize_metadata_string(t["reportingName"])
+            type_of_owner = sanitize_metadata_string(t.get("typeOfOwner", ""))
+            _, weight = _parse_role(type_of_owner)
+            key = self._insider_dedup_key(t)
             value = (t.get("securitiesTransacted", 0) or 0) * (t.get("price", 0) or 0)
             shares = t.get("securitiesTransacted", 0) or 0
             bucket = agg.setdefault(
-                name,
+                key,
                 {
                     "reportingName": name,
-                    "typeOfOwner": t.get("typeOfOwner", ""),
+                    "typeOfOwner": type_of_owner,
+                    "_role_weight": weight,
                     "value": 0.0,
                     "shares": 0.0,
                     "trade_count": 0,
                 },
             )
+            # Promote to the higher-weight role if a later filing shows one
+            # — role transitions happen mid-window (CFO → CEO, etc).
+            if weight > bucket["_role_weight"]:
+                bucket["_role_weight"] = weight
+                bucket["typeOfOwner"] = type_of_owner
             bucket["value"] += value
             bucket["shares"] += shares
             bucket["trade_count"] += 1

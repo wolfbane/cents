@@ -27,9 +27,8 @@ from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
 logger = logging.getLogger(__name__)
 
-# claude-3-haiku-20240307 was retired April 2026; using the current Haiku
-# alias so it tracks future snapshots without further code changes.
-_LLM_MODEL = "claude-haiku-4-5-20251001"
+from cents.llm_models import HAIKU_TAGGING as _LLM_MODEL  # noqa: E402
+
 _LLM_TEMPERATURE = 0.0
 
 _SYSTEM_PROMPT = (

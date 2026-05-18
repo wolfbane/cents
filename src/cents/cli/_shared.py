@@ -241,9 +241,17 @@ def generate_thesis_suggestion(
                 value = metadata.get("value")
 
                 if metric == "pe_ratio" and value:
-                    if value < 15:
+                    # Sector-adjusted thresholds match the FundamentalsAgent's
+                    # evidence-typing rule. Previously the CLI hardcoded
+                    # <15/>30 regardless of sector, so an Energy name (sector
+                    # median ~12) routinely surfaced as "fair" when the agent
+                    # saw it as "overvalued" — silent drift between the user-
+                    # facing suggestion and the engine's actual conviction.
+                    from cents.agents.fundamentals import pe_thresholds_for_sector
+                    pe_low, pe_high = pe_thresholds_for_sector(metadata.get("sector"))
+                    if value < pe_low:
                         suggestion["valuation"] = "undervalued"
-                    elif value > 30:
+                    elif value > pe_high:
                         suggestion["valuation"] = "overvalued"
                     else:
                         suggestion["valuation"] = "fair"

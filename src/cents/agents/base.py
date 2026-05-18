@@ -103,6 +103,31 @@ def make_provenance(
     }
 
 
+_METADATA_STRIP_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def sanitize_metadata_string(value: str | None, *, max_len: int = 80) -> str:
+    """Lightweight defence for short, FMP-sourced strings that flow into
+    Evidence content read by downstream LLMs (insider ``reportingName``,
+    company ``sector``, ``typeOfOwner``).
+
+    These are *not* the long untrusted blobs ``safe_delimit`` exists for
+    (news bodies, Federal Register text). They are short metadata fields
+    whose presence in evidence prose is the new injection vector — an
+    issuer who can put text into a Form 4 filer-name field gets a free
+    path into the LLM consumer. So: strip control chars, replace angle
+    brackets (the only HTML/XML-flavored injection vehicle that would
+    matter here), collapse whitespace, and truncate.
+    """
+    if not value:
+        return ""
+    cleaned = _METADATA_STRIP_RE.sub("", value).replace("<", "[").replace(">", "]")
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 1] + "…"
+    return cleaned
+
+
 def safe_delimit(text: str, tag: str) -> tuple[str, str, str]:
     """Wrap untrusted ``text`` in delimiters that include a per-call nonce.
 

@@ -33,7 +33,8 @@ from cents.models import EVENT_TAGS, EventPolarity
 
 logger = logging.getLogger(__name__)
 
-_LLM_MODEL = "claude-haiku-4-5-20251001"
+from cents.llm_models import HAIKU_TAGGING as _LLM_MODEL  # noqa: E402
+
 _LLM_TEMPERATURE = 0.0
 _RECENT_EVENT_WINDOW_DAYS = 14
 _MAX_PREMISE_TAGS = 5

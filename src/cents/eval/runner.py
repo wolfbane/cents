@@ -486,12 +486,10 @@ def run_eval(
     if sets in {"sentiment", "all"}:
         sentiment_res = run_sentiment_eval(limit=limit, anthropic_client=anthropic_client)
 
-    # Pull model name off whichever client we ended up using. We can't know
-    # without an Anthropic SDK probe what model was actually used — record the
-    # constant used by the two call sites.
-    from cents.factory.premise import _LLM_MODEL as PREMISE_MODEL  # noqa: WPS437
+    # Pull model name off the shared snapshot constant the agents read from.
+    from cents.llm_models import HAIKU_TAGGING
     return EvalResult(
         premise=premise_res,
         sentiment=sentiment_res,
-        model=PREMISE_MODEL,
+        model=HAIKU_TAGGING,
     )

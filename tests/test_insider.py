@@ -298,6 +298,91 @@ class TestInsiderAgent:
         # CEO should have higher conviction impact
         assert ceo_result.conviction_delta > dir_result.conviction_delta
 
+    def test_cluster_dedupes_on_cik_not_name_spelling(self):
+        """Cluster counter keys on CIK so the same person under multiple name
+        spellings doesn't inflate ``unique_insiders`` past the cluster threshold.
+        """
+        # Same CIK across three spellings — must count as ONE insider.
+        trades = [
+            self._make_trade(
+                tx_type="P-Purchase", name="BIALECKI ANDREW", role="officer: CEO",
+                shares=5000, price=100, date="2025-01-15",
+            ) | {"reportingCik": "0001234"},
+            self._make_trade(
+                tx_type="P-Purchase", name="Bialecki Andrew", role="officer: CEO",
+                shares=5000, price=100, date="2025-01-20",
+            ) | {"reportingCik": "0001234"},
+            self._make_trade(
+                tx_type="P-Purchase", name="Bialecki, Andrew J", role="officer: CEO",
+                shares=5000, price=100, date="2025-01-25",
+            ) | {"reportingCik": "0001234"},
+        ]
+        provider = self._create_mock_provider(trades=trades)
+        agent = InsiderAgent(fundamentals_provider=provider)
+        result = agent.research("TEST")
+        # 1 unique insider does not clear the cluster_buy threshold (>=2),
+        # so no "Cluster buying"/"Multiple insiders buying" evidence row.
+        cluster_rows = [
+            e for e in result.evidence
+            if "Cluster buying" in e.content or "Multiple insiders buying" in e.content
+        ]
+        assert cluster_rows == []
+
+    def test_cik_fallback_to_normalised_name(self):
+        """When reportingCik is absent, dedup falls back to a normalised name
+        so casing/punctuation/whitespace variance doesn't split one insider
+        into many. (Middle-initial variance is *not* normalised away — it
+        could collide on real distinct people; CIK is the right key when it
+        matters, and FMP's modern Form 4 feed carries it.)
+        """
+        # Same person, 3 spellings differing in case, comma, spacing.
+        trades = [
+            self._make_trade(
+                tx_type="S-Sale", name="BIALECKI ANDREW", role="officer: CEO",
+                shares=10000, price=100, date="2025-01-15",
+            ),
+            self._make_trade(
+                tx_type="S-Sale", name="Bialecki Andrew", role="officer: CEO",
+                shares=10000, price=100, date="2025-01-20",
+            ),
+            self._make_trade(
+                tx_type="S-Sale", name="Bialecki, Andrew", role="officer: CEO",
+                shares=10000, price=100, date="2025-01-25",
+            ),
+        ]
+        provider = self._create_mock_provider(trades=trades)
+        agent = InsiderAgent(fundamentals_provider=provider)
+        result = agent.research("TEST")
+        # Should aggregate to a single "Large C-suite sale" row, not 3.
+        sale_rows = [e for e in result.evidence if "Large C-suite sale" in e.content]
+        assert len(sale_rows) == 1
+        # Aggregated value = 3 * 10000 * 100 = $3M; row should reflect total.
+        assert "$3,000,000" in sale_rows[0].content
+
+    def test_role_promotes_to_max_weight_observed(self):
+        """If an insider's role appears as both 'director' and 'officer: CEO'
+        across the window, aggregation keeps the higher-weight role rather
+        than whichever filing FMP happened to return first.
+        """
+        trades = [
+            # Earlier filing as director (lower weight 0.7)
+            self._make_trade(
+                tx_type="P-Purchase", name="Promoted Person", role="director",
+                shares=10000, price=100, date="2025-01-01",
+            ) | {"reportingCik": "0009999"},
+            # Later filing after promotion to CEO (weight 1.0)
+            self._make_trade(
+                tx_type="P-Purchase", name="Promoted Person", role="officer: CEO",
+                shares=10000, price=100, date="2025-02-01",
+            ) | {"reportingCik": "0009999"},
+        ]
+        provider = self._create_mock_provider(trades=trades)
+        agent = InsiderAgent(fundamentals_provider=provider)
+        result = agent.research("TEST")
+        # Should fire the C-suite purchase path, not the director path.
+        c_suite_rows = [e for e in result.evidence if "C-suite purchase" in e.content]
+        assert len(c_suite_rows) >= 1
+
     def test_mixed_buys_and_sells(self):
         """Summary reflects mixed activity."""
         trades = [

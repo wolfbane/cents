@@ -22,6 +22,10 @@ MOMENTUM_STRONG_PCT = 10    # ±10% monthly change = strong momentum
 # Volume analysis
 VOLUME_AVG_PERIOD = 20      # Days for average volume calculation
 VOLUME_RECENT_PERIOD = 5    # Days for recent volume comparison
+# Volume amplifier deadband — within ±1.5% the 1W tape is flat enough that
+# the direction sign is precision noise. Outside the band, the amplifier
+# is directional (SUPPORTING on an up week, CONTRADICTING on a down week).
+VOLUME_DIR_DEADBAND_PCT = 1.5
 VOLUME_HIGH_RATIO = 1.5     # 1.5x average = high volume
 
 # Volatility analysis
@@ -202,20 +206,27 @@ class TechnicalAgent(BaseAgent):
         volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
 
         # Volume is a directional amplifier — the same high-volume row is
-        # bullish on an up week and bearish on a down week. Carry both pieces
-        # into the content so the [+]/[-] tag isn't unexplained.
+        # bullish on an up week and bearish on a down week. Within a small
+        # deadband around zero the 1W tape is flat enough that the direction
+        # sign is precision noise (a -0.02% 1W flipping the row CONTRADICTING
+        # is a measurement artifact); keep those rows NEUTRAL with a flat-tape
+        # note instead of letting the sign whipsaw.
         ev_type = EvidenceType.NEUTRAL
         vol_delta = 0.0
         vol_rule_note = None
         if volume_ratio > VOLUME_HIGH_RATIO:
-            if change_1w > 0:
+            if change_1w > VOLUME_DIR_DEADBAND_PCT:
                 ev_type = EvidenceType.SUPPORTING
                 vol_delta = 2
                 vol_rule_note = f"high volume on a +{change_1w:.1f}% 1W move"
-            else:
+            elif change_1w < -VOLUME_DIR_DEADBAND_PCT:
                 ev_type = EvidenceType.CONTRADICTING
                 vol_delta = -2
                 vol_rule_note = f"high volume on a {change_1w:.1f}% 1W move"
+            else:
+                vol_rule_note = (
+                    f"high volume on a flat 1W ({change_1w:+.1f}%) — ambiguous"
+                )
             summaries.append(f"High volume ({volume_ratio:.1f}x avg)")
 
         conviction_delta += vol_delta

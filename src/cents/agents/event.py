@@ -47,7 +47,8 @@ from cents.models import (
 
 logger = logging.getLogger(__name__)
 
-_LLM_MODEL = "claude-haiku-4-5-20251001"
+from cents.llm_models import HAIKU_TAGGING as _LLM_MODEL  # noqa: E402
+
 _LLM_TEMPERATURE = 0.0
 
 _SYSTEM_PROMPT = (
@@ -106,17 +107,18 @@ class EventAgent(BaseAgent):
 
         since = self._research_window(as_of)
         tags = thesis.premise_tags if thesis and thesis.premise_tags else None
-        events = event_repo.list_recent(since=since, tags=tags, limit=10)
-
         # No-thesis research path has no premise tags to filter on at the
         # repository level, so list_recent() returns the latest items
         # regardless of regime relevance. The LLM tagger only assigns tags
         # when a thesis depending on that regime variable would be materially
         # affected, so an untagged event = no regime relevance = noise (e.g.
-        # "Marine Mammals; Polar Bears in Beaufort Sea"). Drop those here so
-        # they don't pad evidence with [~] rows that look like signal.
+        # "Marine Mammals; Polar Bears in Beaufort Sea"). Fetch a wider window
+        # and filter post-hoc so that a tagged event at rank 11 isn't starved
+        # by ten untagged "Special Anchorage" rules sitting in positions 1-10.
+        fetch_limit = 50 if thesis is None else 10
+        events = event_repo.list_recent(since=since, tags=tags, limit=fetch_limit)
         if thesis is None:
-            events = [e for e in events if e.tags]
+            events = [e for e in events if e.tags][:10]
 
         if not events:
             return AgentResult(

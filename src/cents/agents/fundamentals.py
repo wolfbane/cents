@@ -2,7 +2,12 @@
 
 from datetime import date
 
-from cents.agents.base import BaseAgent, AgentResult, RECOVERABLE_EXCEPTIONS
+from cents.agents.base import (
+    BaseAgent,
+    AgentResult,
+    RECOVERABLE_EXCEPTIONS,
+    sanitize_metadata_string,
+)
 from cents.data import FundamentalsDataProvider, FundamentalsData
 from cents.models import EvidenceType, Thesis, ThesisDimension, Valuation
 
@@ -87,6 +92,37 @@ def _get_fundamentals_provider():
     return get_fundamentals_provider()
 
 
+def pe_thresholds_for_sector(sector: str | None) -> tuple[float, float]:
+    """Get P/E thresholds adjusted for sector.
+
+    Returns (low, high) where:
+    - P/E < low = undervalued (bullish)
+    - P/E > high = overvalued (bearish)
+
+    Exposed as a module-level function so the CLI thesis suggester can
+    apply the same sector-aware thresholds the agent uses, instead of
+    the previous unconditional ``<15 / >30`` heuristic.
+    """
+    if sector and sector in SECTOR_PE_MEDIANS:
+        median = SECTOR_PE_MEDIANS[sector]
+        return (median * SECTOR_PE_LOW_MULT, median * SECTOR_PE_HIGH_MULT)
+    return (DEFAULT_PE_LOW, DEFAULT_PE_HIGH)
+
+
+def margin_thresholds_for_sector(sector: str | None) -> tuple[float, float]:
+    if sector and sector in SECTOR_MARGIN_MEDIANS:
+        median = SECTOR_MARGIN_MEDIANS[sector]
+        return (median * SECTOR_MARGIN_LOW_MULT, median * SECTOR_MARGIN_HIGH_MULT)
+    return (DEFAULT_MARGIN_LOW, DEFAULT_MARGIN_HIGH)
+
+
+def de_thresholds_for_sector(sector: str | None) -> tuple[float, float]:
+    if sector and sector in SECTOR_DE_NORMS:
+        norm = SECTOR_DE_NORMS[sector]
+        return (norm * SECTOR_DE_LOW_MULT, norm * SECTOR_DE_HIGH_MULT)
+    return (DEFAULT_DE_LOW, DEFAULT_DE_HIGH)
+
+
 class FundamentalsAgent(BaseAgent):
     """Agent that analyzes fundamental company data."""
 
@@ -110,30 +146,13 @@ class FundamentalsAgent(BaseAgent):
         return self._provider
 
     def _get_pe_thresholds(self, sector: str | None) -> tuple[float, float]:
-        """Get P/E thresholds adjusted for sector.
-
-        Returns (low, high) where:
-        - P/E < low = undervalued (bullish)
-        - P/E > high = overvalued (bearish)
-        """
-        if sector and sector in SECTOR_PE_MEDIANS:
-            median = SECTOR_PE_MEDIANS[sector]
-            return (median * SECTOR_PE_LOW_MULT, median * SECTOR_PE_HIGH_MULT)
-        return (DEFAULT_PE_LOW, DEFAULT_PE_HIGH)
+        return pe_thresholds_for_sector(sector)
 
     def _get_margin_thresholds(self, sector: str | None) -> tuple[float, float]:
-        """Get profit margin thresholds adjusted for sector."""
-        if sector and sector in SECTOR_MARGIN_MEDIANS:
-            median = SECTOR_MARGIN_MEDIANS[sector]
-            return (median * SECTOR_MARGIN_LOW_MULT, median * SECTOR_MARGIN_HIGH_MULT)
-        return (DEFAULT_MARGIN_LOW, DEFAULT_MARGIN_HIGH)
+        return margin_thresholds_for_sector(sector)
 
     def _get_de_thresholds(self, sector: str | None) -> tuple[float, float]:
-        """Get debt/equity thresholds adjusted for sector."""
-        if sector and sector in SECTOR_DE_NORMS:
-            norm = SECTOR_DE_NORMS[sector]
-            return (norm * SECTOR_DE_LOW_MULT, norm * SECTOR_DE_HIGH_MULT)
-        return (DEFAULT_DE_LOW, DEFAULT_DE_HIGH)
+        return de_thresholds_for_sector(sector)
 
     def research(
         self, symbol: str, thesis: Thesis | None = None, as_of: date | None = None
@@ -172,7 +191,7 @@ class FundamentalsAgent(BaseAgent):
             ev_type = EvidenceType.NEUTRAL
             val_delta = 0.0
             pe_low, pe_high = self._get_pe_thresholds(data.sector)
-            sector_note = f" [vs {data.sector} median]" if data.sector else ""
+            sector_note = f" [vs {sanitize_metadata_string(data.sector)} median]" if data.sector else ""
 
             # Handle negative P/E (unprofitable company) separately
             if data.pe_ratio < 0:
@@ -236,7 +255,7 @@ class FundamentalsAgent(BaseAgent):
                     evidence_type=ev_type,
                     confidence=0.8,
                     dimension=ThesisDimension.VALUATION,
-                    metadata={"metric": "pe_ratio", "value": data.pe_ratio},
+                    metadata={"metric": "pe_ratio", "value": data.pe_ratio, "sector": data.sector},
                 )
             )
 
@@ -340,7 +359,7 @@ class FundamentalsAgent(BaseAgent):
             margin_low, margin_high = self._get_margin_thresholds(data.sector)
             ev_type = EvidenceType.NEUTRAL
             quality_delta = 0.0
-            sector_note = f" [vs {data.sector}]" if data.sector else ""
+            sector_note = f" [vs {sanitize_metadata_string(data.sector)}]" if data.sector else ""
             margin_rule_note = None
 
             if margin_decimal > margin_high:
@@ -378,7 +397,7 @@ class FundamentalsAgent(BaseAgent):
             de_low, de_high = self._get_de_thresholds(data.sector)
             ev_type = EvidenceType.NEUTRAL
             risk_delta = 0.0
-            sector_note = f" [vs {data.sector}]" if data.sector else ""
+            sector_note = f" [vs {sanitize_metadata_string(data.sector)}]" if data.sector else ""
             de_rule_note = None
 
             if d_e < de_low:
