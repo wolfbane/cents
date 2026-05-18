@@ -23,7 +23,11 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.1.0",
-    "anthropic>=0.40.0",
+    # Anthropic SDK upper bound is intentional — pre-1.0 minors can change
+    # response-block shapes (.content[0].text access patterns are scattered
+    # across agents) and retry semantics. Bumping past 1.0 should be a
+    # deliberate verified change, not a transitive resolver decision.
+    "anthropic>=0.50.0,<1.0",
 ]
 
 [project.urls]
@@ -35,9 +39,15 @@ Repository = "https://github.com/wolfbane/cents"
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    # freezegun for clock-sensitive tests — engine._has_invalidation_alert
+    # checks a 1-day staleness window; without freezegun the boundary is
+    # untestable and CI-time drift could flip behavior.
+    "freezegun>=1.5.0",
 ]
 broker = [
-    "alpaca-py>=0.21.0",
+    # alpaca-py changed Adjustment enum semantics across minors; the upper
+    # bound forces an explicit migration when a major drops.
+    "alpaca-py>=0.30.0,<1.0",
 ]
 [project.scripts]
 cents = "cents.cli:cli"
@@ -48,3 +58,15 @@ packages = ["src/cents"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/cents/py.typed" = "cents/py.typed"
+
+[tool.mypy]
+# Baseline config — strict=false because the codebase isn't fully annotated.
+# The py.typed marker makes type info available to downstream consumers of
+# cents.finance.* without forcing internal strictness today.
+python_version = "3.11"
+ignore_missing_imports = true
+strict = false
+warn_unused_ignores = true

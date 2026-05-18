@@ -8,7 +8,6 @@ import pytest
 from cents.agents import SentimentAgent
 from cents.agents.sentiment import (
     clear_sentiment_cache,
-    _article_score_cache,
     _extract_score_from_llm_response,
 )
 from cents.models import Thesis, EvidenceType
@@ -273,8 +272,8 @@ class TestCaching:
         agent._score_with_llm(article, "TEST", None)
         assert mock_client.messages.create.call_count == 1
 
-        # Check cache was populated
-        assert "https://example.com/cached" in _article_score_cache
+        # Check cache was populated on the agent instance
+        assert "https://example.com/cached" in agent._article_score_cache
 
     @patch("cents.agents.sentiment.get_settings")
     def test_cache_prevents_duplicate_llm_calls(self, mock_settings):
@@ -304,12 +303,13 @@ class TestCaching:
         assert mock_client.messages.create.call_count == 1
 
     def test_clear_cache(self):
-        """clear_sentiment_cache() empties the cache."""
-        _article_score_cache["test_url"] = {"score": 0.5}
-        assert len(_article_score_cache) == 1
+        """clear_sentiment_cache(agent) empties the per-instance cache."""
+        agent = SentimentAgent(anthropic_client=MagicMock())
+        agent._article_score_cache["test_url"] = {"score": 0.5}
+        assert len(agent._article_score_cache) == 1
 
-        clear_sentiment_cache()
-        assert len(_article_score_cache) == 0
+        clear_sentiment_cache(agent)
+        assert len(agent._article_score_cache) == 0
 
 
 class TestArticleFiltering:

@@ -276,11 +276,17 @@ class MacroAgent(BaseAgent):
     def _fetch_fred_series(
         self, series_id: str, as_of: date | None = None
     ) -> tuple[float | None, str | None]:
-        """Fetch latest value from FRED API with caching for historical data."""
-        # Build cache key params
+        """Fetch latest value from FRED API. Caches historical and current-day
+        reads — current-day cache keys carry today's date so cross-day stays
+        fresh while a single factory run (100+ symbols × 4 series) hits FRED
+        once per series instead of 400 times against the free-tier limit.
+        """
+        # Inject today's date into the cache key when as_of is None so the
+        # "latest" value is cached per calendar day (mirrors FMP daily_key).
+        cache_key_date = as_of.isoformat() if as_of else date.today().isoformat()
         cache_params = {
             "series_id": series_id,
-            "as_of": as_of.isoformat() if as_of else "latest",
+            "as_of": cache_key_date,
         }
 
         def do_fetch():
@@ -304,13 +310,7 @@ class MacroAgent(BaseAgent):
                 logger.debug("Failed URL: %s", _sanitize_url(url))
                 raise
 
-        # Only cache historical data (when as_of is in the past)
-        use_cache = as_of is not None and as_of < date.today()
-
-        if use_cache:
-            result = cached_request("fred", "observations", cache_params, do_fetch)
-        else:
-            result = do_fetch()
+        result = cached_request("fred", "observations", cache_params, do_fetch)
 
         if result:
             return result[0], result[1]

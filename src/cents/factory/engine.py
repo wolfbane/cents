@@ -78,62 +78,6 @@ def _is_paired(thesis: Thesis) -> bool:
     return thesis.cohort == ThesisCohort.NEUTRAL
 
 
-# Kelly window for calibrated sizing — outside this band, fall back to default.
-# Minimum margin above payoff-adjusted break-even probability before we open.
-# Setting this to a positive number ensures we don't open at zero edge.
-_CALIBRATION_KELLY_MARGIN = 0.02
-# Upper bound — when p is implausibly high, the model is probably overfit;
-# fall back to "no calibration signal" rather than trust it.
-_CALIBRATION_MAX_TRUSTED_P = 0.95
-
-
-def _break_even_probability(target_pct: float, stop_pct: float) -> float:
-    """Break-even P(correct) for an asymmetric payoff.
-
-    For target_pct=+10 and stop_pct=-5, payoff ratio b = 2; break-even p* =
-    |stop| / (target + |stop|) = 5 / 15 = 0.333. A calibrated probability
-    must clear this AND a small margin before opening makes positive-EV sense.
-    """
-    target = abs(target_pct)
-    stop = abs(stop_pct)
-    if target + stop <= 0:
-        return 0.5  # Degenerate input — fall back to coin-flip threshold.
-    return stop / (target + stop)
-
-
-def _calibration_passes_gate(
-    p: float | None,
-    *,
-    target_pct: float,
-    stop_pct: float,
-    margin: float = _CALIBRATION_KELLY_MARGIN,
-    max_trusted_p: float = _CALIBRATION_MAX_TRUSTED_P,
-) -> bool:
-    """Kelly gate: open only when p clears break-even + margin.
-
-    Bug B fix (PM/Risk round 3): the prior implementation multiplied
-    vol-scaled shares by a ``2p - 1`` Kelly multiplier — double-shrinking on
-    top of vol scaling and assuming even-money payoffs. The fix removes the
-    multiplier entirely and uses calibration as a GATE: vol-sized shares
-    pass through unchanged when the calibrated probability clears the
-    payoff-adjusted break-even threshold; the open is skipped otherwise.
-
-    Returns True (open) when:
-      - p is None (no calibration → no gating, preserves prior behavior)
-      - p clears ``break_even + margin`` AND p ≤ ``max_trusted_p``
-
-    Returns False (skip) when:
-      - p ≤ break_even + margin (insufficient edge given the bracket)
-      - p > max_trusted_p (model probably overfit; don't trust)
-    """
-    if p is None:
-        return True
-    if p > max_trusted_p:
-        return False
-    break_even = _break_even_probability(target_pct, stop_pct)
-    return p >= break_even + margin
-
-
 def _coerce_premise_classification(value) -> tuple[list[str], dict[str, str]]:
     """Adapt classify_premise_tags' return to (tags, direction).
 
@@ -636,6 +580,27 @@ class FactoryEngine:
         orchestrator_label = _olabel if isinstance(_olabel, str) else "llm"
         price_provider = self._make_price_provider()
 
+        # Batch-fetch latest prices for all symbols of currently-open factory
+        # positions ONCE per open-phase. _current_notional is called per
+        # candidate inside the universe loop; without this dict each call
+        # fired N fresh latest-quote requests against Alpaca (30 positions ×
+        # 100 candidates = 3000 quotes per run). The hedge ETF + underlying
+        # symbols are both included so paired-neutral notionals stay accurate.
+        open_position_symbols = sorted({
+            pos.symbol
+            for pos in self.position_repo.list(status=PositionStatus.OPEN)
+            if pos.symbol
+        })
+        position_marks: dict[str, float] = {}
+        if open_position_symbols and hasattr(price_provider, "get_latest_prices"):
+            try:
+                fetched = price_provider.get_latest_prices(open_position_symbols)
+                if isinstance(fetched, dict):
+                    position_marks = fetched
+            except Exception as e:  # noqa: BLE001 — batch fetch is best-effort
+                logger.debug("Batched price fetch failed; falling back per-symbol: %s", e)
+                position_marks = {}
+
         # Note (research-mode): we intentionally do NOT gate the open phase
         # on portfolio drawdown. The point of cents is to *record* what
         # happens to a labeled outcomes dataset, not to halt trading at
@@ -770,7 +735,7 @@ class FactoryEngine:
             # in cents/finance/liquidity.py remain available as utilities for
             # callers who want to study illiquidity as a feature of the
             # outcomes dataset, but the engine doesn't filter on them.
-            current_notional = self._current_notional(price_provider)
+            current_notional = self._current_notional(price_provider, marks=position_marks)
 
             preemption_target: Thesis | None = None
             if current_notional + position_cost > cfg.budget_usd:
@@ -869,8 +834,16 @@ class FactoryEngine:
                 held.add(t.hedge_symbol)
         return held
 
-    def _current_notional(self, price_provider) -> float:
-        """Sum of mark-to-market notional across factory-open positions."""
+    def _current_notional(
+        self, price_provider, *, marks: dict[str, float] | None = None
+    ) -> float:
+        """Sum of mark-to-market notional across factory-open positions.
+
+        When ``marks`` is supplied (the per-phase batched dict), use those
+        prices instead of calling ``get_latest_price`` per position.
+        Otherwise fall back to the per-symbol live fetch — needed so callers
+        outside ``_open_phase`` (analytics, ad-hoc inspection) keep working.
+        """
         total = 0.0
         positions = self.position_repo.list(status=PositionStatus.OPEN)
         thesis_cache: dict[str, Thesis | None] = {}
@@ -882,7 +855,9 @@ class FactoryEngine:
             thesis = thesis_cache[pos.thesis_id]
             if thesis is None or TAG_FACTORY not in thesis.tags:
                 continue
-            mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
+            mark = (marks or {}).get(pos.symbol)
+            if mark is None:
+                mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
             total += mark * pos.size
         return total
 
