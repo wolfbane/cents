@@ -4,21 +4,6 @@ description: "Register and inspect pre-registered research experiments."
 ---
 
 
-Register and inspect pre-registered research experiments.
-
-## Synopsis
-
-```bash
-cents experiment <subcommand> [OPTIONS] [ARGS]...
-```
-
-## Subcommands
-
-- `cents experiment finalize` — Finalize an experiment (lock its status and optionally record a verdict).
-- `cents experiment list` — List registered experiments.
-- `cents experiment register` — Register a new experiment, freezing the current factory.toml SHA.
-- `cents experiment status` — Show progress of an active experiment against its targets.
-
 ## Spec fields
 
 The YAML spec passed to `register` declares the hypothesis and the
@@ -44,6 +29,21 @@ The two pre-registered specs shipped in the repo are:
   target. Powers ~10pp gap detection at 80% power / α=0.05. Spec
   preamble explicitly says do not register until the pilot lands a
   positive directional read.
+
+Register and inspect pre-registered research experiments.
+
+## Synopsis
+
+```bash
+cents experiment <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents experiment finalize` — Finalize an experiment (lock its status and optionally record a verdict).
+- `cents experiment list` — List registered experiments.
+- `cents experiment register` — Register a new experiment, freezing the current factory.toml SHA.
+- `cents experiment status` — Show progress of an active experiment against its targets.
 
 ### `cents experiment finalize`
 

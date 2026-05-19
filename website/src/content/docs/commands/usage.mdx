@@ -4,26 +4,12 @@ description: "Report on LLM token usage and cost."
 ---
 
 
-Report on LLM token usage and cost.
+## Headroom semantics
 
-## Synopsis
-
-```bash
-cents usage <subcommand> [OPTIONS] [ARGS]...
-```
-
-## Subcommands
-
-- `cents usage list` — Show individual recent LLM calls, newest first.
-- `cents usage summary` — Aggregate LLM usage by agent, model, day, or operation.
-- `cents usage headroom` — Today's spend vs the daily cap, plus trailing-window cap pressure.
-
-### `cents usage headroom`
-
-Reports today's LLM spend against `max_llm_spend_usd_per_day` (set in
-**`~/.cents/config.toml`**, NOT `factory.toml` — easy mistake; the
-`CENTS_MAX_LLM_SPEND_USD_PER_DAY` env var also works). The status field
-takes one of four values:
+`cents usage headroom` reports today's LLM spend against
+`max_llm_spend_usd_per_day` set in **`~/.cents/config.toml`**, NOT
+`factory.toml` — easy mistake. The `CENTS_MAX_LLM_SPEND_USD_PER_DAY`
+env var also works. The status field takes one of four values:
 
 - `ok` — well under the cap
 - `approaching_cap` — within striking distance; consider raising the cap
@@ -34,19 +20,49 @@ takes one of four values:
 Pair with `cents usage summary --by agent` to find the agent driving the
 spend.
 
+Report on LLM token usage and cost.
+
+## Synopsis
+
+```bash
+cents usage <subcommand> [OPTIONS] [ARGS]...
+```
+
+## Subcommands
+
+- `cents usage headroom` — Show today's LLM spend vs the daily cap + recent cap-pressure days.
+- `cents usage list` — Show individual recent LLM calls, newest first.
+- `cents usage summary` — Aggregate LLM usage by agent, model, day, or operation.
+
+### `cents usage headroom`
+
+Show today's LLM spend vs the daily cap + recent cap-pressure days.
+
+    Designed for cron-grepping. The status field is the cron-friendly
+    signal: ``ok`` / ``approaching_cap`` / ``hit_cap`` / ``no_cap_configured``.
+
+    Example:
+        cents usage headroom --output json | jq -e '.status != "hit_cap"'
+
 **Synopsis**
 
 ```bash
 cents usage headroom [OPTIONS]
 ```
 
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output [text|json]` | `[text \| json]` | `text` |  |
+| `--warn-pct FLOAT` | `float` | `80.0` | Pct of cap considered 'approaching cap'. |
+| `--window-days INTEGER` | `integer` | `7` | Trailing window for the cap-pressure rollup. |
+
 **Example**
 
 ```bash
-cents usage headroom
-cents usage headroom --output json | jq .status
-```
 
+```
 
 ### `cents usage list`
 

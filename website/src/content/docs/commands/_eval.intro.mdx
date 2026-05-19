@@ -1,0 +1,16 @@
+The golden sets ship at 302 premise fixtures and 380 sentiment fixtures
+(>=6 per `EVENT_TAG`, prompt-injection negative controls, paired
+same-headline-opposite-direction fixtures). Output includes bootstrap CIs
+by default (1000 samples, deterministic at seed=17); text renders as
+`F1: 0.85 [0.81, 0.89]`, JSON exposes `*_ci` keys.
+
+`cents eval drift-check` reads the trailing 7 days from
+`~/.cents/data/eval_history/` and fires an `AlertType.MODEL_DRIFT` alert
+when today's F1 has fallen more than 5pp below the trailing-7 median.
+Cheap insurance against silent classifier regressions when the upstream
+Haiku snapshot bumps. Run it after `cents eval run --persist-history` so
+the trailing window has today's data point in it.
+
+```bash
+cents eval run --persist-history && cents eval drift-check
+```

@@ -31,7 +31,7 @@ Ruff and Black are on the roadmap but not yet wired up. For now, please match th
 
 ## Docs
 
-Per-command reference pages under `website/src/content/docs/commands/` are **auto-generated** from Click introspection by `scripts/generate_docs.py`. Hand-edits to those `*.mdx` files will be wiped on regeneration. To add narrative prose for a command, drop a sibling `<command>.intro.mdx` next to the generated file — its content is prepended into the page on regen.
+Per-command reference pages under `website/src/content/docs/commands/` are **auto-generated** from Click introspection by `scripts/generate_docs.py`. Hand-edits to those `*.mdx` files will be wiped on regeneration. To add narrative prose for a command, drop a sibling `_<command>.intro.mdx` next to the generated file — its content is prepended into the page on regen. The underscore prefix keeps Astro from rendering the intro source as a doc page of its own.
 
 ```bash
 python scripts/generate_docs.py    # regenerate after CLI changes

@@ -295,9 +295,14 @@ def _iter_top_level_commands(root: click.Group) -> Iterable[tuple[str, click.Com
 
 
 def _read_intro(commands_dir: Path, name: str) -> str | None:
-    """Read a sibling ``{name}.intro.mdx`` if present."""
+    """Read a sibling ``_{name}.intro.mdx`` if present.
+
+    The underscore prefix keeps the file out of Astro's content collection
+    glob (Starlight ignores ``_``-prefixed entries) so the intro source
+    doesn't try to render as its own doc page.
+    """
     try:
-        return (commands_dir / f"{name}.intro.mdx").read_text(encoding="utf-8")
+        return (commands_dir / f"_{name}.intro.mdx").read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
 

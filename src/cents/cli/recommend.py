@@ -280,7 +280,7 @@ def recommend(
     output: str | None,
     actionable: bool,
 ):
-    """Emit model signals (bullish / bearish / neutral) for open theses.
+    """Emit model signals (bullish / bearish / neutral) for open theses. Not investment advice.
 
     Evaluates each open thesis against current prices, conviction, and
     target/stop/expiry to produce a *model signal*. Signals are not

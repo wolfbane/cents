@@ -1,0 +1,10 @@
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Paper trading only">
+The broker commands are wired to Alpaca's **paper-trading** endpoints.
+Real-money trading is technically possible (Alpaca supports it) but
+[explicitly out of scope](/scope/) for this project — none of the
+controls a live trading system would require (vol-scaled sizing,
+drawdown gates, slippage and borrow modeling, broker reconciliation,
+lot accounting) exist. Do not point these commands at a live account.
+</Aside>

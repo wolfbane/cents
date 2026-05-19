@@ -4,6 +4,23 @@ description: "Run the LLM eval harness against golden sets."
 ---
 
 
+The golden sets ship at 302 premise fixtures and 380 sentiment fixtures
+(>=6 per `EVENT_TAG`, prompt-injection negative controls, paired
+same-headline-opposite-direction fixtures). Output includes bootstrap CIs
+by default (1000 samples, deterministic at seed=17); text renders as
+`F1: 0.85 [0.81, 0.89]`, JSON exposes `*_ci` keys.
+
+`cents eval drift-check` reads the trailing 7 days from
+`~/.cents/data/eval_history/` and fires an `AlertType.MODEL_DRIFT` alert
+when today's F1 has fallen more than 5pp below the trailing-7 median.
+Cheap insurance against silent classifier regressions when the upstream
+Haiku snapshot bumps. Run it after `cents eval run --persist-history` so
+the trailing window has today's data point in it.
+
+```bash
+cents eval run --persist-history && cents eval drift-check
+```
+
 Run the LLM eval harness against golden sets.
 
 ## Synopsis
@@ -14,38 +31,77 @@ cents eval <subcommand> [OPTIONS] [ARGS]...
 
 ## Subcommands
 
+- `cents eval calibrate-thresholds` — Search the threshold grid for the pair that maximises band-accuracy.
+- `cents eval drift-check` — Compare today's premise_f1 to the trailing-window median; fire a MODEL_DRIFT alert on regression.
 - `cents eval golden` — Inspect the golden fixture sets.
 - `cents eval run` — Run the eval against the live Anthropic API.
-- `cents eval drift-check` — Fire a `MODEL_DRIFT` alert if F1 has fallen more than 5pp below the trailing-7 median.
 
-The golden sets ship at 302 premise fixtures and 380 sentiment
-fixtures (>=6 per `EVENT_TAG`, prompt-injection negative controls,
-paired same-headline-opposite-direction fixtures). Output includes
-bootstrap CIs by default (1000 samples, deterministic at seed=17);
-text renders as `F1: 0.85 [0.81, 0.89]`, JSON exposes `*_ci` keys.
+### `cents eval calibrate-thresholds`
 
-### `cents eval golden`
+Search the threshold grid for the pair that maximises band-accuracy.
 
-Inspect the golden fixture sets. The only subcommand is `show`.
+    Hits the live Anthropic API once to score every sentiment-golden fixture.
+    Tests bypass this by injecting synthetic ``fixtures`` into
+    ``calibrate_thresholds()`` directly.
 
 **Synopsis**
 
 ```bash
-cents eval golden show --set [premise|sentiment] [OPTIONS]
+cents eval calibrate-thresholds [OPTIONS]
 ```
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--set [premise\|sentiment]` | `[premise \| sentiment]` |  | Which golden set to inspect (required). |
-| `--output/-o [text\|json]` | `[text \| json]` |  | Output format. |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format. |
+| `--limit INTEGER` | `integer` |  | Cap fixtures (handy for smoke-testing). |
+| `--dry-run` | `boolean` | `false` | Print the recommended thresholds without writing thresholds.json. |
 
 **Example**
 
 ```bash
-cents eval golden show --set premise
-cents eval golden show --set sentiment --output json
+cents eval calibrate-thresholds [OPTIONS]
+```
+
+### `cents eval drift-check`
+
+Compare today's premise_f1 to the trailing-window median; fire a MODEL_DRIFT alert on regression.
+
+**Synopsis**
+
+```bash
+cents eval drift-check [OPTIONS]
+```
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--threshold-pp FLOAT` | `float` | `5.0` | Drift threshold in percentage points (default: 5). |
+| `--window INTEGER` | `integer` | `7` | Trailing rows considered for the median (default: 7). |
+| `--output/-o [text|json]` | `[text \| json]` |  | Output format. |
+
+**Example**
+
+```bash
+cents eval drift-check [OPTIONS]
+```
+
+### `cents eval golden`
+
+Inspect the golden fixture sets.
+
+**Synopsis**
+
+```bash
+cents eval golden
+```
+
+**Example**
+
+```bash
+cents eval golden
 ```
 
 ### `cents eval run`
@@ -65,40 +121,15 @@ cents eval run [OPTIONS]
 | `--set [premise|sentiment|all]` | `[premise \| sentiment \| all]` | `all` | Which eval to run (default: all). |
 | `--limit INTEGER` | `integer` |  | Cap fixtures per set (handy for smoke-testing). |
 | `--output/-o [text|json]` | `[text \| json]` |  | Output format. |
+| `--gate` | `boolean` | `false` | Compare to baseline.json; exit non-zero on regression beyond tolerance. |
+| `--baseline-f1 FLOAT` | `float` |  | Override baseline F1 for one-off gating (otherwise reads baseline.json). |
+| `--baseline-brier FLOAT` | `float` |  | Override baseline Brier for one-off gating (otherwise reads baseline.json). |
+| `--tolerance-pp FLOAT` | `float` | `5.0` | Allowed metric drop in percentage points before --gate fails (default 5). |
+| `--persist-baseline` | `boolean` | `false` | Write today's metrics to baseline.json and stamp locked_at. |
+| `--persist-history` | `boolean` | `false` | Append today's metrics to ~/.cents/data/eval_history/YYYY-MM-DD.jsonl. |
 
 **Example**
 
 ```bash
 cents eval run [OPTIONS]
-
-# Persist today's metrics to ~/.cents/data/eval_history/YYYY-MM-DD.jsonl
-cents eval run --persist-history
-
-# CI gate: exits 2 on regression beyond tolerance (distinct from skipped=1)
-cents eval run --gate \
-  --baseline-f1 0.85 --baseline-brier 0.18 --tolerance-pp 3
-
-# Bake the current run as the new baseline (locked_at: null until you lock it)
-cents eval run --persist-baseline
-```
-
-### `cents eval drift-check`
-
-Reads the trailing 7 days from `~/.cents/data/eval_history/` and
-fires an `AlertType.MODEL_DRIFT` alert when today's F1 has fallen
-more than 5pp below the trailing-7 median. Cheap insurance against
-silent classifier regressions when the upstream Haiku snapshot
-bumps. Run it after `cents eval run --persist-history` so the
-trailing window has today's data point in it.
-
-**Synopsis**
-
-```bash
-cents eval drift-check [OPTIONS]
-```
-
-**Example**
-
-```bash
-cents eval run --persist-history && cents eval drift-check
 ```

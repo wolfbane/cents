@@ -4,6 +4,10 @@ description: "Run and inspect the autonomous factory loop."
 ---
 
 
+For running the factory on a recurring schedule (cron / launchd recipes,
+cost-cap discipline, editable-install drift), see the dedicated
+[Scheduling](/scheduling/) page.
+
 Run and inspect the autonomous factory loop.
 
 ## Synopsis
@@ -34,7 +38,8 @@ cents factory analyze [OPTIONS]
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--since-days INTEGER` | `integer` | `90` | Look-back window in days |
-| `--by TEXT` | `text` | `cohort` | Comma-separated grouping axes (cohort,discovery,regime). Multiple axes produce a cross-tab. Default: cohort. |
+| `--by TEXT` | `text` | `cohort` | Comma-separated grouping axes (cohort,discovery,regime,orchestrator). Multiple axes produce a cross-tab. Default: cohort. |
+| `--include-cost-per-outcome` | `boolean` | `false` | Augment each cell with LLM cost per opened / judged / correct thesis. Lets the operator see whether spend per outcome exceeds the average P&L per outcome (negative-EV pipeline check). Adds an `unattributable_cost_usd` top-level field for LLM spend that could not be attributed to any thesis in the window. |
 | `--output/-o [text|json]` | `[text \| json]` |  | Output format |
 
 **Example**
@@ -113,5 +118,3 @@ cents factory status [OPTIONS]
 ```bash
 cents factory status [OPTIONS]
 ```
-
-For running this on a cadence, see [Scheduling](/scheduling/).

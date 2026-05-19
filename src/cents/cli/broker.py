@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @default_subcommand("list")
 def broker(ctx):
-    """Alpaca broker integration."""
+    """Alpaca broker integration (paper-trading only)."""
 
 
 @broker.command("status")

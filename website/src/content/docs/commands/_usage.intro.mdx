@@ -1,0 +1,15 @@
+## Headroom semantics
+
+`cents usage headroom` reports today's LLM spend against
+`max_llm_spend_usd_per_day` set in **`~/.cents/config.toml`**, NOT
+`factory.toml` — easy mistake. The `CENTS_MAX_LLM_SPEND_USD_PER_DAY`
+env var also works. The status field takes one of four values:
+
+- `ok` — well under the cap
+- `approaching_cap` — within striking distance; consider raising the cap
+- `hit_cap` — pre-flight cost cap will block the next call
+- `no_cap_configured` — no daily cap set; `cents factory run --max-cost-usd N`
+  is the only enforcement
+
+Pair with `cents usage summary --by agent` to find the agent driving the
+spend.
