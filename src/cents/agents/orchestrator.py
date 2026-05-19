@@ -54,6 +54,12 @@ class OrchestratorAgent(BaseAgent):
     """Agent that orchestrates all research agents and synthesizes results."""
 
     name = "orchestrator"
+    # Cohort-analytics key — the factory stamps this on every opened thesis so
+    # `cents factory analyze --by orchestrator` can compare LLM-arm vs random-
+    # arm outcomes. RandomOrchestrator declares "random"; declaring "llm" here
+    # explicitly stops the engine's getattr fallback from silently absorbing a
+    # future rename or missing declaration.
+    orchestrator_label = "llm"
 
     def __init__(self):
         super().__init__()

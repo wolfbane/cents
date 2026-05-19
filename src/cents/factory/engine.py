@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import Protocol
 
 from cents.config import get_settings
+from cents.exceptions import CostCapExceeded
 from cents.db import (
     AlertRepository,
     FactoryRunRepository,
@@ -304,6 +305,16 @@ class FactoryEngine:
                     for p in proposals
                 ],
             }
+        except CostCapExceeded:
+            # Cost cap is an OPERATIONAL signal — the CLI / caller needs to
+            # see the non-zero exit so cron supervisors can fire. Persist
+            # the partial run first so analytics still see how far it got.
+            logger.warning("Factory run aborted by cost cap")
+            run.error = "cost_cap_exceeded"
+            run.completed_at = self._clock()
+            self._accumulate_llm_cost(run)
+            self.run_repo.create(run)
+            raise
         except Exception as exc:  # pragma: no cover — surfaced via run.error
             logger.exception("Factory run failed")
             run.error = str(exc)
@@ -601,6 +612,15 @@ class FactoryEngine:
                 logger.debug("Batched price fetch failed; falling back per-symbol: %s", e)
                 position_marks = {}
 
+        # Factory-thesis ID set + regime snapshot, both computed once per phase.
+        # Pre-Batch-I, _current_notional and _freeable_notional each did per-
+        # position thesis_repo.get() lookups, and the open-phase called
+        # capture_regime_snapshot per candidate — neither value changes mid-
+        # phase, so doing them once removes O(candidates × positions) DB
+        # round-trips and O(candidates) event-table scans.
+        factory_thesis_ids = {t.id for t in open_theses}
+        phase_regime_snapshot = capture_regime_snapshot(now=self._clock())
+
         # Note (research-mode): we intentionally do NOT gate the open phase
         # on portfolio drawdown. The point of cents is to *record* what
         # happens to a labeled outcomes dataset, not to halt trading at
@@ -628,6 +648,7 @@ class FactoryEngine:
                     premise_direction={},
                     discovery_source=discovery_source,
                     orchestrator_label=orchestrator_label,
+                    regime_snapshot=phase_regime_snapshot,
                 )
                 continue
 
@@ -674,6 +695,7 @@ class FactoryEngine:
                     premise_direction=premise_direction,
                     discovery_source=discovery_source,
                     orchestrator_label=orchestrator_label,
+                    regime_snapshot=phase_regime_snapshot,
                 )
                 continue
 
@@ -735,7 +757,11 @@ class FactoryEngine:
             # in cents/finance/liquidity.py remain available as utilities for
             # callers who want to study illiquidity as a feature of the
             # outcomes dataset, but the engine doesn't filter on them.
-            current_notional = self._current_notional(price_provider, marks=position_marks)
+            current_notional = self._current_notional(
+                price_provider,
+                marks=position_marks,
+                factory_thesis_ids=factory_thesis_ids,
+            )
 
             preemption_target: Thesis | None = None
             if current_notional + position_cost > cfg.budget_usd:
@@ -744,6 +770,7 @@ class FactoryEngine:
                     new_conviction,
                     needed_notional=current_notional + position_cost - cfg.budget_usd,
                     price_provider=price_provider,
+                    marks=position_marks,
                 )
                 if preemption_target is None:
                     # Budget locked and no candidate cheap enough — skip
@@ -758,6 +785,7 @@ class FactoryEngine:
                         premise_direction=premise_direction,
                         discovery_source=discovery_source,
                         orchestrator_label=orchestrator_label,
+                        regime_snapshot=phase_regime_snapshot,
                     )
                     continue
 
@@ -813,7 +841,11 @@ class FactoryEngine:
             positions_opened += new_open["positions_opened"]
             open_theses = self.thesis_repo.list(status=ThesisStatus.OPEN)
             open_theses = [t for t in open_theses if TAG_FACTORY in t.tags]
-            held_symbols = self._held_symbols(open_theses)
+            # Reapply skip_symbols (invalidated-this-run symbols + their hedge
+            # legs). Without this, a universe that contains the same symbol
+            # twice (screener+watchlist overlap is common) could reopen the
+            # invalidated symbol on its second appearance.
+            held_symbols = self._held_symbols(open_theses) | skip_symbols
             opened_this_run += 1
 
         return {
@@ -835,14 +867,18 @@ class FactoryEngine:
         return held
 
     def _current_notional(
-        self, price_provider, *, marks: dict[str, float] | None = None
+        self,
+        price_provider,
+        *,
+        marks: dict[str, float] | None = None,
+        factory_thesis_ids: set[str] | None = None,
     ) -> float:
         """Sum of mark-to-market notional across factory-open positions.
 
-        When ``marks`` is supplied (the per-phase batched dict), use those
-        prices instead of calling ``get_latest_price`` per position.
-        Otherwise fall back to the per-symbol live fetch — needed so callers
-        outside ``_open_phase`` (analytics, ad-hoc inspection) keep working.
+        ``marks`` (batched per-phase prices) and ``factory_thesis_ids`` (the
+        set of factory-tagged open thesis IDs) are both per-phase fast paths.
+        When either is omitted, fall back to per-call lookups so out-of-phase
+        callers (analytics, ad-hoc inspection) keep working.
         """
         total = 0.0
         positions = self.position_repo.list(status=PositionStatus.OPEN)
@@ -850,11 +886,15 @@ class FactoryEngine:
         for pos in positions:
             if not pos.thesis_id:
                 continue
-            if pos.thesis_id not in thesis_cache:
-                thesis_cache[pos.thesis_id] = self.thesis_repo.get(pos.thesis_id)
-            thesis = thesis_cache[pos.thesis_id]
-            if thesis is None or TAG_FACTORY not in thesis.tags:
-                continue
+            if factory_thesis_ids is not None:
+                if pos.thesis_id not in factory_thesis_ids:
+                    continue
+            else:
+                if pos.thesis_id not in thesis_cache:
+                    thesis_cache[pos.thesis_id] = self.thesis_repo.get(pos.thesis_id)
+                thesis = thesis_cache[pos.thesis_id]
+                if thesis is None or TAG_FACTORY not in thesis.tags:
+                    continue
             mark = (marks or {}).get(pos.symbol)
             if mark is None:
                 mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
@@ -868,6 +908,7 @@ class FactoryEngine:
         *,
         needed_notional: float,
         price_provider,
+        marks: dict[str, float] | None = None,
     ) -> Thesis | None:
         """Pick the lowest-conviction open thesis whose closure frees enough room.
 
@@ -882,22 +923,32 @@ class FactoryEngine:
             if new_conviction <= candidate.conviction + cfg.preemption_margin:
                 # The best candidate is too close in conviction — abort entirely
                 return None
-            freed = self._freeable_notional(candidate, price_provider)
+            freed = self._freeable_notional(candidate, price_provider, marks=marks)
             if freed >= needed_notional:
                 return candidate
         return None
 
-    def _freeable_notional(self, thesis: Thesis, price_provider) -> float:
+    def _freeable_notional(
+        self,
+        thesis: Thesis,
+        price_provider,
+        *,
+        marks: dict[str, float] | None = None,
+    ) -> float:
         """Sum mark-to-market notional across all positions tied to this thesis.
 
         For NEUTRAL theses this naturally includes both long and short legs since
-        both are linked via thesis_id.
+        both are linked via thesis_id. When ``marks`` is supplied, prices are
+        sourced from the per-phase batched dict instead of per-position live
+        quotes — same fast-path as _current_notional.
         """
         freed = 0.0
         for pos in self.position_repo.list(status=PositionStatus.OPEN):
             if pos.thesis_id != thesis.id:
                 continue
-            mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
+            mark = (marks or {}).get(pos.symbol)
+            if mark is None:
+                mark = price_provider.get_latest_price(pos.symbol) or pos.entry_price
             freed += mark * pos.size
         return freed
 
@@ -914,6 +965,7 @@ class FactoryEngine:
         premise_direction: dict[str, str],
         discovery_source: str | None,
         orchestrator_label: str,
+        regime_snapshot: dict | None = None,
     ) -> None:
         """Persist a rejected candidate to shadow_opens (cents-3mo).
 
@@ -934,7 +986,7 @@ class FactoryEngine:
                 primary_side=side,
                 premise_tags=premise_tags or [],
                 premise_direction=premise_direction or {},
-                regime_snapshot=capture_regime_snapshot(now=self._clock()),
+                regime_snapshot=regime_snapshot if regime_snapshot is not None else capture_regime_snapshot(now=self._clock()),
                 orchestrator_label=orchestrator_label,
                 experiment_id=self._active_experiment.id if self._active_experiment else None,
                 discovery_source=discovery_source,

@@ -217,7 +217,7 @@ def usage_headroom(output: str, warn_pct: float, window_days: int):
     if cap is None:
         click.echo(f"Today: ${today:.4f} spent (no cap configured)")
         click.echo(
-            "Set max_llm_spend_usd_per_day in ~/.cents/factory.toml or "
+            "Set max_llm_spend_usd_per_day in ~/.cents/config.toml or "
             "CENTS_MAX_LLM_SPEND_USD_PER_DAY env to enable headroom tracking."
         )
         return

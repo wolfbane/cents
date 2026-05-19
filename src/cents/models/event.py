@@ -121,14 +121,18 @@ class Event:
     ) -> bool:
         """True if this event invalidates a thesis with the given premise.
 
-        Requires (a) at least one shared tag AND (b) when per-tag direction is
-        supplied, the event's polarity to be *opposite* the thesis's direction
-        on at least one overlapping tag. Neutral or unclear polarities never
-        invalidate — only material-and-opposite events do.
+        Requires at least one shared tag, and:
 
-        If ``thesis_premise_direction`` is None or empty, falls back to the
-        legacy unsigned set-intersection behaviour so existing callers continue
-        to work.
+        * BULLISH or BEARISH events match only when the event polarity is
+          *opposite* the thesis's direction on at least one overlapping tag.
+        * NEUTRAL or UNCLEAR events fall back to legacy unsigned set-
+          intersection — an ambiguous-polarity tariff event that shares a
+          tag with a tariff-dependent thesis should NOT silently fail to
+          alert. The inline comment below documents this fail-open choice.
+
+        If ``thesis_premise_direction`` is None or empty (e.g. legacy theses
+        from before per-tag direction was stamped), the function also falls
+        back to unsigned set-intersection so older callers keep working.
         """
         if not thesis_premise_tags or not self.tags:
             return False

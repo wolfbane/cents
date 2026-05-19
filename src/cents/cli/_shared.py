@@ -79,9 +79,14 @@ def default_subcommand(default_command: str):
         @wraps(func)
         def wrapper(ctx: click.Context, *args, **kwargs):
             if ctx.invoked_subcommand is None:
-                default = ctx.command.get_command(ctx, default_command)
-                if default is not None:
-                    return ctx.invoke(default)
+                # The decorator stamps a click.Group via @click.group above,
+                # but the type system sees ctx.command as click.Command. Cast
+                # so mypy and any reader knows the get_command call is valid.
+                group = ctx.command
+                if isinstance(group, click.Group):
+                    default = group.get_command(ctx, default_command)
+                    if default is not None:
+                        return ctx.invoke(default)
             return func(ctx, *args, **kwargs)
 
         return wrapper

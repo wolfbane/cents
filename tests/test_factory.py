@@ -639,6 +639,44 @@ class TestCloseTriggers:
         ]
         assert open_for_T == []
 
+    def test_invalidated_symbol_stays_skipped_after_other_opens_same_run(self, factory_db):
+        """Round-5 regression: skip_symbols was dropped from held_symbols after
+        every successful open. If a universe contains the same invalidated
+        symbol twice (screener+watchlist overlap), the engine would reopen it
+        on its second appearance. Universe here: T (invalidated), A (clean),
+        T (duplicate). After closing+invalidating T and opening A, the second
+        T must remain skipped.
+        """
+        _seed_universe(["T", "A", "T"])
+        t = self._seed_open_thesis()
+        AlertRepository().create(Alert(
+            symbol="T",
+            alert_type=AlertType.PREMISE_INVALIDATION,
+            message="premise broken",
+            data={"thesis_id": t.id},
+            created_at=datetime.now(),
+        ))
+        trepo = ThesisRepository()
+        reloaded = trepo.get(t.id)
+        reloaded.updated_at = datetime.now()
+        trepo.update(reloaded)
+
+        engine = FactoryEngine(
+            config=_config(entry_threshold=1.0, max_new_per_run=10),
+            orchestrator=_orchestrator({"T": 9.0, "A": 9.0}),
+            price_provider=_price_provider({"T": 100.0, "A": 50.0}),
+        )
+        run = engine.run()
+        assert run.theses_closed == 1
+        # A opens (1 thesis); T's second appearance must still be skipped.
+        open_for_T = [
+            x for x in ThesisRepository().list(status=ThesisStatus.OPEN)
+            if x.symbol == "T"
+        ]
+        assert open_for_T == [], (
+            "skip_symbols must persist across successful opens in the same run"
+        )
+
     def test_invalidated_hedge_symbol_also_skipped(self, factory_db):
         """When a paired thesis is invalidated, its hedge symbol is also off-limits this run."""
         _seed_universe(["T", "XLK"])

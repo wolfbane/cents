@@ -591,8 +591,14 @@ def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
         """)
         conn.execute("DROP TABLE watchlist_old")
 
-        # Recreate indexes that were dropped with the tables
+        # Recreate indexes that were dropped with the tables — must mirror
+        # every CREATE INDEX in the SCHEMA constant for the affected tables,
+        # or DBs that went through this migration permanently lose them.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_thesis ON evidence(thesis_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_evidence_thesis_timestamp "
+            "ON evidence(thesis_id, timestamp)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON watchlist(symbol)")
 

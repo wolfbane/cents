@@ -27,7 +27,7 @@ import math
 import os
 import threading
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -93,17 +93,23 @@ def peek_cost_usd(call_kwargs: dict[str, Any]) -> float:
 
 
 def today_cost_usd(*, today: date | None = None) -> float:
-    """Sum priced cost over today's `llm_usage` rows. Returns 0.0 on error."""
+    """Sum priced cost over today's `llm_usage` rows. Returns 0.0 on error.
+
+    Queries with ``since=midnight, limit=None`` so the cap remains accurate
+    once daily call volume exceeds whatever in-memory limit a global scan
+    would impose. Pre-Batch-I this used ``list_recent(limit=10000)`` with no
+    ``since`` filter, which silently undercounted on the days that needed it
+    most (high-volume runs are exactly when the cap should bite).
+    """
+    anchor = today or date.today()
+    midnight = datetime.combine(anchor, time.min)
     try:
-        rows = LLMUsageRepository().list_recent(limit=10000)
+        rows = LLMUsageRepository().list_recent(since=midnight, limit=None)
     except Exception as e:  # noqa: BLE001 — bookkeeping must not crash callers
         logger.debug("today_cost_usd failed: %s", e)
         return 0.0
-    anchor = today or date.today()
     total = 0.0
     for row in rows:
-        if row.called_at.date() != anchor:
-            continue
         cost = estimate_cost_usd(
             row.model,
             row.input_tokens or 0,
@@ -239,8 +245,10 @@ def get_daily_cap() -> float | None:
     """Public accessor for the configured daily LLM spend cap.
 
     Resolves from ``CENTS_MAX_LLM_SPEND_USD_PER_DAY`` env first, then
-    ``max_llm_spend_usd_per_day`` in ``~/.cents/factory.toml``. Returns
-    ``None`` when no cap is configured.
+    ``max_llm_spend_usd_per_day`` in ``~/.cents/config.toml``. Returns
+    ``None`` when no cap is configured. (The daily cap is a global config
+    setting, NOT a per-experiment factory.toml setting — putting it in
+    factory.toml silently does nothing.)
     """
     return _get_daily_cap()
 

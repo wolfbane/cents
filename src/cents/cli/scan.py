@@ -267,7 +267,11 @@ def _print_scan_summary(alerts_generated: int, quiet: bool, batch_suggest: bool,
         click.echo("=" * 50 + "\n")
         from .recommend import get_recommendations, Action
         recommendations = get_recommendations()
-        actionable = [r for r in recommendations if r.action != Action.HOLD]
+        # "Actionable" = anything other than a NEUTRAL signal. Pre-Batch-I
+        # this filtered on Action.HOLD which doesn't exist on the enum —
+        # the dead reference passed at runtime only because no test forced
+        # the --recommend path on a non-empty recommendation set.
+        actionable = [r for r in recommendations if r.action != Action.NEUTRAL]
 
         if not actionable:
             click.echo("No actionable recommendations.")
