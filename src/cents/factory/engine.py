@@ -1045,11 +1045,20 @@ class FactoryEngine:
         Buckets on ``(tag, direction)`` instead of bare ``tag``. When a thesis
         has no recorded direction for a tag, it counts under the legacy
         ``(tag, "*")`` bucket so behavior is preserved for older rows.
+
+        Random-arm theses are excluded from the count. Their premise_tags come
+        from ``_sector_fallback_tags`` (all 5 sector tags per open) and would
+        otherwise saturate the cap after 2 sector-mates, gating subsequent
+        LLM-arm opens on the same sector. The cap exists to throttle LLM-arm
+        clustering on the same regime variable; random-arm sector tags carry
+        no signal-driven clustering by construction.
         """
         if not candidate_tags:
             return False
         counts: dict[tuple[str, str], int] = {}
         for t in open_theses:
+            if getattr(t, "orchestrator_label", "llm") != "llm":
+                continue
             t_dir = t.premise_direction or {}
             for tag in t.premise_tags:
                 key = (tag, t_dir.get(tag, "*"))

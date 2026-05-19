@@ -255,6 +255,52 @@ class TestPremiseConcentration:
         assert run.theses_opened == 1
 
 
+    def test_random_arm_theses_dont_count_toward_cap(self, factory_db, monkeypatch):
+        """Random-arm theses carry sector-fallback tags (all 5 XLK tags per
+        open) and would otherwise saturate the per-tag cap after 2 sector-
+        mates, gating subsequent LLM-arm opens on the same sector. The cap
+        exists to throttle LLM-arm clustering; random-arm tags carry no
+        signal-driven clustering. They must not count.
+        """
+        trepo = ThesisRepository()
+        # Two RANDOM-arm theses with all 5 XLK fallback tags — would saturate
+        # the cap pre-fix.
+        for sym in ("A", "B"):
+            trepo.create(Thesis(
+                title=f"factory:{sym}",
+                symbol=sym,
+                tags=[TAG_FACTORY],
+                premise_tags=["ai_capex", "tariffs.china", "semis_policy",
+                              "antitrust", "export_controls"],
+                premise_direction={t: "positive" for t in
+                                   ["ai_capex", "tariffs.china", "semis_policy",
+                                    "antitrust", "export_controls"]},
+                orchestrator_label="random",
+            ))
+
+        _seed_universe(["C"])
+        # LLM-arm candidate C has a legit thesis-specific tag overlapping
+        # with the random arm's fallback tags.
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **kw: (["ai_capex"], {"ai_capex": "positive"}),
+        )
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                max_per_premise_tag=2,
+                budget_usd=100000.0,
+                target_positions=20,
+            ),
+            orchestrator=_orchestrator({"C": 6.0}),
+            price_provider=_price_provider({"C": 100.0}),
+        )
+        run = engine.run()
+        # C must open — pre-fix the random arm's 2 theses would have hit cap.
+        assert run.theses_opened == 1
+
+
 class TestDirectionAwareOpening:
     def test_bearish_signal_opens_short_directional(self, factory_db):
         _seed_universe(["JPM"])
