@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from datetime import date
+from datetime import date, datetime, time, timezone
 from urllib.request import urlopen, Request
 from urllib.parse import quote
 
@@ -145,6 +145,65 @@ SENTIMENT_CONFIG = {
         "negative_threshold": -3,
     },
 }
+
+
+def _apply_news_cutoff(articles: list[dict]) -> list[dict]:
+    """Drop articles whose ``publishedAt`` is on/after today's market open.
+
+    The cutoff is configured via ``news_cutoff_time`` in ~/.cents/factory.toml
+    (format "HH:MM", e.g. "09:30"). Empty / unset = no filter (back-compat).
+    The cutoff is interpreted as US/Eastern wall-clock; articles are matched
+    by their ``publishedAt`` UTC timestamp converted to ET.
+
+    This is the documented mitigation for the lookahead-audit failure mode
+    "LLM contaminated by intraday price-move language." Without this, a
+    same-day article describing the morning's move could leak forward-return
+    information into the sentiment signal.
+
+    Failures (unparseable cutoff, missing publishedAt, bad date) fall back
+    to keeping the article — research mode is leaky by default; the cutoff
+    is an opt-in defence, not a hard gate.
+    """
+    if not articles:
+        return articles
+    try:
+        from cents.factory.config import load_factory_config
+        cfg = load_factory_config()
+        cutoff_str = (cfg.news_cutoff_time or "").strip()
+        if not cutoff_str:
+            return articles
+        hh, mm = cutoff_str.split(":")
+        cutoff_h, cutoff_m = int(hh), int(mm)
+    except Exception:  # noqa: BLE001 — best-effort
+        return articles
+
+    # ET = UTC-4 (DST) / UTC-5 (standard). For research-grade exact-cutoff
+    # behaviour, treat the cutoff as a fixed UTC-5 wall clock and document
+    # the limitation. The pipeline isn't doing intraday timing-sensitive
+    # work; a one-hour DST seam at the boundary is acceptable.
+    et = timezone(_timedelta_hours(-5))
+    today_et = datetime.now(et).date()
+    cutoff_dt = datetime.combine(today_et, time(cutoff_h, cutoff_m), tzinfo=et)
+
+    kept: list[dict] = []
+    for article in articles:
+        raw = article.get("publishedAt")
+        if not raw:
+            kept.append(article)
+            continue
+        try:
+            # NewsAPI publishedAt is ISO 8601 with Z suffix → UTC.
+            published = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if published.astimezone(et) < cutoff_dt:
+                kept.append(article)
+        except (ValueError, TypeError):
+            kept.append(article)
+    return kept
+
+
+def _timedelta_hours(hours: int):
+    from datetime import timedelta
+    return timedelta(hours=hours)
 
 
 def _resolve_llm_thresholds() -> dict[str, float]:
@@ -329,6 +388,7 @@ class SentimentAgent(BaseAgent):
 
         try:
             articles = self._with_retries(lambda: self._fetch_news(symbol))
+            articles = _apply_news_cutoff(articles)
             if not articles:
                 return AgentResult(
                     evidence=[],

@@ -982,6 +982,7 @@ class ExperimentRepository(BaseRepository):
             ModelField("minimum_calendar_days"),
             ModelField("frozen_config_sha"),
             ModelField("frozen_config_json"),
+            ModelField("frozen_universe_json"),
             ModelField("started_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw)),
             ModelField("finalized_at", serialize=_isoformat, deserialize=lambda raw: datetime.fromisoformat(raw) if raw else None),
             ModelField("verdict_json"),

@@ -247,6 +247,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     minimum_calendar_days INTEGER NOT NULL DEFAULT 14,
     frozen_config_sha TEXT NOT NULL,
     frozen_config_json TEXT NOT NULL,
+    frozen_universe_json TEXT NOT NULL DEFAULT '',
     started_at TEXT NOT NULL,
     finalized_at TEXT,
     verdict_json TEXT,
@@ -362,6 +363,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         # Per-experiment calendar-day floor on verdict_ready (pilot uses 30, full uses 90).
         # Default 14 preserves back-compat with experiments registered before this column existed.
         ("experiments", "minimum_calendar_days", "ALTER TABLE experiments ADD COLUMN minimum_calendar_days INTEGER NOT NULL DEFAULT 14"),
+        # Frozen universe member list at experiment registration. Empty string
+        # = no freeze (legacy or non-screener universe).
+        ("experiments", "frozen_universe_json", "ALTER TABLE experiments ADD COLUMN frozen_universe_json TEXT NOT NULL DEFAULT ''"),
         # Evidence provenance columns linking to the LLM call (added in v0.10).
         # Run BEFORE and AFTER the FK migration since that migration may recreate
         # the evidence table with the legacy column set.

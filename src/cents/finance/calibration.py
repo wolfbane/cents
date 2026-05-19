@@ -107,19 +107,46 @@ class CalibrationModel:
 # ---- feature extraction -------------------------------------------------
 
 
-def _extract_features(thesis: Thesis, delta: float | None = None) -> dict[str, float]:
+def _extract_features(
+    thesis: Thesis,
+    delta: float | None = None,
+    *,
+    horizon_days: int | None = None,
+) -> dict[str, float]:
     """Pull numeric features out of a thesis (or a candidate delta + thesis).
 
     For prediction-time use the caller can pass `delta` overriding the value
-    from the (still-unsaved) thesis when conviction has not been persisted.
+    from the (still-unsaved) thesis when conviction has not been persisted,
+    and ``horizon_days`` overriding the persisted horizon (factory engine
+    passes the configured default before the thesis row is written).
     """
     snapshot = thesis.regime_snapshot or {}
     aggregate_delta = delta if delta is not None else _thesis_implied_delta(thesis)
+    horizon = horizon_days if horizon_days is not None else _thesis_horizon_days(thesis)
     return {
         "aggregate_conviction_delta": float(aggregate_delta or 0.0),
         "regime_net_polarity": float(snapshot.get("net_polarity") or 0.0),
         "regime_event_count": float(snapshot.get("recent_event_count") or 0.0),
+        # Horizon: log1p so 30/60/90-day brackets don't trivially dominate
+        # the linear coefficient. A short-horizon thesis closes faster and
+        # is over-represented in the training set by count; this feature
+        # lets the model account for that explicitly.
+        "horizon_days_log1p": math.log1p(max(0, horizon)),
     }
+
+
+def _thesis_horizon_days(thesis: Thesis) -> int:
+    """Best-effort horizon in days from a Thesis. Falls back to 30 (the
+    factory default) when nothing is persisted — better than treating an
+    unset horizon as zero."""
+    if getattr(thesis, "horizon_days", None):
+        return int(thesis.horizon_days)
+    horizon_end = getattr(thesis, "horizon_end", None)
+    created_at = getattr(thesis, "created_at", None)
+    if horizon_end and created_at:
+        delta = horizon_end - created_at
+        return max(1, int(delta.total_seconds() / 86400))
+    return 30
 
 
 def _thesis_implied_delta(thesis: Thesis) -> float:
@@ -141,30 +168,55 @@ def _one_hot(row: dict[str, str | None], prefix: str, value: str | None) -> None
     row[f"{prefix}_{safe}"] = 1.0
 
 
-def _build_feature_rows(theses: Iterable[Thesis]) -> tuple[list[dict[str, float]], list[int]]:
-    """Turn closed theses into (X rows, y labels).
+def _build_feature_rows(
+    theses: Iterable[Thesis],
+) -> tuple[list[dict[str, float]], list[int], list[datetime]]:
+    """Turn closed theses into (X rows, y labels, closed_at timestamps).
 
-    Numeric features are always present. Categorical features (discovery,
-    cohort) are emitted as 1.0 indicators in the row dict; the caller is
-    responsible for unioning feature names across rows.
+    Random-arm theses are filtered out: their conviction_delta is uniform
+    noise by construction, so including them in the training set shrinks
+    the LLM-arm coefficient toward zero — the model becomes a blended
+    "what happens to an opened thesis" model, not "what happens given the
+    LLM's signal." We calibrate the LLM arm; random-arm theses get no
+    predicted p_correct.
+
+    Numeric features always present. Categorical features (discovery,
+    cohort) emit as 1.0 indicators; caller unions feature names across rows.
+    The third return value is the per-row close timestamp so callers can
+    do a time-based holdout split (regime features otherwise leak under
+    a random split).
     """
     rows: list[dict[str, float]] = []
     labels: list[int] = []
+    closed_at: list[datetime] = []
     for t in theses:
         if t.outcome not in (ThesisOutcome.CORRECT, ThesisOutcome.INCORRECT):
+            continue
+        if getattr(t, "orchestrator_label", "llm") != "llm":
             continue
         row = _extract_features(t)
         _one_hot(row, "discovery", t.discovery_source)
         _one_hot(row, "cohort", t.cohort.value if t.cohort is not None else None)
         rows.append(row)
         labels.append(1 if t.outcome == ThesisOutcome.CORRECT else 0)
-    return rows, labels
+        # Use closed_at if available, else updated_at, else created_at — the
+        # holdout split needs SOMETHING monotonic to order rows by.
+        ts = getattr(t, "closed_at", None) or getattr(t, "updated_at", None) or getattr(t, "created_at", None)
+        closed_at.append(ts if isinstance(ts, datetime) else datetime.now())
+    return rows, labels, closed_at
 
 
 def _dense_matrix(
     rows: list[dict[str, float]],
 ) -> tuple[list[list[float]], list[str]]:
-    """Pivot a list of sparse feature dicts into a dense matrix + feature names."""
+    """Pivot a list of sparse feature dicts into a dense matrix + feature names.
+
+    Drops zero-variance columns before returning — the diagonal-Newton IRLS
+    fitter overshoots when correlated constant features fight the intercept
+    over the same direction. Removing constants is a clean fix and the
+    information loss is zero (a feature that never varies in training carries
+    no signal anyway; predict-time falls back to the column's absence).
+    """
     feature_names: list[str] = []
     seen: set[str] = set()
     for r in rows:
@@ -175,6 +227,16 @@ def _dense_matrix(
     matrix: list[list[float]] = []
     for r in rows:
         matrix.append([float(r.get(k, 0.0)) for k in feature_names])
+    # Drop zero-variance columns.
+    if matrix:
+        keep_idx: list[int] = []
+        for j in range(len(feature_names)):
+            col = [row[j] for row in matrix]
+            if max(col) != min(col):
+                keep_idx.append(j)
+        if len(keep_idx) != len(feature_names):
+            feature_names = [feature_names[j] for j in keep_idx]
+            matrix = [[row[j] for j in keep_idx] for row in matrix]
     return matrix, feature_names
 
 
@@ -297,34 +359,33 @@ def fit_calibration(
     Returns ``None`` when fewer than ``min_observations`` rows have a
     decided outcome — the model would just memorise noise.
 
-    Bug F (r3): when ``holdout_pct > 0``, a random ``holdout_pct`` fraction
-    of the observations is held out, the model is fit on the remainder, and
-    ``brier_holdout`` / ``auc_holdout`` carry the honest generalisation
-    metrics. The original ``brier_score`` / ``auc`` fields remain in-sample
-    so existing callers continue to work. Holdout split is reproducible
-    via ``holdout_seed``.
+    When ``holdout_pct > 0``, the holdout is the most recent ``holdout_pct``
+    fraction of rows by ``closed_at`` (time-based, not random). Regime
+    features (regime_net_polarity, regime_event_count) are correlated within
+    a time window — adjacent-in-time theses share near-identical regime
+    snapshots — so a random split lets the model effectively "see the
+    future." A trailing-edge holdout gives honest generalisation metrics.
+    ``holdout_seed`` is no longer used but kept for back-compat.
     """
-    rows, labels = _build_feature_rows(closed_theses)
+    rows, labels, closed_at = _build_feature_rows(closed_theses)
     if len(rows) < min_observations:
         return None
 
     matrix, feature_names = _dense_matrix(rows)
 
-    # Optional holdout split (Bug F).
+    # Time-based holdout split.
     holdout_matrix: list[list[float]] = []
     holdout_labels: list[int] = []
     if holdout_pct > 0.0:
-        import random
         n = len(matrix)
         n_holdout = max(1, int(round(n * holdout_pct)))
-        rng = random.Random(holdout_seed)
-        indices = list(range(n))
-        rng.shuffle(indices)
-        holdout_idx = set(indices[:n_holdout])
-        train_matrix = [m for i, m in enumerate(matrix) if i not in holdout_idx]
-        train_labels = [l for i, l in enumerate(labels) if i not in holdout_idx]
-        holdout_matrix = [m for i, m in enumerate(matrix) if i in holdout_idx]
-        holdout_labels = [l for i, l in enumerate(labels) if i in holdout_idx]
+        # Sort indices oldest→newest so the trailing-edge slice is holdout.
+        order = sorted(range(n), key=lambda i: closed_at[i])
+        train_idx = set(order[: n - n_holdout])
+        train_matrix = [m for i, m in enumerate(matrix) if i in train_idx]
+        train_labels = [l for i, l in enumerate(labels) if i in train_idx]
+        holdout_matrix = [m for i, m in enumerate(matrix) if i not in train_idx]
+        holdout_labels = [l for i, l in enumerate(labels) if i not in train_idx]
         # Refuse to fit if either split is too small to be informative.
         if len(train_matrix) < min_observations:
             return None
@@ -429,6 +490,7 @@ def build_predict_features(
     regime_snapshot: dict | None,
     discovery_source: str | None,
     cohort: str | None,
+    horizon_days: int | None = None,
 ) -> dict[str, float]:
     """Build the predict-time feature dict, matching `_build_feature_rows`."""
     snapshot = regime_snapshot or {}
@@ -436,6 +498,7 @@ def build_predict_features(
         "aggregate_conviction_delta": float(delta),
         "regime_net_polarity": float(snapshot.get("net_polarity") or 0.0),
         "regime_event_count": float(snapshot.get("recent_event_count") or 0.0),
+        "horizon_days_log1p": math.log1p(max(0, horizon_days if horizon_days is not None else 30)),
     }
     if discovery_source:
         safe = str(discovery_source).replace(" ", "_")
@@ -460,7 +523,7 @@ def reliability_buckets(
     Returns a list of dicts (one per non-empty bucket) ordered by bucket
     centre. Buckets are uniform over [0, 1].
     """
-    rows, labels = _build_feature_rows(closed_theses)
+    rows, labels, _ = _build_feature_rows(closed_theses)
     if not rows:
         return []
     preds = [model.predict(r) for r in rows]

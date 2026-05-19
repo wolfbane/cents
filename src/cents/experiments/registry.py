@@ -8,9 +8,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from cents.db import ExperimentRepository, ThesisRepository
+from cents.db import ExperimentRepository, ThesisRepository, UniverseRepository
 from cents.factory.config import get_factory_config_path, load_factory_config
-from cents.models import Experiment, ThesisStatus
+from cents.factory.universe_resolver import resolve_symbols
+from cents.models import Experiment, ThesisStatus, UniverseSource
 
 
 REQUIRED_FIELDS = ("name", "hypothesis", "primary_metric", "minimum_n_per_arm")
@@ -28,29 +29,73 @@ class ExperimentSpecError(ValueError):
     """Raised when an experiment YAML/dict is malformed."""
 
 
+def _gather_behavioural_inputs(cfg) -> dict:
+    """Return the full set of inputs that determine engine behaviour.
+
+    Pre-Batch-J the experiment SHA hashed only ``FactoryConfig``. That left
+    several real behaviour-shifters invisible to the audit field: a Haiku
+    snapshot rollover, a one-line prompt-template edit, a screener-config
+    change, or an addition to ``EVENT_TAGS`` could all change what the
+    pipeline does mid-experiment without budging the SHA. Hashing all of
+    them as a single canonical payload makes the audit honest.
+    """
+    from cents.llm_models import HAIKU_TAGGING
+    from cents.models import EVENT_TAGS
+    from cents.agents.sentiment import _SYSTEM_PROMPT as SENTIMENT_PROMPT
+    from cents.agents.event import _SYSTEM_PROMPT as EVENT_PROMPT
+    from cents.factory.premise import _SYSTEM_PROMPT as PREMISE_PROMPT
+
+    payload: dict = {
+        "factory_config": dataclasses.asdict(cfg),
+        "model_snapshot": HAIKU_TAGGING,
+        "prompt_sha256": {
+            "sentiment": hashlib.sha256(SENTIMENT_PROMPT.encode("utf-8")).hexdigest(),
+            "event": hashlib.sha256(EVENT_PROMPT.encode("utf-8")).hexdigest(),
+            "premise": hashlib.sha256(PREMISE_PROMPT.encode("utf-8")).hexdigest(),
+        },
+        "event_tags": sorted(EVENT_TAGS),
+    }
+    # Universe screener config (when the resolved universe is screener-sourced).
+    try:
+        from cents.db import UniverseRepository
+        urepo = UniverseRepository()
+        universe = urepo.get_default() if cfg.universe == "default" else urepo.get_by_name(cfg.universe)
+        if universe is not None:
+            payload["universe"] = {
+                "name": universe.name,
+                "source": universe.source.value if hasattr(universe.source, "value") else str(universe.source),
+                "source_config": universe.source_config,
+            }
+    except Exception:  # noqa: BLE001 — best-effort
+        payload["universe"] = None
+    return payload
+
+
 def compute_factory_config_sha(config_path: Path | None = None) -> tuple[str, str]:
-    """Return ``(sha256, raw_text)`` capturing the *effective* factory config.
+    """Return ``(sha256, raw_text)`` capturing the *effective* factory config
+    AND adjacent behaviour-shifters (model snapshot, prompt templates,
+    screener config, EVENT_TAGS vocabulary).
 
-    Hashes the resolved ``FactoryConfig`` dataclass (canonical JSON via
-    ``dataclasses.asdict`` + sorted keys), not the toml file text. A user
-    hand-editing the toml to omit a key used to leave the file-text SHA
-    stable while changing behavior; the resolved-config SHA catches it.
+    The audit field is the SHA of the whole behavioural payload, not just
+    the toml file text. Hand-editing the toml, rolling a model snapshot,
+    edting a prompt, or adding a vocabulary tag all bump the SHA — keeping
+    the experiment-registry "frozen" claim honest.
 
-    ``raw_text`` is also kept (toml when present, or the JSON snapshot
-    otherwise) so the experiments table can show a human-readable view of
-    what was registered. The SHA is the load-bearing audit field.
+    ``raw_text`` is kept (toml when present, JSON snapshot otherwise) so
+    the experiments table can show a human-readable view of what was
+    registered.
     """
     path = config_path or get_factory_config_path()
     cfg = load_factory_config(path) if path.exists() else load_factory_config()
-    effective = dataclasses.asdict(cfg)
-    canonical = json.dumps(effective, sort_keys=True, separators=(",", ":"))
+    payload = _gather_behavioural_inputs(cfg)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     if path.exists():
         raw = path.read_text()
     else:
         raw = (
             "# (no factory.toml present — defaults in effect)\n"
-            f"# effective_config = {canonical}\n"
+            f"# behavioural_payload_sha256 = {sha}\n"
         )
     return sha, raw
 
@@ -155,6 +200,11 @@ def register_experiment(
         )
 
     sha, raw = compute_factory_config_sha(config_path=config_path)
+    # Resolve and stamp the universe member list. Without this, SCREENER
+    # universes drift daily (FMP TTM is daily_key-cached) and cohorts at
+    # week 4 are over a different population than cohorts at week 1, which
+    # confounds any between-arm comparison.
+    frozen_universe_json = _resolve_frozen_universe(config_path=config_path)
     exp = Experiment(
         name=name,
         hypothesis=spec["hypothesis"],
@@ -166,8 +216,34 @@ def register_experiment(
         ),
         frozen_config_sha=sha,
         frozen_config_json=raw,
+        frozen_universe_json=frozen_universe_json,
     )
     return repo.create(exp)
+
+
+def _resolve_frozen_universe(config_path: Path | None = None) -> str:
+    """Resolve the universe the experiment will run against and return a
+    JSON-serialised symbol list.
+
+    Returns an empty string when resolution fails or the universe doesn't
+    exist — engine falls back to live resolution in that case. We do NOT
+    raise on a missing universe because experiments can legitimately be
+    registered before the universe is created (test fixtures, etc.).
+    """
+    try:
+        cfg = load_factory_config(config_path) if config_path is None else load_factory_config(config_path)
+        universe_name = cfg.universe
+        urepo = UniverseRepository()
+        if universe_name == "default":
+            universe = urepo.get_default()
+        else:
+            universe = urepo.get_by_name(universe_name)
+        if universe is None:
+            return ""
+        symbols = resolve_symbols(universe)
+        return json.dumps(sorted(set(symbols)))
+    except Exception:  # noqa: BLE001 — universe freeze is best-effort
+        return ""
 
 
 def get_active_experiment(

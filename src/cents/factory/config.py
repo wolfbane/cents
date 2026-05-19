@@ -57,6 +57,12 @@ liquidity_lookback_days = 20
 # Portfolio kill switch (v0.10). Halts the open phase when breached.
 max_portfolio_drawdown_pct = 10.0   # halt opens at <= -10% unrealized DD
 max_daily_loss_pct = 3.0            # halt opens at <= -3% realized loss today
+
+# Lookahead defence (Batch J). When set, NewsAPI sentiment fetches drop
+# articles whose publishedAt >= today's HH:MM (US/Eastern). Set to your
+# market-open time ("09:30") to keep same-day intraday news out of the
+# signal. Empty string = no filter (research mode is leaky by default).
+news_cutoff_time = ""
 """
 
 
@@ -98,6 +104,13 @@ class FactoryConfig:
     # Kill switch (v0.10).
     max_portfolio_drawdown_pct: float = 10.0
     max_daily_loss_pct: float = 3.0
+    # Lookahead defence (Batch J). When set to "HH:MM" (e.g. "09:30"),
+    # NewsAPI sentiment fetches drop articles whose publishedAt is on/after
+    # this wall-clock time today (US/Eastern). Default "" means no filter
+    # (back-compat) — operators running a research-grade study should set
+    # this to their market-open time to keep same-day intraday news out of
+    # the signal. The lookahead-audit error message points at this field.
+    news_cutoff_time: str = ""
 
     def __post_init__(self) -> None:
         if self.cohort_mode not in {"paired", "directional_only"}:

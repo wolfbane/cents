@@ -34,6 +34,13 @@ class Experiment:
     minimum_n_per_arm: int
     frozen_config_sha: str
     frozen_config_json: str
+    # JSON-serialised list of symbols resolved from the universe at registration
+    # time. Without this, SCREENER-sourced universes drift daily (FMP TTM data
+    # is daily_key-cached) so cohorts at week 4 are over a different population
+    # than cohorts at week 1 — confounding any between-arm comparison. When set,
+    # the engine uses this list verbatim for the experiment's duration. Empty
+    # string means "no freeze; resolve live" (legacy + non-screener universes).
+    frozen_universe_json: str = ""
     stopping_rule: str = ""
     # Minimum calendar days before verdict_ready can fire. Set per-experiment
     # so pilots can use a shorter floor (e.g. 30) than full runs (e.g. 90).

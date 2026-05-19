@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -248,7 +249,13 @@ class FactoryEngine:
     # ---- universe selection ----------------------------------------------
 
     def _resolve_universe_symbols(self, universe_name: str) -> tuple[str, list[str]]:
-        """Resolve the configured/overriding universe name to a (name, symbols)."""
+        """Resolve the configured/overriding universe name to a (name, symbols).
+
+        When an active experiment carries a frozen_universe_json list, that
+        list is used verbatim — guarantees the cohort population is constant
+        across the experiment window. SCREENER universes otherwise drift
+        daily and confound between-arm comparisons.
+        """
         if universe_name.strip().lower() == "default":
             universe = self.universe_repo.get_default()
             if universe is None:
@@ -259,6 +266,18 @@ class FactoryEngine:
             universe = self.universe_repo.get(universe_name)
             if universe is None:
                 raise ValueError(f"Universe '{universe_name}' not found.")
+        # Frozen-universe override (only when an experiment is active).
+        if self._active_experiment is not None and self._active_experiment.frozen_universe_json:
+            try:
+                frozen = json.loads(self._active_experiment.frozen_universe_json)
+                if isinstance(frozen, list) and frozen:
+                    return universe.name, [str(s) for s in frozen]
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "Experiment %s has unparseable frozen_universe_json; "
+                    "falling back to live resolution",
+                    self._active_experiment.name,
+                )
         return universe.name, resolve_symbols(universe)
 
     # ---- main entry point -------------------------------------------------
@@ -676,7 +695,23 @@ class FactoryEngine:
                     side=side_hint,
                 )
             )
-            if cfg.max_per_premise_tag > 0 and self._exceeds_premise_concentration(
+            # Random-arm theses skip the premise-concentration cap. The cap
+            # exists to throttle clustering on the same regime-factor for the
+            # LLM arm, where premise_tags come from the orchestrator's actual
+            # summary (typically 1-3 thesis-specific tags). For the random
+            # arm, _sector_fallback_tags emits ALL ~5 sector tags per open
+            # because the summary is sparse ("random control: NVDA → delta=
+            # +17.34"), so the cap kicks in after 2 sector-mates and gates
+            # the random arm strictly tighter than the LLM arm — breaking
+            # the "matched-cadence" claim. Skipping the cap for random keeps
+            # the two arms' acceptance behaviour comparable. The cap is
+            # research-purity infrastructure for the LLM arm; the random
+            # arm has uniform-noise conviction by construction so per-tag
+            # over-concentration is a non-problem there.
+            apply_concentration_cap = (
+                cfg.max_per_premise_tag > 0 and orchestrator_label == "llm"
+            )
+            if apply_concentration_cap and self._exceeds_premise_concentration(
                 premise_tags, open_theses, cfg.max_per_premise_tag,
                 candidate_direction=premise_direction,
             ):
@@ -1086,14 +1121,20 @@ class FactoryEngine:
 
         regime_snapshot = capture_regime_snapshot(now=now)
 
-        # Calibrated P(correct) if a calibration model exists — used both for
-        # persisting on the thesis and for Kelly-fraction sizing below.
-        calibrated_p = self._predict_calibration(
-            delta=delta,
-            regime_snapshot=regime_snapshot,
-            discovery_source=discovery_source,
-            cohort=cohort,
-        )
+        # Calibrated P(correct) if a calibration model exists. ONLY emitted
+        # for the LLM arm — random-arm theses have a uniform-noise delta by
+        # construction, so any predicted p_correct on them is meaningless.
+        # calibrated_p_correct is RECORDED on the thesis row, never used to
+        # gate the open (research-mode).
+        calibrated_p = None
+        if orchestrator_label == "llm":
+            calibrated_p = self._predict_calibration(
+                delta=delta,
+                regime_snapshot=regime_snapshot,
+                discovery_source=discovery_source,
+                cohort=cohort,
+                horizon_days=cfg.default_horizon_days,
+            )
 
         calibration_fit_at = None
         if self._calibration_model is not None:
@@ -1244,6 +1285,7 @@ class FactoryEngine:
         regime_snapshot: dict,
         discovery_source: str | None,
         cohort: ThesisCohort,
+        horizon_days: int | None = None,
     ) -> float | None:
         """Return calibrated ``P(target hit)`` for a candidate thesis, or None."""
         model = self._calibration_model
@@ -1254,5 +1296,6 @@ class FactoryEngine:
             regime_snapshot=regime_snapshot,
             discovery_source=discovery_source,
             cohort=cohort.value if cohort is not None else None,
+            horizon_days=horizon_days,
         )
         return float(model.predict(features))

@@ -421,8 +421,13 @@ def _attribute_llm_cost(
     3. Otherwise the row contributes to ``unattributable_cost_usd``
        (ad-hoc research calls, scan sweeps, anything not tied to a thesis).
 
-    Random-arm theses naturally accrue zero cost because the random
-    orchestrator never emits LLM calls.
+    Premise-classification calls (operation == "classify_premise") run for
+    every arm — they happen BEFORE a thesis is opened, as part of the
+    common-overhead per-candidate evaluation. Attributing them to whatever
+    thesis later opens on the same symbol charges the random arm for LLM
+    cost the random orchestrator never emitted. Route them to
+    ``unattributable`` instead so the per-arm cost-of-signal comparison
+    isn't biased.
 
     Returns (cost_by_thesis, unattributable_cost_usd).
     """
@@ -432,6 +437,10 @@ def _attribute_llm_cost(
     for t in factory_theses:
         if t.symbol:
             by_symbol.setdefault(t.symbol, []).append(t)
+
+    # Operations that are experiment-wide overhead, not per-thesis cost.
+    # Attributing them to a thesis would charge the wrong arm.
+    _OVERHEAD_OPERATIONS = frozenset({"classify_premise", "tag_event"})
 
     cost_by_thesis: dict[str, float] = {}
     unattributable = 0.0
@@ -446,6 +455,9 @@ def _attribute_llm_cost(
         if cost is None:
             # Unknown model — surface as unattributable rather than silently
             # treating as zero so we don't underreport spend.
+            continue
+        if getattr(row, "operation", None) in _OVERHEAD_OPERATIONS:
+            unattributable += cost
             continue
         attributed = False
         ctx = row.context
