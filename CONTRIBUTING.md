@@ -29,6 +29,16 @@ Ruff and Black are on the roadmap but not yet wired up. For now, please match th
 - Immutable patterns where reasonable
 - Clear errors over silent fallback
 
+## Docs
+
+Per-command reference pages under `website/src/content/docs/commands/` are **auto-generated** from Click introspection by `scripts/generate_docs.py`. Hand-edits to those `*.mdx` files will be wiped on regeneration. To add narrative prose for a command, drop a sibling `<command>.intro.mdx` next to the generated file — its content is prepended into the page on regen.
+
+```bash
+python scripts/generate_docs.py    # regenerate after CLI changes
+```
+
+Non-command docs (`architecture.mdx`, `principles.mdx`, `scheduling.mdx`, etc.) are hand-written and edited directly.
+
 ## Issues and PRs
 
 File issues and pull requests via [GitHub](https://github.com/wolfbane/cents). For PRs, include a brief description of the change and confirm `pytest` passes locally.

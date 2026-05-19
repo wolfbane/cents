@@ -1,0 +1,13 @@
+## Price adjustment
+
+Historical bars are requested from Alpaca with `adjustment=Adjustment.SPLIT`,
+so windows that cross a stock split (e.g. NVDA's June 2024 10-for-1) produce
+returns that reflect real market moves rather than nominal price
+discontinuities. **Dividends are deliberately not adjusted** — that would
+shift absolute price levels relative to live quotes and break the readability
+of MA / 52-week / target-price evidence elsewhere in the system.
+
+If you have existing backtest rows that predate the split-adjusted basis,
+re-run them with `scripts/rerun_backtests.py` (a thin orchestrator that
+snapshots the existing set, deletes the rows, and re-runs each unique
+`(symbol, start, end)` tuple against the current code).
