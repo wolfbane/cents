@@ -96,6 +96,7 @@ from cents.models import (
     Alert,
     AlertType,
     FactoryRun,
+    HedgeBasis,
     Position,
     PositionSide,
     PositionStatus,
@@ -1336,25 +1337,33 @@ class FactoryEngine:
         #   dollar           — beta_match_hedge=false (no estimation tried)
         # Estimating beta here also lets the hedge-leg block below reuse the
         # value rather than re-fetching history.
-        hedge_basis: str | None = None
+        hedge_basis: HedgeBasis | None = None
         hedge_beta: float | None = None
+        # cents-931f: True iff first-pass estimation had both primary AND
+        # hedge close series available. Lets the hedge-leg block below
+        # distinguish "R² gate rejected" from "history missing" without
+        # re-fetching `_get_history(hedge_symbol)` a second time.
+        hedge_history_available = False
         if hedge_symbol:
             if not cfg.beta_match_hedge:
-                hedge_basis = "dollar"
+                hedge_basis = HedgeBasis.DOLLAR
             else:
                 hedge_closes_for_basis, _ = self._get_history(
                     hedge_symbol, cfg.beta_lookback_days * 2
                 )
-                if primary_closes is not None and hedge_closes_for_basis is not None:
+                hedge_history_available = (
+                    primary_closes is not None and hedge_closes_for_basis is not None
+                )
+                if hedge_history_available:
                     hedge_beta = estimate_beta(
                         primary_closes, hedge_closes_for_basis,
                         lookback=cfg.beta_lookback_days,
                         min_r_squared=cfg.beta_min_r_squared,
                     )
                 if hedge_beta is not None:
-                    hedge_basis = "beta"
+                    hedge_basis = HedgeBasis.BETA
                 else:
-                    hedge_basis = "dollar_fallback"
+                    hedge_basis = HedgeBasis.DOLLAR_FALLBACK
                     logger.warning(
                         "Beta-match hedge fell back to dollar-match for %s/%s "
                         "(min_r_squared=%.2f, beta_lookback_days=%d) — "
@@ -1438,19 +1447,12 @@ class FactoryEngine:
                 # is still recorded on the thesis (cents-931f) so the cohort
                 # is visibly contaminated.
                 beta = hedge_beta
-                if cfg.beta_match_hedge and beta is None:
-                    hedge_closes_for_gate, _ = self._get_history(
-                        hedge_symbol, cfg.beta_lookback_days * 2
+                if cfg.beta_match_hedge and beta is None and hedge_history_available:
+                    logger.debug(
+                        "Skipping hedge leg for %s: %s R² below %.2f gate",
+                        symbol, hedge_symbol, cfg.beta_min_r_squared,
                     )
-                    history_available = (
-                        primary_closes is not None and hedge_closes_for_gate is not None
-                    )
-                    if history_available:
-                        logger.debug(
-                            "Skipping hedge leg for %s: %s R² below %.2f gate",
-                            symbol, hedge_symbol, cfg.beta_min_r_squared,
-                        )
-                        return {"theses_opened": 1, "positions_opened": positions_opened}
+                    return {"theses_opened": 1, "positions_opened": positions_opened}
                 ratio = beta_match_ratio(
                     beta=beta,
                     default_beta=cfg.default_beta,
