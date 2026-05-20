@@ -1,6 +1,7 @@
 """Tests for LLM-enhanced sentiment agent functionality."""
 
 import json
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from cents.agents import SentimentAgent
 from cents.agents.sentiment import (
     clear_sentiment_cache,
+    _article_set_hash,
     _extract_score_from_llm_response,
 )
 from cents.models import Thesis, EvidenceType
@@ -744,3 +746,297 @@ class TestAnthropicTimeoutWiring:
         client = _build_anthropic_client()
         assert client is not None
         assert client.timeout == 12.0
+
+
+class TestArticleSetHash:
+    """The article-set hash is the cache-invalidation primitive."""
+
+    def test_identical_corpora_hash_identically(self):
+        a = [{"url": "u/a"}, {"url": "u/b"}, {"url": "u/c"}]
+        b = [{"url": "u/a"}, {"url": "u/b"}, {"url": "u/c"}]
+        assert _article_set_hash(a) == _article_set_hash(b)
+
+    def test_order_independent(self):
+        a = [{"url": "u/a"}, {"url": "u/b"}, {"url": "u/c"}]
+        b = list(reversed(a))
+        assert _article_set_hash(a) == _article_set_hash(b)
+
+    def test_adding_article_changes_hash(self):
+        a = [{"url": "u/a"}, {"url": "u/b"}]
+        b = a + [{"url": "u/c"}]
+        assert _article_set_hash(a) != _article_set_hash(b)
+
+    def test_url_change_changes_hash(self):
+        a = [{"url": "u/a"}]
+        b = [{"url": "u/x"}]
+        assert _article_set_hash(a) != _article_set_hash(b)
+
+    def test_missing_url_falls_back_to_title(self):
+        a = [{"title": "Headline X", "publishedAt": "2026-05-20T10:00:00Z"}]
+        b = [{"title": "Headline X", "publishedAt": "2026-05-20T10:00:00Z"}]
+        assert _article_set_hash(a) == _article_set_hash(b)
+        # Different title → different hash
+        c = [{"title": "Headline Y", "publishedAt": "2026-05-20T10:00:00Z"}]
+        assert _article_set_hash(a) != _article_set_hash(c)
+
+
+class TestSentimentLLMDecisionCache:
+    """cents-990: cache the LLM filter/score decision per (symbol, article_set_hash, model)."""
+
+    def setup_method(self):
+        clear_sentiment_cache()
+
+    def _batch_response(self):
+        return MockAnthropicResponse(json.dumps({
+            "scores": [
+                {"index": 0, "score": 0.5, "reasoning": "ok"},
+                {"index": 1, "score": -0.3, "reasoning": "ok"},
+            ]
+        }))
+
+    def _articles(self):
+        return [
+            {"title": "A", "description": "x", "url": "https://example.com/a"},
+            {"title": "B", "description": "y", "url": "https://example.com/b"},
+        ]
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_batch_score_cached_on_repeat_same_day(self, mock_settings):
+        """Two batch calls, same symbol + same articles + same day → exactly ONE LLM call."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+        mock_settings.return_value.default_api_timeout = 10
+
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._batch_response()
+
+        # Fresh agent for each invocation so the per-instance URL cache doesn't
+        # mask the disk cache being tested (an operator re-run is a new process).
+        articles = self._articles()
+        agent1 = SentimentAgent(anthropic_client=mock_client)
+        results1 = agent1._score_articles_batch(articles, "TEST", None)
+
+        agent2 = SentimentAgent(anthropic_client=mock_client)
+        results2 = agent2._score_articles_batch(articles, "TEST", None)
+
+        assert mock_client.messages.create.call_count == 1, (
+            "Same-day re-run on identical article corpus must hit api_cache and "
+            "skip the LLM call (cents-990)."
+        )
+        # Cache hit reproduces the same scoring decision
+        assert results1[0][1] == results2[0][1] == 0.5
+        assert results1[1][1] == results2[1][1] == -0.3
+        # Cache hit yields provenance=None (no fresh LLM call to attribute to)
+        assert results2[0][4] is None
+        assert results2[1][4] is None
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_batch_score_cache_miss_when_corpus_changes(self, mock_settings):
+        """Adding an article changes article_set_hash → cache miss → second LLM call."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+        mock_settings.return_value.default_api_timeout = 10
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [
+            self._batch_response(),
+            MockAnthropicResponse(json.dumps({
+                "scores": [
+                    {"index": 0, "score": 0.1, "reasoning": "new"},
+                    {"index": 1, "score": 0.2, "reasoning": "new"},
+                    {"index": 2, "score": 0.3, "reasoning": "new"},
+                ]
+            })),
+        ]
+
+        agent1 = SentimentAgent(anthropic_client=mock_client)
+        agent1._score_articles_batch(self._articles(), "TEST", None)
+
+        # Add a third article — corpus changed → cache miss
+        bigger = self._articles() + [
+            {"title": "C", "description": "z", "url": "https://example.com/c"},
+        ]
+        agent2 = SentimentAgent(anthropic_client=mock_client)
+        agent2._score_articles_batch(bigger, "TEST", None)
+
+        assert mock_client.messages.create.call_count == 2
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_batch_score_cache_miss_when_model_snapshot_changes(self, mock_settings):
+        """Model snapshot changing invalidates the cache key → second LLM call."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+        mock_settings.return_value.default_api_timeout = 10
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [
+            self._batch_response(),
+            self._batch_response(),
+        ]
+
+        agent1 = SentimentAgent(anthropic_client=mock_client)
+        agent1._score_articles_batch(self._articles(), "TEST", None)
+
+        # Bump the module-level model snapshot — same articles, same day, but a
+        # different model should NOT hit the cache.
+        with patch("cents.agents.sentiment._LLM_MODEL", "claude-haiku-4-6-99999999"):
+            agent2 = SentimentAgent(anthropic_client=mock_client)
+            agent2._score_articles_batch(self._articles(), "TEST", None)
+
+        assert mock_client.messages.create.call_count == 2
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_batch_score_cache_invalidates_next_day(self, mock_settings):
+        """Cache key embeds today's date — next-day call re-spends as expected."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+        mock_settings.return_value.default_api_timeout = 10
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [
+            self._batch_response(),
+            self._batch_response(),
+        ]
+
+        today_d = date(2026, 5, 20)
+        tomorrow_d = today_d + timedelta(days=1)
+
+        class _DateStub:
+            _today = today_d
+
+            @classmethod
+            def today(cls):
+                return cls._today
+
+            @classmethod
+            def fromisoformat(cls, s):
+                return date.fromisoformat(s)
+
+        with patch("cents.agents.sentiment.date", _DateStub):
+            agent1 = SentimentAgent(anthropic_client=mock_client)
+            agent1._score_articles_batch(self._articles(), "TEST", None)
+
+            # Same-day re-run hits the cache
+            agent_sameday = SentimentAgent(anthropic_client=mock_client)
+            agent_sameday._score_articles_batch(self._articles(), "TEST", None)
+            assert mock_client.messages.create.call_count == 1
+
+            # Roll the clock forward → cache key includes new date → miss
+            _DateStub._today = tomorrow_d
+            agent2 = SentimentAgent(anthropic_client=mock_client)
+            agent2._score_articles_batch(self._articles(), "TEST", None)
+
+        assert mock_client.messages.create.call_count == 2, (
+            "Cache key embeds today's date so next-day calls miss naturally."
+        )
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_batch_score_cache_miss_on_different_symbol(self, mock_settings):
+        """Symbol is part of the cache key — different symbol must miss."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+        mock_settings.return_value.default_api_timeout = 10
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [
+            self._batch_response(),
+            self._batch_response(),
+        ]
+
+        agent1 = SentimentAgent(anthropic_client=mock_client)
+        agent1._score_articles_batch(self._articles(), "AAPL", None)
+
+        agent2 = SentimentAgent(anthropic_client=mock_client)
+        agent2._score_articles_batch(self._articles(), "MSFT", None)
+
+        assert mock_client.messages.create.call_count == 2
+
+
+class TestSentimentLLMCostIntegration:
+    """cents-990 integration: second same-day sentiment walk records ZERO new LLM rows."""
+
+    def setup_method(self):
+        clear_sentiment_cache()
+
+    @patch("cents.agents.sentiment.urlopen")
+    @patch("cents.agents.sentiment.get_settings")
+    def test_second_run_records_no_new_llm_usage_rows(self, mock_settings, mock_urlopen):
+        """Repeating SentimentAgent.research same-day should not write new llm_usage rows."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+        mock_settings.return_value.default_api_timeout = 10
+
+        articles_payload = {
+            "articles": [
+                {
+                    "title": "Earnings beat",
+                    "description": "strong",
+                    "source": {"name": "N"},
+                    "url": "https://example.com/a",
+                    "publishedAt": "2026-05-19T08:00:00Z",
+                },
+                {
+                    "title": "Guidance raised",
+                    "description": "ok",
+                    "source": {"name": "N"},
+                    "url": "https://example.com/b",
+                    "publishedAt": "2026-05-19T08:30:00Z",
+                },
+            ]
+        }
+        # Each .research() makes ONE NewsAPI request → return a fresh mock each time.
+        def _news_mock(*args, **kwargs):
+            mock_response = MagicMock()
+            mock_response.read.return_value = json.dumps(articles_payload).encode()
+            mock_response.__enter__ = lambda s: s
+            mock_response.__exit__ = MagicMock(return_value=False)
+            return mock_response
+        mock_urlopen.side_effect = _news_mock
+
+        # Wire up a real Anthropic-shaped response object so record_llm_usage
+        # can extract .model / .usage like in production.
+        def _make_response(text: str):
+            resp = MagicMock()
+            resp.content = [MagicMock(text=text)]
+            resp.model = "claude-haiku-4-5-20251001"
+            resp.usage = MagicMock(
+                input_tokens=100,
+                output_tokens=20,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+            )
+            return resp
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [
+            _make_response("0\n1"),  # filter call
+            _make_response(json.dumps({
+                "scores": [
+                    {"index": 0, "score": 0.6, "reasoning": "bullish"},
+                    {"index": 1, "score": 0.4, "reasoning": "mild bullish"},
+                ]
+            })),  # batch score call
+        ]
+
+        from cents.db import LLMUsageRepository
+
+        # First run — populates the api_cache
+        agent1 = SentimentAgent(anthropic_client=mock_client)
+        result1 = agent1.research("TEST")
+        assert len(result1.evidence) == 2
+
+        rows_after_first = LLMUsageRepository().list_recent(limit=100)
+        first_count = len(rows_after_first)
+        assert first_count >= 1, "First run should have recorded at least one llm_usage row"
+
+        # Second run, fresh agent (simulates a separate process / cron retry)
+        agent2 = SentimentAgent(anthropic_client=mock_client)
+        result2 = agent2.research("TEST")
+        assert len(result2.evidence) == 2
+
+        rows_after_second = LLMUsageRepository().list_recent(limit=100)
+        assert len(rows_after_second) == first_count, (
+            f"Second same-day run wrote new llm_usage rows "
+            f"({len(rows_after_second) - first_count}) — the cents-990 cache "
+            "is not short-circuiting the LLM call."
+        )
