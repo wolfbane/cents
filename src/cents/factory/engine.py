@@ -186,22 +186,29 @@ class FactoryEngine:
                 self._calibration_model = load_latest_model()
             except Exception:  # pragma: no cover — defensive
                 self._calibration_model = None
-        # Bug E (r3): warn loudly when the loaded model is older than 30 days.
-        # A stale model in a regime change silently drives wrong-direction sizing.
+        # Bug E (r3) + cents-a1d: warn when the loaded model is >30d old AND
+        # persist calibration_age_days so cohort analytics can stratify outcomes
+        # by model freshness. A stale model in a regime change silently drives
+        # wrong-direction sizing; the labeled dataset captures this if and only
+        # if analytics can SEE the age.
+        self._calibration_age_days: int | None = None
         if self._calibration_model is not None:
             fit_at = getattr(self._calibration_model, "fit_at", None)
             if isinstance(fit_at, datetime):
-                age_days = (datetime.now() - fit_at).days
-                if age_days > 30:
+                self._calibration_age_days = (datetime.now() - fit_at).days
+                if self._calibration_age_days > 30:
                     logger.warning(
                         "Calibration model is %d days old (fit_at=%s); "
                         "consider `cents calibration refit`",
-                        age_days, fit_at.isoformat(),
+                        self._calibration_age_days, fit_at.isoformat(),
                     )
 
-        # Active experiment context (cents-hvz). If an experiment is
-        # registered, every thesis we open gets stamped with its id, and
-        # we warn loudly when factory.toml has drifted from the frozen SHA.
+        # Active experiment context (cents-hvz / cents-eat0). If an experiment is
+        # registered, every thesis we open gets stamped with its id, and we
+        # detect factory.toml drift from the frozen SHA. cents-eat0: drift now
+        # ABORTS the run by default; operators must explicitly opt into a
+        # discipline violation by setting allow_frozen_drift=True (CLI flag
+        # --force-frozen-drift).
         # Lazy import to avoid an engine ↔ experiments cycle at module load.
         try:
             from cents.experiments import (
@@ -211,6 +218,7 @@ class FactoryEngine:
             self._active_experiment = get_active_experiment()
         except Exception:  # pragma: no cover — defensive
             self._active_experiment = None
+        self._config_drift_detected: tuple[str, str] | None = None
         if self._active_experiment is not None:
             try:
                 current_sha, _ = compute_factory_config_sha()
@@ -220,6 +228,10 @@ class FactoryEngine:
                 current_sha is not None
                 and current_sha != self._active_experiment.frozen_config_sha
             ):
+                self._config_drift_detected = (
+                    self._active_experiment.frozen_config_sha,
+                    current_sha,
+                )
                 logger.warning(
                     "factory.toml SHA has drifted from experiment %r "
                     "(frozen %s, current %s). Treat config changes mid-experiment "
@@ -318,9 +330,32 @@ class FactoryEngine:
 
     # ---- main entry point -------------------------------------------------
 
-    def run(self, dry_run: bool = False, universe_override: str | None = None) -> FactoryRun:
-        """Execute a single factory run. Returns the persisted FactoryRun record."""
+    def run(
+        self,
+        dry_run: bool = False,
+        universe_override: str | None = None,
+        allow_frozen_drift: bool = False,
+    ) -> FactoryRun:
+        """Execute a single factory run. Returns the persisted FactoryRun record.
+
+        ``allow_frozen_drift=False`` (default) refuses to run when factory.toml
+        has drifted from an active experiment's frozen SHA — pre-registration
+        discipline (cents-eat0). Set True (via CLI ``--force-frozen-drift``) to
+        override; the drift is still persisted in the run's summary_json.
+        """
         cfg = self.config
+
+        # cents-eat0: enforce SHA freeze for active experiments. Detection
+        # happens in __init__; here we either abort or proceed-with-warning.
+        if self._config_drift_detected and not allow_frozen_drift:
+            from cents.exceptions import ExperimentConfigDrift
+            frozen, current = self._config_drift_detected
+            raise ExperimentConfigDrift(
+                experiment_name=self._active_experiment.name,
+                frozen_sha=frozen,
+                current_sha=current,
+            )
+
         run = FactoryRun(
             universe_name=(universe_override or cfg.universe),
             dry_run=dry_run,
@@ -365,6 +400,20 @@ class FactoryEngine:
                     for p in proposals
                 ],
             }
+            # cents-a1d: surface calibration model freshness so cohort analytics
+            # can stratify outcomes by model age. None means no model loaded.
+            if self._calibration_age_days is not None:
+                run.summary_json["calibration_age_days"] = self._calibration_age_days
+            # cents-eat0: persist drift acknowledgement so analytics can see
+            # whether a pilot's data has any post-drift theses in it.
+            if self._config_drift_detected and allow_frozen_drift:
+                frozen, current = self._config_drift_detected
+                run.summary_json["config_drift"] = {
+                    "frozen_sha": frozen,
+                    "current_sha": current,
+                    "experiment": self._active_experiment.name,
+                    "allowed_via_force_flag": True,
+                }
         except CostCapExceeded:
             # Cost cap is an OPERATIONAL signal — the CLI / caller needs to
             # see the non-zero exit so cron supervisors can fire. Persist
@@ -709,6 +758,14 @@ class FactoryEngine:
         # round-trips and O(candidates) event-table scans.
         factory_thesis_ids = {t.id for t in open_theses}
         phase_regime_snapshot = capture_regime_snapshot(now=self._clock())
+        # cents-a1d: stamp the calibration model's age into each thesis's regime
+        # snapshot so post-experiment cohort analytics can stratify outcomes by
+        # how stale the sizing model was. None means no model loaded.
+        if self._calibration_age_days is not None:
+            phase_regime_snapshot = {
+                **phase_regime_snapshot,
+                "calibration_age_days": self._calibration_age_days,
+            }
 
         # Note (research-mode): we intentionally do NOT gate the open phase
         # on portfolio drawdown. The point of cents is to *record* what

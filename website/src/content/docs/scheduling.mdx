@@ -265,3 +265,139 @@ by [Scope](/scope/) — survivorship coverage, lookahead audit results,
 calibration honesty, and the gates the engine deliberately does not
 apply. Read that page before you start drawing conclusions from
 whatever the 90-day window leaves behind.
+
+## Troubleshooting — what to do when things break
+
+A 30-90 day cron-driven pilot will hit failure modes you won't see in
+a one-shot run. Here's what to expect and how to handle each.
+
+### A run hangs longer than ~15 minutes
+
+The factory engine has two layers of timeout protection (see CLAUDE.md):
+
+- **Per-Anthropic-call**: 30s read timeout (overridable via
+  `CENTS_ANTHROPIC_TIMEOUT_SEC`). Worst case ~106s per call after retries +
+  backoff.
+- **Per-symbol watchdog**: 90s deadline on the entire orchestrator-research
+  call (overridable via `CENTS_PER_SYMBOL_DEADLINE_SEC`). On expiry the
+  symbol is logged + skipped via `symbols_timed_out` in `summary_json`;
+  the run continues.
+
+So a run that hangs >15 min is almost certainly something the watchdogs
+can't reach — NewsAPI / FMP / Alpaca network stall, a database lock,
+or a wedged file handle. Identify with:
+
+```bash
+# Is the process active?
+ps aux | grep "cents factory"
+
+# What sockets does it hold? (open TCP connections often surface the culprit)
+lsof -p $(pgrep -f "cents factory") | grep TCP
+
+# What was the last LLM activity?
+sqlite3 ~/.cents/data/cents.db \
+  "SELECT operation, MAX(called_at) FROM llm_usage GROUP BY operation"
+```
+
+If hung >30 min, SIGINT (Ctrl-C / `kill -INT`). The engine catches
+`KeyboardInterrupt` cleanly and persists the partial run with `error`
+set in `factory_runs`. The cron should not retry the same minute.
+
+### Cost cap hit mid-loop
+
+When pre-call cost estimation projects the next LLM call would exceed
+`--max-cost-usd` (per-run) or `max_llm_spend_usd_per_day` (daily),
+`CostCapExceeded` is raised and the engine aborts. The partial run is
+persisted with `error = "cost_cap_exceeded"`.
+
+**This biases the cohort.** Symbols evaluated before the abort tend to be
+the most conviction-heavy (since the engine processes the universe in
+shuffled order and the first 5 above-threshold names cost the most LLM
+time on premise classification). If you see frequent cost-cap aborts,
+either:
+
+- Raise the cap (the default $5/day is well above observed ~$0.20/run)
+- Move to a tighter universe so per-run cost is bounded
+- Investigate why one run blew past expectations (`cents usage summary
+  --by operation --since 1d` will show which agent spiked)
+
+### Anthropic / FMP / NewsAPI outage
+
+cents agents are designed to fail soft:
+
+- **Anthropic outage**: sentiment falls back to keyword scoring; premise
+  classifier returns `[]` (the no-thesis path keeps tagger_failed events
+  surfaced as `WARNING` logs so it isn't silently dropped). Hit rate
+  will look worse for that day but the run completes.
+- **FMP outage**: fundamentals + moat agents return zero signal for the
+  affected symbols. Affected symbols silently drop out of the cohort —
+  not great but bounded.
+- **NewsAPI outage**: sentiment returns zero signal. Same shape as FMP.
+- **Alpaca outage**: the run will hang on `get_latest_price` calls;
+  watchdog catches at 90s. Symbols with bad price data are skipped.
+
+The daily eval-harness drift check (`cents eval drift-check`) is the
+backstop — if F1 falls >5pp below the trailing-7 median, a `MODEL_DRIFT`
+alert fires regardless of which API was the root cause.
+
+### Auditing a failed or weird run
+
+Every factory run writes a row to `factory_runs`:
+
+```bash
+sqlite3 ~/.cents/data/cents.db \
+  "SELECT id, started_at, completed_at, theses_opened, llm_cost_usd, error, summary_json
+   FROM factory_runs ORDER BY started_at DESC LIMIT 5"
+```
+
+For the most-recent run, look at:
+
+- `error` — populated on cost-cap, exception, or kill-signal aborts
+- `summary_json.stop_reason` — `max_new_per_run` (normal),
+  `end_of_universe` (cap raised too high or universe shrunk),
+  `cost_cap` (see above), `kill_switch` (future use)
+- `summary_json.symbols_timed_out` — non-zero means the per-symbol
+  watchdog fired; check logs for which symbols
+- LLM call provenance via `cents evidence trace <evidence_id>` —
+  reconstructs the prompt/response/cost for any specific decision
+
+### Recommended cron-wrapper alerting
+
+A bare cron entry is silent on failure. Wrap each run in a script that
+captures exit status and surfaces anomalies:
+
+```bash
+#!/usr/bin/env bash
+# cents-run-wrapped.sh
+set -o pipefail
+
+LOG_DIR=~/.cents/logs/$(date +%Y-%m-%d)
+mkdir -p "$LOG_DIR"
+
+LLM_LOG="$LOG_DIR/factory-llm.log"
+RANDOM_LOG="$LOG_DIR/factory-random.log"
+
+cents factory run --max-cost-usd 5.00 > "$LLM_LOG" 2>&1 \
+  || mail -s "[cents] LLM-arm run FAILED $(date)" you@example.com < "$LLM_LOG"
+
+cents factory run --orchestrator random \
+  --orchestrator-seed "$(date +%s)" > "$RANDOM_LOG" 2>&1 \
+  || mail -s "[cents] random-arm run FAILED $(date)" you@example.com < "$RANDOM_LOG"
+
+# Drift check at the end — emails on regression
+cents eval run --persist-history --gate \
+  --baseline-f1 0.85 --baseline-brier 0.18 --tolerance-pp 3 \
+  || mail -s "[cents] eval drift detected $(date)" you@example.com < /dev/null
+```
+
+Replace `mail` with whatever notification channel you use (Slack
+webhook, ntfy, healthchecks.io ping, etc.).
+
+### What is NOT auto-recoverable
+
+- Database file corruption (back up `~/.cents/data/cents.db` weekly)
+- Manual edits to `factory.toml` mid-experiment (the SHA freeze in
+  `cents experiment register` doesn't yet detect drift — see bead
+  `cents-eat0`)
+- Loss of the `~/.cents/data/llm_calls/` blob directory — provenance
+  reconstruction will fail for affected evidence rows

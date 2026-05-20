@@ -75,5 +75,28 @@ class ValidationError(CentsError):
     pass
 
 
+class ExperimentConfigDrift(CentsError):
+    """Raised when factory.toml SHA differs from the active experiment's frozen SHA.
+
+    Pre-registration discipline: changing factory config mid-experiment invalidates
+    the pre-registered hypothesis. The engine refuses to run unless the operator
+    passes --force-frozen-drift to acknowledge the discipline violation. See
+    cents-eat0.
+    """
+
+    def __init__(self, experiment_name: str, frozen_sha: str, current_sha: str):
+        self.experiment_name = experiment_name
+        self.frozen_sha = frozen_sha
+        self.current_sha = current_sha
+        super().__init__(
+            f"factory.toml SHA drift detected for active experiment {experiment_name!r}: "
+            f"frozen={frozen_sha[:12]} current={current_sha[:12]}. "
+            f"Mid-experiment config changes invalidate pre-registration. "
+            f"Pass --force-frozen-drift to override (logs the violation)."
+        )
+
+    pass
+
+
 # CostCapExceeded is defined above CentsError-derived subclasses to keep the
 # hierarchy header docstring accurate; class is intentionally near the top.

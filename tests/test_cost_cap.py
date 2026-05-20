@@ -243,7 +243,7 @@ class TestFactoryRunMaxCostUsd:
             def __init__(self, *a, **kw):
                 pass
 
-            def run(self, *, dry_run=False, universe_override=None):
+            def run(self, *, dry_run=False, universe_override=None, allow_frozen_drift=False):
                 # Simulate an in-loop LLM call check that exceeds the cap.
                 check_cost_cap(
                     {

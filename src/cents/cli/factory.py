@@ -13,7 +13,7 @@ from cents.db import (
     ThesisRepository,
     UniverseRepository,
 )
-from cents.exceptions import CostCapExceeded
+from cents.exceptions import CostCapExceeded, ExperimentConfigDrift
 from cents.factory.config import (
     get_factory_config_path,
     load_factory_config,
@@ -81,6 +81,19 @@ def factory_init(force: bool):
     default=None,
     help="RNG seed for --orchestrator random (reproducibility).",
 )
+@click.option(
+    "--force-frozen-drift",
+    is_flag=True,
+    default=False,
+    help=(
+        "Acknowledge factory.toml drift from the active experiment's frozen "
+        "SHA and run anyway. cents-eat0: by default a drifted config aborts "
+        "the run to preserve pre-registration discipline. Use only when you've "
+        "decided the discipline violation is acceptable (e.g. unblocking a "
+        "non-pilot ad-hoc run while an experiment is active). The drift is "
+        "still persisted in summary_json so analytics can see it."
+    ),
+)
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
 def factory_run(
     dry_run: bool,
@@ -88,6 +101,7 @@ def factory_run(
     max_cost_usd: float | None,
     orchestrator: str,
     orchestrator_seed: int | None,
+    force_frozen_drift: bool,
     output: str | None,
 ):
     """Run the factory engine once."""
@@ -105,10 +119,17 @@ def factory_run(
 
     try:
         with cost_cap(max_cost_usd):
-            run = engine.run(dry_run=dry_run, universe_override=universe_name)
+            run = engine.run(
+                dry_run=dry_run,
+                universe_override=universe_name,
+                allow_frozen_drift=force_frozen_drift,
+            )
             spend = current_run_spend_usd()
             cap = current_run_cap_usd()
     except CostCapExceeded as exc:
+        exit_with_error(str(exc))
+        return  # pragma: no cover — exit_with_error raises SystemExit
+    except ExperimentConfigDrift as exc:
         exit_with_error(str(exc))
         return  # pragma: no cover — exit_with_error raises SystemExit
 

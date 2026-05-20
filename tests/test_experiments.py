@@ -242,6 +242,12 @@ class TestEngineIntegration:
         from cents.models import Universe
 
         monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+
+        # Create the universe BEFORE registering — _gather_behavioural_inputs
+        # snapshots the universe into the frozen SHA, so the engine's later
+        # SHA computation must see the same universe. (cents-eat0)
+        UniverseRepository().create(Universe(name="test", symbols=["AAPL"], is_default=True))
+
         # Register an active experiment.
         spec = tmp_path / "exp.yaml"
         spec.write_text(_yaml_spec("engine-test"))
@@ -256,8 +262,6 @@ class TestEngineIntegration:
         fake_event = MagicMock()
         fake_event.refresh.return_value = {"fetched": 0, "new": 0, "alerts_fired": 0}
         monkeypatch.setattr(cents.agents, "EventAgent", lambda: fake_event)
-
-        UniverseRepository().create(Universe(name="test", symbols=["AAPL"], is_default=True))
 
         orch = MagicMock()
         orch.research.return_value = type(
@@ -280,6 +284,96 @@ class TestEngineIntegration:
         theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
         assert len(theses) == 1
         assert theses[0].experiment_id == exp.id
+
+
+class TestConfigDriftEnforcement:
+    """cents-eat0: factory.toml SHA drift mid-experiment aborts the run."""
+
+    def test_drift_raises_experiment_config_drift_by_default(
+        self, db_conn, tmp_path: Path, monkeypatch,
+    ):
+        """When factory.toml changes after experiment registration, run() raises."""
+        from pathlib import Path as _P
+        from cents.factory.config import FactoryConfig
+        from cents.factory.engine import FactoryEngine
+        from cents.exceptions import ExperimentConfigDrift
+
+        cfg_path = tmp_path / "factory.toml"
+        cfg_path.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg_path))
+
+        spec = tmp_path / "exp.yaml"
+        spec.write_text(_yaml_spec("drift-test"))
+        register_experiment(spec_path=spec)
+
+        # Now drift the config — engine __init__ will detect the SHA mismatch
+        cfg_path.write_text("budget_usd = 99999\n# drifted\n")
+
+        cfg = FactoryConfig(
+            budget_usd=10_000, target_positions=10, entry_threshold=5.0,
+            cohort_mode="directional_only",
+        )
+        engine = FactoryEngine(config=cfg)
+        with pytest.raises(ExperimentConfigDrift) as exc_info:
+            engine.run()
+        assert "drift-test" in str(exc_info.value)
+        assert exc_info.value.experiment_name == "drift-test"
+
+    def test_force_frozen_drift_allows_run_and_records_violation(
+        self, db_conn, tmp_path: Path, monkeypatch,
+    ):
+        """With allow_frozen_drift=True the run proceeds + drift is persisted."""
+        from unittest.mock import MagicMock
+        from cents.factory.config import FactoryConfig
+        from cents.factory.engine import FactoryEngine
+        from cents.db import UniverseRepository
+        from cents.models import Universe
+
+        cfg_path = tmp_path / "factory.toml"
+        cfg_path.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg_path))
+
+        spec = tmp_path / "exp.yaml"
+        spec.write_text(_yaml_spec("drift-allow"))
+        register_experiment(spec_path=spec)
+
+        cfg_path.write_text("budget_usd = 99999\n# drifted\n")
+
+        # Minimal universe + stubs so engine.run() returns successfully
+        UniverseRepository().create(
+            Universe(name="test", symbols=["AAPL"], is_default=True)
+        )
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **k: ([], {}),
+        )
+        import cents.agents
+        fake_event = MagicMock()
+        fake_event.refresh.return_value = {"fetched": 0, "new": 0, "alerts_fired": 0}
+        monkeypatch.setattr(cents.agents, "EventAgent", lambda: fake_event)
+
+        orch = MagicMock()
+        orch.research.return_value = type(
+            "AR", (), {
+                "conviction_delta": 1.0, "evidence": [],
+                "summary": "x", "dimension_scores": {},
+            }
+        )()
+        provider = MagicMock()
+        provider.get_latest_price.return_value = 100.0
+
+        cfg = FactoryConfig(
+            budget_usd=10_000, target_positions=10, entry_threshold=5.0,
+            cohort_mode="directional_only",
+        )
+        engine = FactoryEngine(config=cfg, orchestrator=orch, price_provider=provider)
+        run = engine.run(allow_frozen_drift=True)
+
+        # Run succeeded + drift was recorded in summary
+        assert run.error is None
+        assert "config_drift" in run.summary_json
+        assert run.summary_json["config_drift"]["experiment"] == "drift-allow"
+        assert run.summary_json["config_drift"]["allowed_via_force_flag"] is True
 
 
 class TestVerdictReady:
@@ -536,3 +630,153 @@ class TestFinalizeGating:
         verdict = json.loads(exp.verdict_json)
         assert verdict["forced"] is True
         assert verdict["primary_metric_value"] == 0.05
+
+
+class TestSignalModeDuringExperiment:
+    """cents-38i: adaptive signal mode must be disabled while an experiment is active."""
+
+    def test_get_signal_mode_returns_momentum_during_active_experiment(
+        self, db_conn, tmp_path: Path, monkeypatch,
+    ):
+        """With an active experiment, get_signal_mode short-circuits to MOMENTUM."""
+        from cents.agents.signal_mode import get_signal_mode, SignalMode
+
+        cfg_path = tmp_path / "factory.toml"
+        cfg_path.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg_path))
+
+        spec = tmp_path / "exp.yaml"
+        spec.write_text(_yaml_spec("p-hack-protect"))
+        register_experiment(spec_path=spec)
+
+        mode, meta = get_signal_mode("NVDA", agent_name="technical", conn=db_conn)
+        assert mode == SignalMode.MOMENTUM
+        assert "adaptive mode disabled" in meta["reason"]
+        assert "p-hack-protect" in meta["reason"]
+
+    def test_get_signal_mode_runs_normally_when_no_experiment_active(
+        self, db_conn, tmp_path: Path, monkeypatch,
+    ):
+        """Without an experiment, adaptive logic runs (subject to data availability)."""
+        from cents.agents.signal_mode import get_signal_mode, SignalMode
+
+        # db_conn fixture returns the path; open a real connection
+        conn = sqlite3.connect(db_conn)
+        conn.row_factory = sqlite3.Row
+
+        # No experiment registered — should not short-circuit.
+        mode, meta = get_signal_mode("NVDA", agent_name="technical", conn=conn)
+        # Without sufficient backtest history we expect MOMENTUM by the
+        # downstream "insufficient data" rule, but the REASON should NOT mention
+        # the experiment short-circuit.
+        assert mode in (SignalMode.MOMENTUM, SignalMode.NEUTRAL, SignalMode.CONTRARIAN)
+        assert "adaptive mode disabled" not in (meta.get("reason") or "")
+        conn.close()
+
+
+class TestCalibrationFreshnessRecording:
+    """cents-a1d: calibration_age_days must surface in summary_json + regime snapshot."""
+
+    def test_summary_json_includes_calibration_age_when_model_loaded(
+        self, db_conn, tmp_path: Path, monkeypatch,
+    ):
+        """When a calibration model is loaded, its age is recorded in the run."""
+        from datetime import datetime, timedelta
+        from unittest.mock import MagicMock
+        from cents.factory.config import FactoryConfig
+        from cents.factory.engine import FactoryEngine
+        from cents.db import UniverseRepository
+        from cents.models import Universe
+
+        cfg_path = tmp_path / "factory.toml"
+        cfg_path.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg_path))
+
+        UniverseRepository().create(
+            Universe(name="test", symbols=["AAPL"], is_default=True)
+        )
+
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **k: ([], {}),
+        )
+        import cents.agents
+        fake_event = MagicMock()
+        fake_event.refresh.return_value = {"fetched": 0, "new": 0, "alerts_fired": 0}
+        monkeypatch.setattr(cents.agents, "EventAgent", lambda: fake_event)
+
+        # Inject a stub calibration model with a known age
+        fake_model = MagicMock()
+        fake_model.fit_at = datetime.now() - timedelta(days=42)
+
+        orch = MagicMock()
+        orch.research.return_value = type(
+            "AR", (), {
+                "conviction_delta": 1.0, "evidence": [],
+                "summary": "x", "dimension_scores": {},
+            }
+        )()
+        provider = MagicMock()
+        provider.get_latest_price.return_value = 100.0
+
+        cfg = FactoryConfig(
+            budget_usd=10_000, target_positions=10, entry_threshold=5.0,
+            cohort_mode="directional_only",
+        )
+        engine = FactoryEngine(
+            config=cfg, orchestrator=orch, price_provider=provider,
+            calibration_model=fake_model,
+        )
+        run = engine.run()
+
+        assert "calibration_age_days" in run.summary_json
+        assert run.summary_json["calibration_age_days"] == 42
+
+    def test_no_calibration_age_in_summary_when_no_model(
+        self, db_conn, tmp_path: Path, monkeypatch,
+    ):
+        """No model loaded → no calibration_age_days field (cleanly absent)."""
+        from unittest.mock import MagicMock
+        from cents.factory.config import FactoryConfig
+        from cents.factory.engine import FactoryEngine
+        from cents.db import UniverseRepository
+        from cents.models import Universe
+
+        cfg_path = tmp_path / "factory.toml"
+        cfg_path.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg_path))
+
+        UniverseRepository().create(
+            Universe(name="test", symbols=["AAPL"], is_default=True)
+        )
+
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **k: ([], {}),
+        )
+        # Make load_latest_model return None so engine has no model
+        monkeypatch.setattr("cents.factory.engine.load_latest_model", lambda: None)
+        import cents.agents
+        fake_event = MagicMock()
+        fake_event.refresh.return_value = {"fetched": 0, "new": 0, "alerts_fired": 0}
+        monkeypatch.setattr(cents.agents, "EventAgent", lambda: fake_event)
+
+        orch = MagicMock()
+        orch.research.return_value = type(
+            "AR", (), {
+                "conviction_delta": 0.5, "evidence": [],
+                "summary": "x", "dimension_scores": {},
+            }
+        )()
+        provider = MagicMock()
+        provider.get_latest_price.return_value = 100.0
+
+        cfg = FactoryConfig(
+            budget_usd=10_000, target_positions=10, entry_threshold=5.0,
+            cohort_mode="directional_only",
+        )
+        engine = FactoryEngine(config=cfg, orchestrator=orch, price_provider=provider)
+        run = engine.run()
+
+        # No model → no calibration_age_days surfaced
+        assert "calibration_age_days" not in run.summary_json

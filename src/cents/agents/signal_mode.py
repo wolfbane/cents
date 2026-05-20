@@ -80,6 +80,30 @@ def get_signal_mode(
     Returns:
         Tuple of (SignalMode, metadata dict with hit_rate, signal_count, etc.)
     """
+    # cents-38i: Disable adaptive mode during an active pre-registered experiment.
+    # Adaptive mode reads from BacktestRepository which is populated by the SAME
+    # live-arm outcomes the agent is currently predicting — that's a feedback
+    # loop / p-hack risk that confounds the LLM-vs-random hit-rate delta. During
+    # experiments, force MOMENTUM (= no transformation) so the agent's signal is
+    # what it computed, not what the running cohort taught it.
+    try:
+        from cents.experiments import get_active_experiment
+        active = get_active_experiment()
+    except Exception:  # pragma: no cover — defensive
+        active = None
+    if active is not None:
+        return SignalMode.MOMENTUM, {
+            "symbol": symbol,
+            "agent": agent_name,
+            "horizon": horizon,
+            "signal_count": 0,
+            "hit_rate": None,
+            "reason": (
+                f"adaptive mode disabled during active experiment "
+                f"{active.name!r} (cents-38i)"
+            ),
+        }
+
     repo = BacktestRepository(conn=conn)
     signals = repo.get_signal_history(
         symbol=symbol,
