@@ -48,6 +48,18 @@ _VALID_DIRECTIONS = frozenset({"positive", "negative"})
 # thesis had real content to reason over and respect the LLM's empty answer.
 _SPARSE_SUMMARY_THRESHOLD = 50
 
+# Classifier-path labels recorded on each Thesis. Three buckets:
+#   "llm"             — LLM produced ≥1 vocabulary-mapped tag.
+#   "fallback_sector" — LLM unavailable or returned nothing usable AND the
+#                       sector-fallback path produced tags.
+#   "fallback_empty"  — Neither path produced tags.
+# Persisted on Thesis.premise_classification_source so `factory analyze` can
+# stratify outcomes by classifier path — a 30% fallback rate mixes two very
+# different signal-quality buckets into one headline number.
+PREMISE_SOURCE_LLM = "llm"
+PREMISE_SOURCE_FALLBACK_SECTOR = "fallback_sector"
+PREMISE_SOURCE_FALLBACK_EMPTY = "fallback_empty"
+
 # Sector ETF → premise tags from the EVENT_TAGS controlled vocabulary.
 # Each tag is one that a federal action in that domain would materially
 # shift the typical sector-member thesis on. Used as a fallback for theses
@@ -79,9 +91,23 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _record_source(sink: list[str] | None, source: str) -> None:
+    """Append the classifier-path label to the engine-provided sink (if any).
+
+    Side-channel out-param so `classify_premise_tags` keeps its 2-tuple
+    return shape (preserves back-compat with every existing test stub that
+    unpacks `tags, directions = classify_premise_tags(...)`) while letting
+    the factory engine learn which branch produced the tags. Tests that
+    don't pass a sink read None.
+    """
+    if sink is not None:
+        sink.append(source)
+
+
 def _sector_fallback_tags(
     symbol: str,
     side: str | None,
+    source_sink: list[str] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Return ``(tags, direction)`` derived from the symbol's sector ETF.
 
@@ -99,6 +125,7 @@ def _sector_fallback_tags(
     has no fallback entry (e.g. SPY-only fallback, sector lookup failed).
     """
     if side not in ("long", "short"):
+        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
         return [], {}
     # Lazy import to avoid an engine-helper cycle at module import time.
     from cents.factory.sector_map import hedge_etf_for
@@ -107,14 +134,18 @@ def _sector_fallback_tags(
         sector_etf = hedge_etf_for(symbol)
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("sector lookup failed for %s: %s", symbol, exc)
+        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
         return [], {}
     if not sector_etf:
+        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
         return [], {}
     tags = SECTOR_FALLBACK_TAGS.get(sector_etf)
     if not tags:
+        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
         return [], {}
     capped = tags[:_MAX_PREMISE_TAGS]
     polarity = "positive" if side == "long" else "negative"
+    _record_source(source_sink, PREMISE_SOURCE_FALLBACK_SECTOR)
     return capped, {t: polarity for t in capped}
 
 
@@ -125,6 +156,7 @@ def classify_premise_tags(
     *,
     anthropic_client=None,
     side: str | None = None,
+    source_sink: list[str] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Return ``(tags, direction)`` capturing regime dependencies of the thesis.
 
@@ -147,7 +179,8 @@ def classify_premise_tags(
     client = anthropic_client or _build_anthropic_client()
     if client is None:
         if sparse:
-            return _sector_fallback_tags(symbol, side)
+            return _sector_fallback_tags(symbol, side, source_sink)
+        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
         return [], {}
 
     vocab = sorted(EVENT_TAGS)
@@ -214,14 +247,15 @@ def classify_premise_tags(
         # success path where the LLM voluntarily returned []; an exception
         # path tells us NOTHING about whether the LLM thought tags existed.
         logger.warning("classify_premise_tags LLM call failed: %s — using sector fallback", e)
-        return _sector_fallback_tags(symbol, side)
+        return _sector_fallback_tags(symbol, side, source_sink)
 
     def _empty_or_fallback() -> tuple[list[str], dict[str, str]]:
         # Only fall back when the input was too thin for the LLM to anchor on.
         # If the thesis had real text and the LLM still chose no tags, respect
         # that — the LLM path's "no regime dependency" answer is meaningful.
         if sparse:
-            return _sector_fallback_tags(symbol, side)
+            return _sector_fallback_tags(symbol, side, source_sink)
+        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
         return [], {}
 
     parsed = extract_json_object(text)
@@ -236,6 +270,7 @@ def classify_premise_tags(
 
     raw_dirs = parsed.get("directions") or {}
     if not isinstance(raw_dirs, dict):
+        _record_source(source_sink, PREMISE_SOURCE_LLM)
         return tags, {}
     surviving = set(tags)
     directions = {
@@ -244,6 +279,7 @@ def classify_premise_tags(
         if isinstance(k, str) and k in surviving
         and isinstance(v, str) and v in _VALID_DIRECTIONS
     }
+    _record_source(source_sink, PREMISE_SOURCE_LLM)
     return tags, directions
 
 

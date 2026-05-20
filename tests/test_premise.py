@@ -260,6 +260,97 @@ class TestSectorFallback:
         assert tags == []
         assert directions == {}
 
+    def test_source_sink_records_fallback_sector(self, db_conn, monkeypatch):
+        """cents-83xl: sector-fallback path appends "fallback_sector" to the sink."""
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.factory.sector_map.hedge_etf_for", lambda sym: "XLF"
+        )
+        sink: list[str] = []
+        classify_premise_tags(
+            "JPM", "", [], anthropic_client=None, side="long", source_sink=sink,
+        )
+        assert sink == ["fallback_sector"]
+
+    def test_source_sink_records_fallback_empty_without_side(
+        self, db_conn, monkeypatch,
+    ):
+        """No side hint + no LLM client → fallback_empty (can't even reach sector path)."""
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.factory.premise._build_anthropic_client", lambda: None
+        )
+        sink: list[str] = []
+        classify_premise_tags(
+            "JPM", "", [], anthropic_client=None, source_sink=sink,
+        )
+        assert sink == ["fallback_empty"]
+
+    def test_source_sink_records_llm_when_tags_mapped(
+        self, db_conn, monkeypatch,
+    ):
+        """LLM produced ≥1 vocab-mapped tag → source is "llm"."""
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        client = _FakeAnthropic(
+            '{"tags": ["fed_policy"], "directions": {"fed_policy": "positive"}}'
+        )
+        sink: list[str] = []
+        tags, _ = classify_premise_tags(
+            "JPM", "Long banks on rate-cut backdrop", [],
+            anthropic_client=client, source_sink=sink,
+        )
+        assert tags == ["fed_policy"]
+        assert sink == ["llm"]
+
+    def test_source_sink_records_fallback_empty_when_llm_returns_nothing_on_real_text(
+        self, db_conn, monkeypatch,
+    ):
+        """LLM returned [] on substantive text → respect the answer, label fallback_empty."""
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        long_summary = "A " * 200
+        client = _FakeAnthropic('{"tags": [], "directions": {}}')
+        sink: list[str] = []
+        tags, _ = classify_premise_tags(
+            "JPM", long_summary, [], anthropic_client=client, side="long",
+            source_sink=sink,
+        )
+        assert tags == []
+        assert sink == ["fallback_empty"]
+
+    def test_source_sink_records_fallback_sector_when_llm_crashes(
+        self, db_conn, monkeypatch,
+    ):
+        """LLM exception → falls back to sector tags → source is "fallback_sector"."""
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.factory.sector_map.hedge_etf_for", lambda sym: "XLF"
+        )
+
+        class _ExplodingAnthropic:
+            def __init__(self):
+                self.messages = self
+
+            def create(self, **kwargs):
+                raise RuntimeError("network exploded")
+
+        sink: list[str] = []
+        tags, _ = classify_premise_tags(
+            "JPM", "short signal", [], anthropic_client=_ExplodingAnthropic(),
+            side="long", source_sink=sink,
+        )
+        assert tags == SECTOR_FALLBACK_TAGS["XLF"]
+        assert sink == ["fallback_sector"]
+
     def test_sector_tags_remain_a_subset_of_event_tags(self):
         """Regression: every fallback tag must exist in EVENT_TAGS verbatim.
 

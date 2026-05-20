@@ -869,6 +869,73 @@ class TestMigrationPath:
             )
         conn.close()
 
+    def test_premise_classification_source_round_trips(self, tmp_path):
+        """cents-83xl: column lands on theses via migration AND round-trips a value.
+
+        Without this, a Thesis stamped with premise_classification_source="llm"
+        could silently revert to "fallback_empty" on read — exactly the
+        stratification blocker the bead is trying to prevent.
+        """
+        import sqlite3
+        from cents.db.schema import _migrate_schema
+
+        # Start with a minimal pre-cents-83xl theses table (no source column).
+        db_path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.executescript("""
+            CREATE TABLE theses (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                hypothesis TEXT DEFAULT '',
+                status TEXT DEFAULT 'open',
+                conviction REAL DEFAULT 50.0,
+                tags TEXT DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE evidence (
+                id TEXT PRIMARY KEY, thesis_id TEXT, agent TEXT, type TEXT,
+                content TEXT, source TEXT, confidence REAL, metadata TEXT,
+                timestamp TEXT, dimension TEXT
+            );
+            CREATE TABLE watchlist (
+                id TEXT PRIMARY KEY, symbol TEXT UNIQUE, notes TEXT,
+                thesis_id TEXT, threshold REAL, alert_destination TEXT,
+                last_scanned TEXT, created_at TEXT
+            );
+        """)
+        conn.commit()
+
+        _migrate_schema(conn)
+
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(theses)")}
+        assert "premise_classification_source" in cols
+
+        # Round-trip a non-default value.
+        conn.execute(
+            "INSERT INTO theses (id, title, created_at, updated_at, "
+            "premise_classification_source) "
+            "VALUES ('t1', 'T', '2024-01-01', '2024-01-01', 'fallback_sector')"
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT premise_classification_source FROM theses WHERE id='t1'"
+        ).fetchone()
+        assert row[0] == "fallback_sector"
+
+        # And legacy rows (no value) get the schema default.
+        conn.execute(
+            "INSERT INTO theses (id, title, created_at, updated_at) "
+            "VALUES ('t2', 'T2', '2024-01-01', '2024-01-01')"
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT premise_classification_source FROM theses WHERE id='t2'"
+        ).fetchone()
+        assert row[0] == "fallback_empty"
+        conn.close()
+
     def test_migrate_schema_is_idempotent(self, tmp_path):
         """Running _migrate_schema twice must not fail (re-add) or change shape."""
         import sqlite3

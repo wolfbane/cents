@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS theses (
     hedge_basis TEXT,
     premise_tags TEXT DEFAULT '[]',
     premise_direction TEXT DEFAULT '{}',
+    premise_classification_source TEXT DEFAULT 'fallback_empty',
     regime_snapshot TEXT DEFAULT '{}',
     discovery_source TEXT,
     calibrated_p_correct REAL,
@@ -357,6 +358,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("positions", "borrow_rate_pa_pct", "ALTER TABLE positions ADD COLUMN borrow_rate_pa_pct REAL"),
         # Per-tag polarity (Layer 2 #1) — JSON-serialized dict.
         ("theses", "premise_direction", "ALTER TABLE theses ADD COLUMN premise_direction TEXT DEFAULT '{}'"),
+        # Classifier-path label (cents-83xl) — "llm" / "fallback_sector" /
+        # "fallback_empty". Lets `factory analyze` stratify outcomes by
+        # whether the LLM produced the tags or sector defaults filled in.
+        ("theses", "premise_classification_source", "ALTER TABLE theses ADD COLUMN premise_classification_source TEXT DEFAULT 'fallback_empty'"),
         # Calibrated P(correct) at thesis-open time (Layer 2 #3).
         ("theses", "calibrated_p_correct", "ALTER TABLE theses ADD COLUMN calibrated_p_correct REAL"),
         # Calibration model vintage (Bug E, r3) — ISO fit_at of the model used.
