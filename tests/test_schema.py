@@ -477,6 +477,51 @@ class TestHedgeBasisRoundTrip:
         conn.close()
 
 
+class TestEnumRoundTrip:
+    """ThesisRepository must deserialize categorical columns back into their
+    declared Enum types, not bare strings. Without this, callers that pattern
+    match on `t.hedge_basis is HedgeBasis.BETA` or use `match` statements
+    silently fail post-read while string equality continues to work.
+    """
+
+    def test_hedge_basis_round_trips_as_enum(self, tmp_path):
+        from cents.db.repository import ThesisRepository
+        from cents.db.schema import init_db
+        from cents.models import HedgeBasis, Thesis, ThesisCohort
+
+        conn = init_db(tmp_path / "enum-rt.db")
+        repo = ThesisRepository(conn=conn)
+
+        t = Thesis(
+            title="rt", symbol="X",
+            cohort=ThesisCohort.NEUTRAL, hedge_symbol="SPY",
+            hedge_basis=HedgeBasis.DOLLAR_FALLBACK,
+        )
+        repo.create(t)
+        read = repo.get(t.id)
+        assert read.hedge_basis is HedgeBasis.DOLLAR_FALLBACK
+        assert isinstance(read.hedge_basis, HedgeBasis)
+        conn.close()
+
+    def test_premise_classification_source_round_trips_as_enum(self, tmp_path):
+        from cents.db.repository import ThesisRepository
+        from cents.db.schema import init_db
+        from cents.models import PremiseSource, Thesis
+
+        conn = init_db(tmp_path / "enum-rt-2.db")
+        repo = ThesisRepository(conn=conn)
+
+        t = Thesis(
+            title="rt2", symbol="Y",
+            premise_classification_source=PremiseSource.FALLBACK_SECTOR,
+        )
+        repo.create(t)
+        read = repo.get(t.id)
+        assert read.premise_classification_source is PremiseSource.FALLBACK_SECTOR
+        assert isinstance(read.premise_classification_source, PremiseSource)
+        conn.close()
+
+
 class TestSchemaIntegrity:
     """Tests for overall schema integrity."""
 

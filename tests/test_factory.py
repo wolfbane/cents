@@ -1267,6 +1267,55 @@ class TestFactoryCli:
         assert sector_cell["metrics"]["opened"] == 1
         assert sector_cell["metrics"]["win_rate"] == 1.0
 
+    def test_analyze_by_hedge_basis(self, factory_db, monkeypatch, tmp_path):
+        """factory analyze --by hedge_basis surfaces the methodology stratifier.
+
+        cents-931f records hedge_basis on every thesis so analytics can split
+        the paired-neutral cohort by whether the neutrality claim is genuine
+        ("beta") vs degenerate ("dollar_fallback") vs equal-dollar by design
+        ("dollar"). Without this axis the recorded field is unreachable from
+        the CLI. Directional theses (hedge_basis=None) bucket as "directional".
+        """
+        from cents.cli import cli
+        from cents.models import HedgeBasis
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        t_beta = Thesis(
+            title="factory:N1", symbol="A", tags=[TAG_FACTORY],
+            cohort=ThesisCohort.NEUTRAL, hedge_symbol="SPY",
+            hedge_basis=HedgeBasis.BETA,
+        )
+        trepo.create(t_beta)
+        t_beta.close(ThesisOutcome.CORRECT)
+        trepo.update(t_beta)
+        t_fallback = Thesis(
+            title="factory:N2", symbol="B", tags=[TAG_FACTORY],
+            cohort=ThesisCohort.NEUTRAL, hedge_symbol="SPY",
+            hedge_basis=HedgeBasis.DOLLAR_FALLBACK,
+        )
+        trepo.create(t_fallback)
+        t_fallback.close(ThesisOutcome.INCORRECT)
+        trepo.update(t_fallback)
+        t_directional = Thesis(
+            title="factory:D1", symbol="C", tags=[TAG_FACTORY],
+            hedge_basis=None,
+        )
+        trepo.create(t_directional)
+        t_directional.close(ThesisOutcome.CORRECT)
+        trepo.update(t_directional)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze", "--by", "hedge_basis", "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        assert payload["by"] == ["hedge_basis"]
+        keys = {c["hedge_basis"] for c in payload["cells"]}
+        assert keys == {"beta", "dollar_fallback", "directional"}
+
     def test_analyze_rejects_unknown_axis(self, factory_db, monkeypatch, tmp_path):
         from cents.cli import cli
 

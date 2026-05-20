@@ -366,6 +366,19 @@ class AnalyzeAxis(str, Enum):
     ORCHESTRATOR = "orchestrator"
     PREMISE_CLASSIFICATION_SOURCE = "premise_classification_source"
     PREMISE_TAGS_COUNT = "premise_tags_count"
+    HEDGE_BASIS = "hedge_basis"
+
+
+def _premise_source_bucket(t) -> str:
+    raw = t.premise_classification_source
+    return raw.value if hasattr(raw, "value") else (raw or PremiseSource.FALLBACK_EMPTY.value)
+
+
+def _hedge_basis_bucket(t) -> str:
+    raw = t.hedge_basis
+    if raw is None:
+        return "directional"
+    return raw.value if hasattr(raw, "value") else raw
 
 
 # Per-axis bucketing — extending the analyze surface = add a case here.
@@ -374,10 +387,9 @@ _AXIS_BUCKET = {
     AnalyzeAxis.DISCOVERY: lambda t: t.discovery_source or "unspecified",
     AnalyzeAxis.REGIME: lambda t: _regime_bucket(t.regime_snapshot),
     AnalyzeAxis.ORCHESTRATOR: lambda t: t.orchestrator_label or "unspecified",
-    AnalyzeAxis.PREMISE_CLASSIFICATION_SOURCE: (
-        lambda t: t.premise_classification_source or PremiseSource.FALLBACK_EMPTY.value
-    ),
+    AnalyzeAxis.PREMISE_CLASSIFICATION_SOURCE: _premise_source_bucket,
     AnalyzeAxis.PREMISE_TAGS_COUNT: lambda t: str(t.premise_tags_count or 0),
+    AnalyzeAxis.HEDGE_BASIS: _hedge_basis_bucket,
 }
 
 
@@ -389,7 +401,8 @@ _AXIS_BUCKET = {
     default="cohort",
     help=(
         "Comma-separated grouping axes "
-        "(cohort,discovery,regime,orchestrator,premise_classification_source,premise_tags_count). "
+        "(cohort,discovery,regime,orchestrator,premise_classification_source,"
+        "premise_tags_count,hedge_basis). "
         "Multiple axes produce a cross-tab. Default: cohort."
     ),
 )
