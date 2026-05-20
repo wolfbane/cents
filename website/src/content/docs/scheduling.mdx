@@ -204,19 +204,27 @@ plist for any cents subprocesses.
 </Aside>
 
 <Aside type="caution" title="Cost-cap discipline">
-A hung agent loop can rack up Anthropic charges quickly. Two layers:
+A hung agent loop can rack up Anthropic charges quickly. There are
+**two distinct caps** and they live in different places — operators
+routinely set one and forget the other. CLAUDE.md calls this out as a
+common gotcha; the table below is the authoritative reference.
 
-- **Per-run cap**: pair every `cents factory run` with `--max-cost-usd N`.
-  $5–10/day is a comfortable ceiling for a small universe; raise it once
-  you've watched a few runs land at under $0.10.
-- **Daily cap**: set `max_llm_spend_usd_per_day = N` in **`~/.cents/config.toml`**
-  (NOT `factory.toml` — easy mistake). The `CENTS_MAX_LLM_SPEND_USD_PER_DAY`
-  env var works too and is what most cron setups use.
+| Setting | Location | Scope | Pre-flight check | On exceed |
+| --- | --- | --- | --- | --- |
+| `--max-cost-usd N` | CLI flag on `cents factory run` | Per-run | Yes — token-count estimate before the next call | `CostCapExceeded` raised, partial run persisted with `error = "cost_cap_exceeded"` |
+| `max_llm_spend_usd_per_day` | **`~/.cents/config.toml`** (NOT `factory.toml`) | Daily, across ALL cents processes | Yes — sums today's `llm_usage` rows + projected next call | Same `CostCapExceeded`; the offending API call is never made |
+| `CENTS_MAX_LLM_SPEND_USD_PER_DAY` | env var | Daily (overrides config file) | Same as above | Same as above |
 
-Both are enforced pre-call via a token-count estimate, so the offending
-request is never made. Watch usage with `cents usage headroom --output json |
-jq .status` — emits `ok / approaching_cap / hit_cap / no_cap_configured`.
-See the [factory cost note](/factory/#operational-cost-observed).
+Recommendations:
+
+- **Set both.** The daily cap is your hard ceiling across however many
+  cron invocations run. The per-run cap is a guardrail against one
+  pathological loop draining the day's budget in a single shot.
+- **$5–10/day** is a comfortable ceiling for a small universe; raise
+  it once you've watched a few runs land at under $0.10.
+- Watch usage with `cents usage headroom --output json | jq .status` —
+  emits `ok / approaching_cap / hit_cap / no_cap_configured`. See the
+  [factory cost note](/factory/#operational-cost-observed).
 </Aside>
 
 <Aside type="caution" title="Don't automate `experiment finalize`">
@@ -303,7 +311,7 @@ If hung >30 min, SIGINT (Ctrl-C / `kill -INT`). The engine catches
 `KeyboardInterrupt` cleanly and persists the partial run with `error`
 set in `factory_runs`. The cron should not retry the same minute.
 
-### Cost cap hit mid-loop
+### Cost cap hit mid-loop — partial runs and cohort bias
 
 When pre-call cost estimation projects the next LLM call would exceed
 `--max-cost-usd` (per-run) or `max_llm_spend_usd_per_day` (daily),
@@ -313,8 +321,29 @@ persisted with `error = "cost_cap_exceeded"`.
 **This biases the cohort.** Symbols evaluated before the abort tend to be
 the most conviction-heavy (since the engine processes the universe in
 shuffled order and the first 5 above-threshold names cost the most LLM
-time on premise classification). If you see frequent cost-cap aborts,
-either:
+time on premise classification). The engine does NOT keep a cursor
+between runs — the next day's `factory run` reshuffles the universe with
+a fresh seed and walks it from the top, so symbols that got cut off
+yesterday are not preferentially picked up today. Net effect: days that
+hit the cap contribute fewer opens than days that finished, and the
+opens they DO contribute skew toward the high-conviction tail. Operators
+reading `cents factory analyze --by discovery` will not see this — it
+shows in `cents factory analyze --by orchestrator` only as a thinner
+LLM-arm `opened` count on bad-cap days.
+
+For the 30-day pilot, pick ONE of these strategies before the first
+scheduled run:
+
+- **Size the cap from a wide dry-run first.** Run
+  `cents factory run --dry-run` over the actual pilot universe and watch
+  the projected cost. Set `--max-cost-usd` ~20% above the observed peak
+  so noise won't trip it.
+- **Set the per-run cap loosely and rely on the daily cap as the real
+  ceiling.** This trades a chance of one expensive run for guaranteed
+  full-universe coverage on the days that complete; the daily cap still
+  bounds total spend if something pathological happens.
+
+If you see frequent cost-cap aborts mid-pilot:
 
 - Raise the cap (the default $5/day is well above observed ~$0.20/run)
 - Move to a tighter universe so per-run cost is bounded
@@ -393,11 +422,107 @@ cents eval run --persist-history --gate \
 Replace `mail` with whatever notification channel you use (Slack
 webhook, ntfy, healthchecks.io ping, etc.).
 
+### Anthropic model snapshot bumps mid-pilot
+
+Every eval call records the upstream `model_snapshot` (e.g.
+`claude-haiku-4-5-20260301`). When Anthropic ships a new minor version of
+the Haiku family mid-pilot, that string changes and `cents eval run`
+will start scoring against an effectively different classifier — the
+gold-set numbers from before the bump are no longer comparable to the
+numbers after it. `cents eval drift-check` will likely fire a
+`MODEL_DRIFT` alert on the first post-bump day because F1 has shifted
+relative to the trailing-7 median. This is **expected**, not a
+regression — but the runbook is different from "actual drift" and the
+two look identical at first glance.
+
+When a `MODEL_DRIFT` alert fires:
+
+1. Check whether `model_snapshot` changed in the trailing window:
+
+   ```bash
+   sqlite3 ~/.cents/data/cents.db \
+     "SELECT DISTINCT model, COUNT(*) FROM llm_usage
+       WHERE called_at >= datetime('now', '-7 days')
+       GROUP BY model ORDER BY MIN(called_at)"
+   ```
+
+   If you see two distinct snapshot strings in the trailing 7 days, the
+   bump is the cause.
+
+2. **If the snapshot changed**: reset the baseline so subsequent days
+   compare apples to apples, and clear the trailing history so the
+   pre-bump days don't pollute the median:
+
+   ```bash
+   # Re-run against the new snapshot and persist a fresh baseline.
+   cents eval run --persist-baseline
+
+   # Archive then clear the pre-bump history so drift-check has a clean window.
+   mv ~/.cents/data/eval_history ~/.cents/data/eval_history-pre-$(date +%Y%m%d)
+   mkdir -p ~/.cents/data/eval_history
+   ```
+
+   Record the reset date and the old/new snapshot strings in the
+   experiment notes — that's the cohort-analytics record that someone
+   reading the pilot results six months later will need to interpret a
+   step change in eval metrics partway through the window.
+
+3. **If the snapshot did NOT change**: this is real drift. Investigate
+   (upstream API behaviour, gold-set data, recently-merged classifier
+   prompt changes) before re-baselining.
+
+Plan for at least one such bump in any 30-day pilot — Anthropic
+typically refreshes Haiku snapshots monthly. The eval harness staying
+green across the bump is what makes the rest of the experiment results
+defensible.
+
+### Backing up pilot data
+
+The 30-day pilot's entire experiment dataset — theses, evidence,
+`llm_usage`, outcomes, experiment registry, eval history — lives in a
+single SQLite file at `~/.cents/data/cents.db`. One disk failure,
+accidental `rm`, or filesystem corruption is total loss of the labeled
+outcomes dataset and there is no way to reconstruct it after the fact.
+Back it up daily, separately from the factory cron.
+
+```bash
+# Daily SQLite backup. The .backup pragma is the ONLY safe way — a plain
+# cp while a factory run is mid-flight can produce a corrupt copy because
+# WAL pages may be in flight. .backup acquires the right locks and writes
+# a consistent snapshot.
+mkdir -p ~/.cents/data/backups
+sqlite3 ~/.cents/data/cents.db \
+  ".backup ~/.cents/data/backups/cents-$(date +%Y%m%d).db"
+
+# Optional: retain the trailing 14 days, drop everything older.
+find ~/.cents/data/backups/ -name 'cents-*.db' -mtime +14 -delete
+```
+
+Schedule the backup at least **2 hours offset** from the factory cron
+(e.g. factory at 06:30 ET, backup at 08:30 ET) so the backup never runs
+mid-`factory run`. As a cron line:
+
+```bash
+# 08:30 ET — daily SQLite backup, 2h after the factory window closes.
+30 8 * * 1-5  ~/.cents/bin/cents-wrap backup-db bash -c 'mkdir -p ~/.cents/data/backups && sqlite3 ~/.cents/data/cents.db ".backup ~/.cents/data/backups/cents-$(date +\%Y\%m\%d).db" && find ~/.cents/data/backups/ -name "cents-*.db" -mtime +14 -delete'
+```
+
+Out of scope for this recipe: off-host backup (S3 / B2 / a second disk),
+which the operator can layer on top by `rsync`ing
+`~/.cents/data/backups/` to whatever they have. Also out of scope: an
+automated restore-from-backup smoke test — operators should manually
+verify the latest backup opens cleanly with `sqlite3 <backup> '.schema'`
+at least once per pilot.
+
 ### What is NOT auto-recoverable
 
-- Database file corruption (back up `~/.cents/data/cents.db` weekly)
+- Database file corruption — see the "Backing up pilot data" section
+  above; daily `.backup` snapshots are the only defence.
 - Manual edits to `factory.toml` mid-experiment (the SHA freeze in
   `cents experiment register` doesn't yet detect drift — see bead
   `cents-eat0`)
 - Loss of the `~/.cents/data/llm_calls/` blob directory — provenance
-  reconstruction will fail for affected evidence rows
+  reconstruction will fail for affected evidence rows. The blob
+  directory is not currently covered by the `sqlite3 .backup` recipe;
+  `rsync` it separately if provenance reconstruction matters for your
+  pilot.

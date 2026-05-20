@@ -127,12 +127,62 @@ alpaca_api_key = "..."         # alpaca.markets
 alpaca_secret_key = "..."
 news_api_key = "..."           # newsapi.org (optional)
 fred_api_key = "..."           # fred.stlouisfed.org (optional)
+anthropic_api_key = "..."      # anthropic.com (LLM tagging + premise classification)
 default_scan_threshold = 5.0
 ```
 
-Env vars override config: `FMP_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `NEWS_API_KEY`, `FRED_API_KEY`, `CENTS_DB_PATH`, `CENTS_OUTPUT_FORMAT`, `CENTS_SCAN_THRESHOLD`, `CENTS_WEBHOOK_URL`.
-
 Database stored at `~/.cents/data/cents.db` (SQLite, created automatically).
+
+### Environment variables
+
+Environment variables override config file values. Authoritative source for everything below is `src/cents/config.py` plus a handful of module-level reads (`cache.py`, `llm_usage.py`, `broker/alpaca.py`, `factory/universe_resolver.py`).
+
+**API keys** — required for the upstream the agent depends on; cents fails soft when a key is missing (the affected agent contributes zero signal):
+
+| Variable | Default | When to override |
+|---|---|---|
+| `FMP_API_KEY` | unset | Required for fundamentals, moat, insider, FMP-screener-sourced universes. |
+| `ALPACA_API_KEY` | unset | Required for technical agent + paper broker integration. |
+| `ALPACA_SECRET_KEY` | unset | Paired with `ALPACA_API_KEY`. |
+| `NEWS_API_KEY` | unset | Required for sentiment agent. Without it, sentiment scoring is skipped with a `WARNING`. |
+| `FRED_API_KEY` | unset | Required for macro agent. Without it, macro context is limited to a degraded set. |
+| `ANTHROPIC_API_KEY` | unset | Required for sentiment scoring, premise classification, event tagging, eval harness. Without it the LLM features are skipped with a clear message. |
+
+**Storage paths** — where cents writes its state:
+
+| Variable | Default | When to override |
+|---|---|---|
+| `CENTS_DB_PATH` | `~/.cents/data/cents.db` | Point at a separate DB for portfolio isolation, dry-runs, or per-experiment sandboxes. |
+| `CENTS_LLM_BLOB_DIR` | `~/.cents/data/llm_calls/` | Move LLM call provenance blobs (used by `cents evidence trace`) to a different filesystem. |
+| `CENTS_CONFIG` | `~/.cents/config.toml` | Point at an alternate config file (useful for layered configs in CI). |
+| `CENTS_FACTORY_CONFIG` | `~/.cents/factory.toml` | Point at an alternate factory config (e.g. `experiments/pilot.toml`). |
+
+**Tuning** — knobs you'll touch when something hangs, costs more than expected, or returns noisy data:
+
+| Variable | Default | Unit | When to override |
+|---|---|---|---|
+| `CENTS_ANTHROPIC_TIMEOUT_SEC` | `30` | seconds | Lower for chattier UIs; raise if you hit timeouts on very long premise classifications. SDK default is 600s — that 600s combined with retries can burn 30+ minutes on a single hung call, so don't go back to that. See `CONTRIBUTING.md`. |
+| `CENTS_PER_SYMBOL_DEADLINE_SEC` | `90` | seconds | Hard watchdog on the entire orchestrator-research call. Raise for universes where individual symbols pull a lot of evidence; lower to make hung upstreams fail faster. |
+| `CENTS_API_TIMEOUT` | `10` | seconds | Per-request timeout on FMP, Alpaca, FRED, NewsAPI HTTP calls. |
+| `CENTS_SCAN_THRESHOLD` | `5.0` | conviction-delta points | Threshold for `cents scan` alerts. |
+| `CENTS_OUTPUT_FORMAT` | `text` | `text` \| `json` | Switch all CLI output to JSON for machine consumption. |
+
+**Caps** — pre-call enforcement against runaway spend (see [scheduling docs](https://dollars-and-cents.ai/scheduling/#cost-cap-discipline) for the daily-vs-per-run split):
+
+| Variable | Default | Unit | When to override |
+|---|---|---|---|
+| `CENTS_MAX_LLM_SPEND_USD_PER_DAY` | unset (disabled) | USD | Daily ceiling across ALL cents processes. Pre-flight estimate sums today's `llm_usage` rows + the projected next call; raises `CostCapExceeded` before the API call. Pair with the per-run `--max-cost-usd` CLI flag on `cents factory run`. |
+
+**Behaviour flags** — change what cents does, not just how fast:
+
+| Variable | Default | When to override |
+|---|---|---|
+| `CENTS_DISABLE_CACHE` | unset (cache on) | Set to `1` / `true` to bypass the `api_cache` table entirely. Useful when debugging stale upstream responses. |
+| `CENTS_WEBHOOK_URL` | unset | URL to POST alerts to (Slack-compatible payload). |
+| `CENTS_SCREENER_ALLOW_FULL_UNIVERSE` | unset (denied) | Set to `1` to allow a SCREENER-sourced universe without `--over <parent>`. Off by default to prevent accidental 5,000-symbol scans. |
+| `CENTS_FETCH_FORWARD_ESTIMATES` | unset (off) | Set to `1` to enable forward P/E lookups via FMP analyst-estimates. Adds API cost; off by default for repro stability. |
+| `CENTS_ALLOW_LIVE_TRADING` | unset (denied) | Required (set to `1`) to even attempt non-paper Alpaca trading. **Real-money trading is explicitly out of scope** — see [scope](https://dollars-and-cents.ai/scope/). |
+| `CENTS_LIVE_TRADING_ACK` | unset | Must contain the verbatim acknowledgement phrase to pair with `CENTS_ALLOW_LIVE_TRADING`. Both must be set; either alone is rejected. |
 
 ## Documentation
 
