@@ -148,6 +148,20 @@ class EventAgent(BaseAgent):
                     "regime evidence may be incomplete",
                     len(failed),
                 )
+            # cents-5b0r: count dropped untagged events explicitly so observers
+            # can distinguish "no events fell in window" from "events existed
+            # but were filtered for lacking tags."
+            dropped_untagged = sum(
+                1 for e in events
+                if not e.tags and e.tag_status != EventTagStatus.TAGGER_FAILED
+            )
+            if dropped_untagged:
+                logger.info(
+                    "EventAgent dropped %d untagged event(s) in no-thesis path "
+                    "(tag_status != tagger_failed AND tags == []); "
+                    "run `cents event retag` to fill in tags",
+                    dropped_untagged,
+                )
             events = [
                 e for e in events
                 if e.tags or e.tag_status == EventTagStatus.TAGGER_FAILED
@@ -561,9 +575,14 @@ class EventAgent(BaseAgent):
         except CostCapExceeded:
             raise
         except Exception as e:
-            logger.warning("EventAgent batch tagging failed (%s); falling back to per-event", e)
+            # cents-zgxe: distinguish total-batch failure from per-event partial
+            # failure. Store the failure reason on each event's metadata so
+            # later diagnostics can tell why this row is TAGGER_FAILED.
+            logger.warning("EventAgent batch tagging failed (%s); marking batch as failed", e)
             for ev in events:
                 ev.tag_status = EventTagStatus.TAGGER_FAILED
+                ev.metadata = dict(ev.metadata or {})
+                ev.metadata["tag_failure_reason"] = f"batch_call_failed: {e!s}"[:200]
             return
 
         # Build provenance once for the whole batch (shared call_id).
@@ -589,7 +608,15 @@ class EventAgent(BaseAgent):
         for i, ev in enumerate(events):
             entry = by_index.get(i)
             if entry is None:
+                # cents-zgxe: this is the partial-failure path — batch returned
+                # data but didn't include this event's index. Tag with a
+                # specific reason so later analytics can distinguish from
+                # total batch failure.
                 ev.tag_status = EventTagStatus.TAGGER_FAILED
+                ev.metadata = dict(ev.metadata or {})
+                ev.metadata["tag_failure_reason"] = (
+                    f"missing_from_batch_response (batch_n={len(events)})"
+                )
                 continue
             raw_tags = entry.get("tags")
             if isinstance(raw_tags, list):

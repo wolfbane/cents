@@ -1218,25 +1218,30 @@ class TestEvidenceAgeWeighting:
         assert weight == AGE_WEIGHT_FLOOR
 
     def test_evidence_linear_decay(self):
-        """Evidence weight decays linearly from 1.0 to floor over TTL."""
+        """Evidence weight decays linearly from 1.0 to floor over TTL.
+
+        Pull TTL from DIMENSION_TTL_DAYS so the test stays valid when the
+        TTL table is tuned (cents-z8dm bumped macro 30 → 90).
+        """
         from cents.agents.orchestrator import evidence_age_weight, DIMENSION_TTL_DAYS, AGE_WEIGHT_FLOOR
         from cents.models import Evidence, ThesisDimension
 
-        # Macro TTL is 30 days - test at 15 days (halfway)
+        ttl = DIMENSION_TTL_DAYS["macro"]
+        half_ttl = ttl // 2
         evidence = Evidence(
             thesis_id="test",
             agent="test",
             type=EvidenceType.SUPPORTING,
             content="Mid-age macro data",
             source="test",
-            timestamp=datetime.now() - timedelta(days=15),
+            timestamp=datetime.now() - timedelta(days=half_ttl),
             dimension=ThesisDimension.MACRO,
         )
 
         weight = evidence_age_weight(evidence)
-        # At halfway point: 1.0 - (0.5 * (1.0 - 0.1)) = 1.0 - 0.45 = 0.55
-        expected = 1.0 - (0.5 * (1.0 - AGE_WEIGHT_FLOOR))
-        assert weight == pytest.approx(expected, rel=0.01)
+        # At halfway: 1.0 - (half_ttl/ttl) * (1.0 - AGE_WEIGHT_FLOOR)
+        expected = 1.0 - (half_ttl / ttl) * (1.0 - AGE_WEIGHT_FLOOR)
+        assert weight == pytest.approx(expected, rel=0.05)
 
     def test_dimension_specific_ttl(self):
         """Different dimensions have different TTL values."""

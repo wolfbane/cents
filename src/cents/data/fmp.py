@@ -23,6 +23,24 @@ def _sanitize_url(url: str) -> str:
     return re.sub(r"(apikey=)[^&]+", r"\1***", url, flags=re.IGNORECASE)
 
 
+def _normalize_fmp_symbol(symbol: str) -> str:
+    """Translate class-share ticker conventions to FMP's hyphen form.
+
+    cents-ao0: Yahoo and Wikipedia commonly format class-share tickers with a
+    dot (BRK.B, BF.B). FMP uses a hyphen (BRK-B, BF-B). Static universes built
+    from those sources need normalization before hitting FMP — otherwise the
+    profile / ratios endpoints return empty arrays for the affected names.
+
+    Only transforms the LAST dot-then-single-letter pattern, so ".com" or
+    multi-char suffixes are left alone. Symbols without a dot are unchanged.
+    """
+    if not symbol or "." not in symbol:
+        return symbol
+    # Pattern: <base>.<single-letter-class> → <base>-<class>
+    import re
+    return re.sub(r"\.([A-Za-z])$", r"-\1", symbol)
+
+
 class FMPFundamentalsProvider:
     """Fundamentals data provider using Financial Modeling Prep API."""
 
@@ -59,6 +77,13 @@ class FMPFundamentalsProvider:
                 per day instead of persisting indefinitely.
             **params: Query parameters
         """
+        # cents-ao0: FMP uses hyphenated class-share tickers (BRK-B, BF-B, GOOG-A)
+        # while Yahoo / static-universe lists commonly use dot form (BRK.B).
+        # Normalize the `symbol` param so a static-universe BRK.B doesn't return
+        # an empty payload silently.
+        if "symbol" in params and isinstance(params["symbol"], str):
+            params["symbol"] = _normalize_fmp_symbol(params["symbol"])
+
         # Build cache params (exclude apikey)
         cache_params = {"endpoint": endpoint, **params}
         if use_cache and daily_key:
@@ -125,14 +150,31 @@ class FMPFundamentalsProvider:
         # Profile + TTM ratios/metrics are stable within a trading day —
         # cache them with a daily key so screener / orchestrator repeats hit
         # cache without serving stale data across days.
+        # cents-dfx: track whether any core endpoint failed so the returned
+        # FundamentalsData carries a `degraded=True` flag.
+        degraded = False
         profile_data = self._fetch_json("profile", symbol=symbol, use_cache=True, daily_key=True)
         profile = profile_data[0] if profile_data and len(profile_data) > 0 else {}
+        if not profile:
+            degraded = True
 
         ratios_data = self._fetch_json("ratios-ttm", symbol=symbol, use_cache=True, daily_key=True)
         ratios = ratios_data[0] if ratios_data and len(ratios_data) > 0 else {}
+        if not ratios:
+            degraded = True
+            logger.warning(
+                "FMP ratios-ttm degraded for %s — fundamentals signal will be incomplete",
+                symbol,
+            )
 
         metrics_data = self._fetch_json("key-metrics-ttm", symbol=symbol, use_cache=True, daily_key=True)
         metrics = metrics_data[0] if metrics_data and len(metrics_data) > 0 else {}
+        if not metrics:
+            degraded = True
+            logger.warning(
+                "FMP key-metrics-ttm degraded for %s — fundamentals signal will be incomplete",
+                symbol,
+            )
 
         # Fetch analyst estimates for forward metrics (if enabled)
         estimates = self._fetch_analyst_estimates(symbol)
@@ -176,6 +218,8 @@ class FMPFundamentalsProvider:
             current_ratio=ratios.get("currentRatioTTM"),
             # Analyst - rating endpoint deprecated in stable API
             recommendation=None,
+            # cents-dfx: flag silent-degradation so analytics can see it
+            degraded=degraded,
             # Store raw data for extensibility
             raw={
                 "profile": profile,
@@ -190,20 +234,35 @@ class FMPFundamentalsProvider:
     ) -> FundamentalsData:
         """Get fundamentals as of a historical date using quarterly data."""
         # Fetch company profile (static info) - cache since it rarely changes
+        degraded = False
         profile_data = self._fetch_json("profile", symbol=symbol, use_cache=True)
         profile = profile_data[0] if profile_data and len(profile_data) > 0 else {}
+        if not profile:
+            degraded = True
 
         # Fetch historical quarterly ratios - cache since historical data is immutable
         ratios_data = self._fetch_json(
             "ratios", symbol=symbol, period="quarter", limit=40, use_cache=True
         )
         ratios = self._find_quarter_data(ratios_data, as_of)
+        if not ratios:
+            degraded = True
+            logger.warning(
+                "FMP quarterly ratios degraded for %s as_of=%s — fundamentals signal incomplete",
+                symbol, as_of,
+            )
 
         # Fetch historical quarterly key metrics - cache
         metrics_data = self._fetch_json(
             "key-metrics", symbol=symbol, period="quarter", limit=40, use_cache=True
         )
         metrics = self._find_quarter_data(metrics_data, as_of)
+        if not metrics:
+            degraded = True
+            logger.warning(
+                "FMP quarterly key-metrics degraded for %s as_of=%s",
+                symbol, as_of,
+            )
 
         return FundamentalsData(
             symbol=symbol,
@@ -228,6 +287,8 @@ class FMPFundamentalsProvider:
             current_ratio=ratios.get("currentRatio"),
             # No historical recommendations available
             recommendation=None,
+            # cents-dfx: flag silent-degradation on the historical path too
+            degraded=degraded,
             raw={
                 "profile": profile,
                 "ratios": ratios,

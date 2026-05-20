@@ -208,10 +208,13 @@ def classify_premise_tags(
     except CostCapExceeded:
         raise
     except Exception as e:
-        logger.debug("classify_premise_tags LLM call failed: %s", e)
-        if sparse:
-            return _sector_fallback_tags(symbol, side)
-        return [], {}
+        # cents-9vbs: when the LLM crashed (not "returned no tags" — actually
+        # crashed), always fall back to sector tags so the thesis isn't left
+        # uninvalidatable. The sparse-summary check only made sense for the
+        # success path where the LLM voluntarily returned []; an exception
+        # path tells us NOTHING about whether the LLM thought tags existed.
+        logger.warning("classify_premise_tags LLM call failed: %s — using sector fallback", e)
+        return _sector_fallback_tags(symbol, side)
 
     def _empty_or_fallback() -> tuple[list[str], dict[str, str]]:
         # Only fall back when the input was too thin for the LLM to anchor on.

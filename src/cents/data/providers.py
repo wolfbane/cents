@@ -82,6 +82,13 @@ class FundamentalsData:
     # Analyst
     recommendation: str | None = None  # "buy", "hold", "sell", etc.
 
+    # cents-dfx: True when the provider couldn't fetch one or more of the
+    # core ratio endpoints (plan limit, 402/403, network) and the resulting
+    # FundamentalsData has None values that would otherwise look identical
+    # to "field genuinely null." Consumers can stratify outcomes by this
+    # flag to detect quiet data degradation across cohorts.
+    degraded: bool = False
+
     # Raw data for extensibility
     raw: dict = field(default_factory=dict)
 

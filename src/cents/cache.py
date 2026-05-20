@@ -142,8 +142,10 @@ class APICache:
 
             logger.debug("Cache miss: %s/%s %s", provider, endpoint, cache_key[:8])
         except Exception as e:
-            # Handle closed connections or missing tables gracefully
-            logger.debug("Cache lookup failed: %s", e)
+            # cents-0zfx: WARNING (not DEBUG) so cache health issues are visible.
+            # A closed connection / missing table silently returning None can
+            # mask outcome drift for hours — surface them at runtime instead.
+            logger.warning("Cache lookup failed for %s/%s: %s", provider, endpoint, e)
         return None
 
     def set(
@@ -191,8 +193,10 @@ class APICache:
             self.conn.commit()
             logger.debug("Cached: %s/%s %s", provider, endpoint, cache_key[:8])
         except Exception as e:
-            # Handle closed connections or missing tables gracefully
-            logger.debug("Cache write failed: %s", e)
+            # cents-0zfx: WARNING — a silent cache-write failure means the next
+            # call re-fetches over the network, eroding the cache's value
+            # invisibly. Surface so operators can investigate.
+            logger.warning("Cache write failed for %s/%s: %s", provider, endpoint, e)
 
     def clear(self, provider: str | None = None) -> int:
         """Clear cache entries.

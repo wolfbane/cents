@@ -141,11 +141,9 @@ def _resolve_per_symbol_deadline(get) -> float:
     Order: CENTS_PER_SYMBOL_DEADLINE_SEC env var → config file → 90s default.
     """
     raw = get("per_symbol_deadline_sec", "CENTS_PER_SYMBOL_DEADLINE_SEC", 90.0)
-    try:
-        v = float(raw)
-        return v if v > 0 else 90.0
-    except (TypeError, ValueError):
-        return 90.0
+    return _coerce_positive_float(
+        raw, default=90.0, field_name="per_symbol_deadline_sec",
+    )
 
 
 def _resolve_anthropic_timeout(get) -> float:
@@ -154,9 +152,36 @@ def _resolve_anthropic_timeout(get) -> float:
     Order: CENTS_ANTHROPIC_TIMEOUT_SEC env var → config file → 30s default.
     """
     raw = get("anthropic_timeout_sec", "CENTS_ANTHROPIC_TIMEOUT_SEC", 30.0)
+    return _coerce_positive_float(
+        raw, default=30.0, field_name="anthropic_timeout_sec",
+    )
+
+
+def _coerce_positive_float(raw, *, default: float, field_name: str) -> float:
+    """Coerce raw config value to a positive float; warn + fallback on bad input.
+
+    cents-lvvm: previously bad config (e.g. anthropic_timeout_sec='thirty')
+    silently fell back to the default with no log, so misconfigs only
+    surfaced as 'why isn't my override working?' debugging sessions much
+    later. Now we log a WARNING with field name + offending value.
+    """
+    # The default itself comes through as a numeric default (when no override);
+    # don't bother coercing or warning in that case.
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw) if raw > 0 else default
     try:
         v = float(raw)
-        return v if v > 0 else 30.0
+        if v <= 0:
+            logger.warning(
+                "Config field %s=%r is not positive; falling back to default %s",
+                field_name, raw, default,
+            )
+            return default
+        return v
     except (TypeError, ValueError):
-        return 30.0
+        logger.warning(
+            "Config field %s=%r is not a number; falling back to default %s",
+            field_name, raw, default,
+        )
+        return default
 

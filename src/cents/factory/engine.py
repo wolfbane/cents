@@ -23,6 +23,11 @@ def _research_with_deadline(orchestrator, symbol: str, thesis, deadline_sec: flo
     The hung worker thread is daemonized and will be reaped by the OS when
     the underlying socket eventually times out — leaking a thread is much
     cheaper than burning 30+ minutes of wall-clock on a single symbol.
+
+    cents-e8vl: when the watchdog fires, count currently-leaked research
+    threads via threading.enumerate() so operators can spot a sustained
+    upstream stall (multiple leaked threads = something is hung at the
+    network layer).
     """
     result_holder: list = [None]
     exc_holder: list = [None]
@@ -37,6 +42,14 @@ def _research_with_deadline(orchestrator, symbol: str, thesis, deadline_sec: flo
     t.start()
     t.join(timeout=deadline_sec)
     if t.is_alive():
+        leaked = [
+            th.name for th in threading.enumerate()
+            if th.name.startswith("research-") and th.is_alive()
+        ]
+        logger.warning(
+            "per-symbol watchdog fired for %s; %d research-* threads still alive: %s",
+            symbol, len(leaked), leaked[:10],
+        )
         raise _PerSymbolTimeout(
             f"research({symbol}) exceeded {deadline_sec:.0f}s deadline"
         )

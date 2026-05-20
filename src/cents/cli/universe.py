@@ -69,7 +69,18 @@ def universe_create(
     if source_enum == UniverseSource.FMP_INDEX:
         if not index:
             exit_with_error("--index is required when --source=fmp_index")
-        source_config["index"] = index.strip().lower()
+        # cents-kme: validate against the resolver's known endpoints AT CREATE
+        # TIME — previously bogus values like 'sp100' (FMP has 'sp500'/'nasdaq'/
+        # 'dowjones') created a 0-symbol universe that silently failed on first
+        # `refresh` or `factory run`.
+        from cents.factory.universe_resolver import FMP_INDEX_ENDPOINTS
+        idx_normalized = index.strip().lower()
+        if idx_normalized not in FMP_INDEX_ENDPOINTS:
+            exit_with_error(
+                f"Unknown FMP index '{idx_normalized}'. "
+                f"Supported: {', '.join(sorted(FMP_INDEX_ENDPOINTS))}"
+            )
+        source_config["index"] = idx_normalized
 
     if source_enum == UniverseSource.SCREENER:
         if not strategy:

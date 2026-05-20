@@ -13,18 +13,26 @@ from cents.agents.event import EventAgent
 from cents.config import get_settings
 from cents.models import Evidence, EvidenceType, Thesis, ThesisDimension
 
-# Evidence TTL by dimension (days) - older evidence is weighted less
+# Evidence TTL by dimension (days) - older evidence is weighted less.
+# cents-z8dm: macro/valuation/risk lifted from 30 to 90 to match the default
+# medium-horizon thesis (default_horizon_days=30-90). Previously macro signal
+# decayed to AGE_WEIGHT_FLOOR by day 30 on a 90-day-horizon thesis, even though
+# the macro factor — Fed-rate outlook, employment trend — was still operating.
+# Technical/sentiment stay at 7 (those signals really do refresh per-week).
 DIMENSION_TTL_DAYS: dict[str, int] = {
     "technical": 7,
     "sentiment": 7,
-    "macro": 30,
-    "valuation": 30,
+    "macro": 90,       # was 30 — see cents-z8dm
+    "valuation": 90,   # was 30 — same reasoning
     "quality": 90,
     "moat": 90,
-    "risk": 30,
+    "risk": 90,        # was 30 — same reasoning
 }
 DEFAULT_TTL_DAYS = 30
-AGE_WEIGHT_FLOOR = 0.1  # Minimum weight for very old evidence
+# cents-g851: floor at 0.05 (was 0.1) — old evidence still contributes a
+# residual anchor but less aggressively. Beyond ~3×TTL the contribution is
+# effectively dwarfed by anything fresh.
+AGE_WEIGHT_FLOOR = 0.05
 
 
 def evidence_age_weight(evidence: Evidence) -> float:

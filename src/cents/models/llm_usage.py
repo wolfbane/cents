@@ -23,3 +23,15 @@ class LLMUsage:
     context: str | None = None  # free-form short attribution (symbol, thesis_id, event_id)
     called_at: datetime = field(default_factory=datetime.now)
     id: str = field(default_factory=lambda: str(uuid4())[:8])
+
+    def __post_init__(self) -> None:
+        # cents-48ua: defend against string called_at sneaking in. SQL queries
+        # do ISO-string comparison on this column and would silently misreport
+        # cost metrics if any row had a non-ISO value. The dataclass default
+        # is a real datetime, but external constructors (tests, migrations,
+        # manual edits) could otherwise pass through bad values.
+        if not isinstance(self.called_at, datetime):
+            raise TypeError(
+                f"LLMUsage.called_at must be a datetime, got "
+                f"{type(self.called_at).__name__}: {self.called_at!r}"
+            )

@@ -799,3 +799,79 @@ class TestAlpacaTodayBarDrop:
             assert any(b.timestamp.date() == backtest_date for b in history.bars)
         finally:
             os.environ.pop("CENTS_DISABLE_CACHE", None)
+
+
+class TestFMPSymbolNormalization:
+    """cents-ao0: dot-form class-share tickers normalized to FMP hyphen form."""
+
+    def test_brk_dot_b_becomes_hyphen(self):
+        from cents.data.fmp import _normalize_fmp_symbol
+        assert _normalize_fmp_symbol("BRK.B") == "BRK-B"
+        assert _normalize_fmp_symbol("BF.B") == "BF-B"
+
+    def test_no_dot_unchanged(self):
+        from cents.data.fmp import _normalize_fmp_symbol
+        assert _normalize_fmp_symbol("AAPL") == "AAPL"
+        assert _normalize_fmp_symbol("BRK-B") == "BRK-B"
+
+    def test_multi_char_suffix_unchanged(self):
+        """Only single-letter class-share suffix gets rewritten — .com etc stay."""
+        from cents.data.fmp import _normalize_fmp_symbol
+        # Hypothetical multi-letter suffix shouldn't be rewritten
+        assert _normalize_fmp_symbol("FOO.BAR") == "FOO.BAR"
+
+
+class TestFMPDegradedFlag:
+    """cents-dfx: FundamentalsData.degraded=True when an endpoint fails."""
+
+    @patch("cents.data.fmp.urllib.request.urlopen")
+    @patch("cents.data.fmp.get_settings")
+    def test_degraded_set_when_ratios_endpoint_returns_empty(self, mock_settings, mock_urlopen):
+        """If ratios-ttm returns [], FundamentalsData.degraded=True + warning logged."""
+        import json as _json
+        mock_settings.return_value.fmp_api_key = "test_key"
+        mock_settings.return_value.fetch_forward_estimates = False
+
+        # profile returns valid data; ratios returns []; metrics returns valid
+        call_count = [0]
+        responses = [
+            [{"companyName": "X", "sector": "Tech"}],  # profile
+            [],  # ratios-ttm — degraded
+            [{"returnOnEquityTTM": 0.2}],  # key-metrics-ttm
+        ]
+        def mock_response(*args, **kwargs):
+            response = MagicMock()
+            response.read.return_value = _json.dumps(responses[call_count[0]]).encode()
+            response.__enter__ = MagicMock(return_value=response)
+            response.__exit__ = MagicMock(return_value=False)
+            call_count[0] += 1
+            return response
+        mock_urlopen.side_effect = mock_response
+
+        provider = FMPFundamentalsProvider()
+        data = provider.get_fundamentals("X")
+        assert data.degraded is True
+
+    @patch("cents.data.fmp.urllib.request.urlopen")
+    @patch("cents.data.fmp.get_settings")
+    def test_degraded_false_when_all_endpoints_return_data(self, mock_settings, mock_urlopen):
+        import json as _json
+        mock_settings.return_value.fmp_api_key = "test_key"
+        mock_settings.return_value.fetch_forward_estimates = False
+        responses = [
+            [{"companyName": "X"}],
+            [{"priceToEarningsRatioTTM": 20.0, "netProfitMarginTTM": 0.2}],
+            [{"returnOnEquityTTM": 0.2}],
+        ]
+        call_count = [0]
+        def mock_response(*args, **kwargs):
+            response = MagicMock()
+            response.read.return_value = _json.dumps(responses[call_count[0]]).encode()
+            response.__enter__ = MagicMock(return_value=response)
+            response.__exit__ = MagicMock(return_value=False)
+            call_count[0] += 1
+            return response
+        mock_urlopen.side_effect = mock_response
+        provider = FMPFundamentalsProvider()
+        data = provider.get_fundamentals("X")
+        assert data.degraded is False

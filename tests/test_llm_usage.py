@@ -408,3 +408,22 @@ class TestCostCapAtomicSnapshot:
         t1.join(); t2.join()
         _state.reset()
         assert not torn_reads, f"torn reads observed: {torn_reads[:5]}"
+
+
+class TestLLMUsageCalledAtType:
+    """cents-48ua: LLMUsage rejects non-datetime called_at to prevent malformed
+    ISO strings sneaking into SQL string comparisons."""
+
+    def test_string_called_at_raises(self):
+        from cents.models import LLMUsage
+        with pytest.raises(TypeError, match="called_at must be a datetime"):
+            LLMUsage(
+                model="m", agent="a", operation="o",
+                called_at="2026-05-20T00:00:00",  # type: ignore[arg-type]
+            )
+
+    def test_datetime_called_at_ok(self):
+        from datetime import datetime
+        from cents.models import LLMUsage
+        u = LLMUsage(model="m", agent="a", operation="o", called_at=datetime.now())
+        assert isinstance(u.called_at, datetime)
