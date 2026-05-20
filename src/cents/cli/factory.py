@@ -23,7 +23,7 @@ from cents.factory.config import (
 from cents.factory.engine import FactoryEngine, TAG_FACTORY
 from cents.factory.universe_resolver import resolve_symbols
 from cents.llm_usage import cost_cap, current_run_cap_usd, current_run_spend_usd
-from cents.models import PositionStatus, ThesisCohort, ThesisOutcome, ThesisStatus
+from cents.models import PositionStatus, PremiseSource, ThesisCohort, ThesisOutcome, ThesisStatus
 from cents.pricing import estimate_cost_usd
 from cents.serialization import serialize
 
@@ -50,8 +50,8 @@ def factory_init(force: bool):
     except FileExistsError as exc:
         exit_with_error(str(exc))
     click.echo(f"Wrote factory config to {path}")
-    # cents-5lj8: probe the configured default_universe so a stale/missing
-    # universe doesn't silently produce 0 candidates once cron starts running.
+    # Probe the configured default_universe so a stale/missing universe
+    # doesn't silently produce 0 candidates once cron starts running.
     # Warnings only — operators set up cents in stages.
     _validate_default_universe()
 
@@ -59,7 +59,7 @@ def factory_init(force: bool):
 def _validate_default_universe() -> None:
     """Probe the configured default universe and emit WARNINGs on issues.
 
-    Checks (cents-5lj8):
+    Checks:
       1. The universe named in factory.toml resolves to a Universe row.
       2. It has >=1 symbol after resolution.
       3. A spot-check ticker resolves at FMP (cheap profile lookup,
@@ -375,9 +375,9 @@ _AXIS_BUCKET = {
     AnalyzeAxis.REGIME: lambda t: _regime_bucket(t.regime_snapshot),
     AnalyzeAxis.ORCHESTRATOR: lambda t: t.orchestrator_label or "unspecified",
     AnalyzeAxis.PREMISE_CLASSIFICATION_SOURCE: (
-        lambda t: getattr(t, "premise_classification_source", None) or "fallback_empty"
+        lambda t: t.premise_classification_source or PremiseSource.FALLBACK_EMPTY.value
     ),
-    AnalyzeAxis.PREMISE_TAGS_COUNT: lambda t: str(getattr(t, "premise_tags_count", 0) or 0),
+    AnalyzeAxis.PREMISE_TAGS_COUNT: lambda t: str(t.premise_tags_count or 0),
 }
 
 

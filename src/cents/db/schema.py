@@ -346,9 +346,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "cohort", "ALTER TABLE theses ADD COLUMN cohort TEXT DEFAULT 'directional'"),
         ("theses", "hedge_symbol", "ALTER TABLE theses ADD COLUMN hedge_symbol TEXT"),
         ("theses", "paired_thesis_id", "ALTER TABLE theses ADD COLUMN paired_thesis_id TEXT"),
-        # cents-931f: flag how the hedge leg was sized so analytics can
-        # distinguish genuine beta-matched neutrals from degenerate
-        # dollar-match fallbacks that contaminate the paired-neutral cohort.
+        # Flag how the hedge leg was sized so analytics can distinguish
+        # genuine beta-matched neutrals from degenerate dollar-match
+        # fallbacks that contaminate the paired-neutral cohort.
         ("theses", "hedge_basis", "ALTER TABLE theses ADD COLUMN hedge_basis TEXT"),
         # Add discovery_source to label which universe/screener surfaced the symbol (added in v0.9)
         ("theses", "discovery_source", "ALTER TABLE theses ADD COLUMN discovery_source TEXT"),
@@ -359,9 +359,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("positions", "borrow_rate_pa_pct", "ALTER TABLE positions ADD COLUMN borrow_rate_pa_pct REAL"),
         # Per-tag polarity (Layer 2 #1) — JSON-serialized dict.
         ("theses", "premise_direction", "ALTER TABLE theses ADD COLUMN premise_direction TEXT DEFAULT '{}'"),
-        # Classifier-path label (cents-83xl) — "llm" / "fallback_sector" /
-        # "fallback_empty". Lets `factory analyze` stratify outcomes by
-        # whether the LLM produced the tags or sector defaults filled in.
+        # Classifier-path label — "llm" / "fallback_sector" / "fallback_empty".
+        # Lets `factory analyze` stratify outcomes by whether the LLM
+        # produced the tags or sector defaults filled in. See PremiseSource.
         ("theses", "premise_classification_source", "ALTER TABLE theses ADD COLUMN premise_classification_source TEXT DEFAULT 'fallback_empty'"),
         # Calibrated P(correct) at thesis-open time (Layer 2 #3).
         ("theses", "calibrated_p_correct", "ALTER TABLE theses ADD COLUMN calibrated_p_correct REAL"),
@@ -371,9 +371,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "orchestrator_label", "ALTER TABLE theses ADD COLUMN orchestrator_label TEXT DEFAULT 'llm'"),
         # Experiment registration (cents-hvz) — which active experiment a thesis was opened under.
         ("theses", "experiment_id", "ALTER TABLE theses ADD COLUMN experiment_id TEXT"),
-        # Recorded premise tag count at open time (cents-2xd4) — lets the
-        # analyst verify post-hoc that LLM and random arms have comparable
-        # tag-set distributions after the sector-fallback cap.
+        # Premise tag count at open time — lets the analyst verify post-hoc
+        # that LLM and random arms have comparable tag-set distributions
+        # after the sector-fallback cap.
         ("theses", "premise_tags_count", "ALTER TABLE theses ADD COLUMN premise_tags_count INTEGER DEFAULT 0"),
         # Per-experiment calendar-day floor on verdict_ready (pilot uses 30, full uses 90).
         # Default 14 preserves back-compat with experiments registered before this column existed.

@@ -39,7 +39,7 @@ class ThesisCohort(str, Enum):
 
 
 class HedgeBasis(str, Enum):
-    """How the hedge leg of a paired-neutral thesis was sized (cents-931f).
+    """How the hedge leg of a paired-neutral thesis was sized.
 
     Recorded so analytics can stratify the "neutral" cohort by whether
     the neutrality claim is genuine. See `Thesis.hedge_basis` for the
@@ -48,6 +48,22 @@ class HedgeBasis(str, Enum):
     BETA = "beta"
     DOLLAR_FALLBACK = "dollar_fallback"
     DOLLAR = "dollar"
+
+
+class PremiseSource(str, Enum):
+    """Which classifier path produced a thesis's premise_tags.
+
+    Stratifier for `factory analyze` — a 30% fallback rate mixes two
+    very different signal-quality buckets into one headline number.
+      LLM             — LLM produced ≥1 vocabulary-mapped tag.
+      FALLBACK_SECTOR — LLM unavailable or returned nothing usable AND
+                        the sector-fallback path produced tags.
+      FALLBACK_EMPTY  — Neither path produced tags (also the default
+                        for legacy / manually-created theses).
+    """
+    LLM = "llm"
+    FALLBACK_SECTOR = "fallback_sector"
+    FALLBACK_EMPTY = "fallback_empty"
 
 
 @dataclass
@@ -76,25 +92,20 @@ class Thesis:
     cohort: ThesisCohort = ThesisCohort.DIRECTIONAL
     hedge_symbol: str | None = None
     paired_thesis_id: str | None = None
-    # Hedge basis flag (cents-931f): how the hedge leg was sized. See
-    # the HedgeBasis enum for value semantics. None on directional theses.
+    # How the hedge leg was sized. None on directional theses.
     hedge_basis: HedgeBasis | None = None
     # Regime / premise tracking
     premise_tags: list[str] = field(default_factory=list)
-    # Recorded tag count at open time (cents-2xd4). Lets the analyst verify
-    # post-hoc that LLM and random arms have comparable tag-set distributions
-    # after the sector-fallback cap was introduced. 0 = none / pre-feature.
+    # Recorded tag count at open time. Lets the analyst verify post-hoc that
+    # LLM and random arms have comparable tag-set distributions after the
+    # sector-fallback cap was introduced. 0 = none / pre-feature.
     premise_tags_count: int = 0
-    # Per-tag polarity (Layer 2 #1): "positive" = thesis benefits when this
-    # tag's events are bullish; "negative" = thesis benefits when bearish.
-    # Tags not in this dict fall back to legacy unsigned-intersection matching.
+    # Per-tag polarity: "positive" = thesis benefits when this tag's events
+    # are bullish; "negative" = thesis benefits when bearish. Tags not in
+    # this dict fall back to legacy unsigned-intersection matching.
     premise_direction: dict[str, str] = field(default_factory=dict)
-    # Which classifier path produced premise_tags (cents-83xl): "llm" =
-    # LLM produced ≥1 mapped tag; "fallback_sector" = sector defaults used
-    # because the LLM was unavailable or returned nothing usable;
-    # "fallback_empty" = neither path produced tags (also the default for
-    # legacy/manually-created theses). Stratifier for `factory analyze`.
-    premise_classification_source: str = "fallback_empty"
+    # Which classifier path produced premise_tags. See PremiseSource.
+    premise_classification_source: PremiseSource = PremiseSource.FALLBACK_EMPTY
     regime_snapshot: dict = field(default_factory=dict)
     # Discovery (e.g. universe name or screener strategy that surfaced this symbol)
     discovery_source: str | None = None

@@ -52,10 +52,9 @@ TTL_DAYS_BY_ENDPOINT: dict[tuple[str, str], int] = {
     ("fmp", "insider-trading/search"): 30,
     ("fmp", "delisted-companies"): 30,
     ("fred", "observations"): 365,
-    # Sentiment LLM decisions (cents-990): same-day re-runs on an unchanged
-    # article corpus shouldn't re-spend on the LLM filter/scoring. The cache
-    # key already includes today's date via daily_key=True, so a 1-day TTL is
-    # only a safety net for stale rows.
+    # Sentiment LLM decisions: same-day re-runs on an unchanged article
+    # corpus shouldn't re-spend on the LLM. The cache key already includes
+    # today's date, so a 1-day TTL is only a safety net for stale rows.
     ("anthropic", "sentiment_filter_articles"): 1,
     ("anthropic", "sentiment_score_articles_batch"): 1,
 }

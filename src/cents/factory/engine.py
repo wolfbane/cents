@@ -100,6 +100,7 @@ from cents.models import (
     Position,
     PositionSide,
     PositionStatus,
+    PremiseSource,
     ShadowOpen,
     Thesis,
     ThesisCohort,
@@ -135,19 +136,13 @@ def _coerce_premise_classification(
 ) -> tuple[list[str], dict[str, str], str]:
     """Adapt classify_premise_tags' return to ``(tags, direction, source)``.
 
-    The classifier returns a 2-tuple, but tests may stub it as:
-      - 3-tuple ``(tags, direction, source)`` — used as-is.
-      - 2-tuple ``(tags, direction)`` — source inferred (LLM if tags else empty).
-      - bare list of tags — source inferred ditto.
-
-    ``source_sink`` is the side-channel out-param the engine passes to the
-    real classifier (see ``classify_premise_tags``); when populated, it
-    overrides any inferred source. Tests that monkeypatch the classifier
-    leave the sink empty, so inference applies.
+    The classifier returns a 2-tuple. Tests may stub it as a 3-tuple, a
+    2-tuple, or a bare list of tags; this coercer normalises all three.
+    A populated ``source_sink`` overrides any inferred source.
     """
     if isinstance(value, tuple) and len(value) == 3:
         tags, direction, source = value
-        return list(tags or []), dict(direction or {}), source or "fallback_empty"
+        return list(tags or []), dict(direction or {}), source or PremiseSource.FALLBACK_EMPTY.value
     if isinstance(value, tuple) and len(value) == 2:
         tags_v, direction = value
         tags = list(tags_v or [])
@@ -158,7 +153,7 @@ def _coerce_premise_classification(
     if source_sink:
         source = source_sink[0]
     else:
-        source = "llm" if tags else "fallback_empty"
+        source = PremiseSource.LLM.value if tags else PremiseSource.FALLBACK_EMPTY.value
     return tags, direction, source
 
 
@@ -855,10 +850,9 @@ class FactoryEngine:
 
             # Classify premise tags now (one LLM call) so we can gate on
             # per-tag concentration before paying any further setup cost.
-            # Pass side so the classifier can fall back to sector-derived
-            # tags when the thesis text is too thin for the LLM to anchor
-            # on (e.g. random-arm control theses) — without that fallback,
-            # the random arm is silently un-invalidatable by events.
+            # Pass `side` so the classifier can fall back to sector-derived
+            # tags for thin thesis text (e.g. random-arm control) — without
+            # that fallback the random arm is silently un-invalidatable.
             side_hint = "short" if result.conviction_delta < 0 else "long"
             source_sink: list[str] = []
             premise_tags, premise_direction, premise_classification_source = (
@@ -874,12 +868,9 @@ class FactoryEngine:
                 )
             )
             # Per-premise-tag concentration cap applies to BOTH arms. The
-            # random arm's sector fallback used to emit ~5 tags per open
-            # (vs LLM's typical 1-3), which would have made the same cap
-            # asymmetric. With _SECTOR_FALLBACK_TAG_CAP=2 in premise.py
-            # the two arms now carry comparable tag-set sizes, so the cap
-            # can be applied uniformly without breaking the matched-cadence
-            # promise. See cents-2xd4.
+            # sector-fallback tag cap (premise.py _SECTOR_FALLBACK_TAG_CAP)
+            # keeps random-arm and LLM-arm tag-set sizes comparable so the
+            # same cap applies uniformly without breaking matched-cadence.
             apply_concentration_cap = cfg.max_per_premise_tag > 0
             if apply_concentration_cap and self._exceeds_premise_concentration(
                 premise_tags, open_theses, cfg.max_per_premise_tag,
@@ -1216,18 +1207,14 @@ class FactoryEngine:
     ) -> bool:
         """True if any candidate tag+direction is already at the per-tag cap.
 
-        Bug D fix: a bullish ai_capex thesis and a bearish ai_capex thesis no
-        longer count against each other — that's a spread, not concentration.
-        Buckets on ``(tag, direction)`` instead of bare ``tag``. When a thesis
-        has no recorded direction for a tag, it counts under the legacy
-        ``(tag, "*")`` bucket so behavior is preserved for older rows.
+        Buckets on ``(tag, direction)`` so a bullish ai_capex thesis and a
+        bearish ai_capex thesis don't count against each other (that's a
+        spread, not concentration). Legacy rows with no recorded direction
+        fall into the ``(tag, "*")`` bucket.
 
-        cents-2xd4: counts theses from BOTH arms now. Previously random-arm
-        theses were excluded because their sector fallback emitted ~5 tags
-        each and would saturate the cap immediately. The sector fallback is
-        now capped at _SECTOR_FALLBACK_TAG_CAP, so the two arms have
-        comparable tag counts and a uniform cap is the matched-cadence
-        choice.
+        Counts theses from BOTH arms — the sector-fallback tag cap keeps the
+        random-arm tag distribution comparable to LLM-arm so a uniform cap
+        applies without breaking matched-cadence.
         """
         if not candidate_tags:
             return False
@@ -1326,23 +1313,16 @@ class FactoryEngine:
             if isinstance(fit_at_dt, datetime):
                 calibration_fit_at = fit_at_dt.isoformat()
 
-        # cents-931f: classify how the hedge leg will be sized BEFORE the
-        # thesis row is written so analytics can stratify the paired-neutral
-        # cohort by whether the "neutral" claim is genuine. Three buckets:
-        #   beta             — beta_match_hedge=true AND R² gate passed
-        #   dollar_fallback  — beta_match_hedge=true AND estimation failed
-        #                      (no history OR R² below gate); the resulting
-        #                      thesis is a directional bet on the hedge ETF
-        #                      whether or not the hedge leg gets opened
-        #   dollar           — beta_match_hedge=false (no estimation tried)
-        # Estimating beta here also lets the hedge-leg block below reuse the
-        # value rather than re-fetching history.
+        # Classify how the hedge leg will be sized BEFORE the thesis row is
+        # written so analytics can stratify the paired-neutral cohort by
+        # whether the "neutral" claim is genuine. See HedgeBasis enum for
+        # per-value semantics. Estimating beta here also lets the hedge-leg
+        # block below reuse the value rather than re-fetching history.
         hedge_basis: HedgeBasis | None = None
         hedge_beta: float | None = None
-        # cents-931f: True iff first-pass estimation had both primary AND
-        # hedge close series available. Lets the hedge-leg block below
-        # distinguish "R² gate rejected" from "history missing" without
-        # re-fetching `_get_history(hedge_symbol)` a second time.
+        # True iff the first-pass estimation had both primary AND hedge
+        # close series available. Lets the hedge-leg block distinguish
+        # "R² gate rejected" from "history missing" without re-fetching.
         hedge_history_available = False
         if hedge_symbol:
             if not cfg.beta_match_hedge:
@@ -1404,7 +1384,7 @@ class FactoryEngine:
         # happened at every p value, which is the research question.
 
         positions_opened = 0
-        # ---- Primary leg (cents-wiz vol-scaled sizing + cents-5s7 open cost) ----
+        # ---- Primary leg (vol-scaled sizing + open cost) ----
         if price is not None and price > 0 and primary_shares > 0:
             open_cost = apply_open_cost(
                 shares=primary_shares,
@@ -1429,23 +1409,19 @@ class FactoryEngine:
             ))
             positions_opened += 1
 
-        # ---- Hedge leg (cents-t8r beta-matched sizing) ----
+        # ---- Hedge leg (beta-matched sizing) ----
         if hedge_symbol and price is not None and price > 0 and primary_shares > 0:
             hedge_provider = self._make_price_provider()
             hedge_price = hedge_provider.get_latest_price(hedge_symbol)
             if hedge_price is not None and hedge_price > 0:
                 primary_notional = primary_shares * price
 
-                # Beta-match the hedge leg notional. The estimate was already
-                # made above for hedge_basis classification — reuse it here.
-                #
-                # Bug C fix: when beta_match_hedge is on AND estimation failed
-                # specifically because the R² gate rejected the fit (hedge
-                # history was available), silently falling back to
-                # default_beta=1.0 reintroduces the dollar-match bug. Skip
-                # the hedge leg in that case. hedge_basis="dollar_fallback"
-                # is still recorded on the thesis (cents-931f) so the cohort
-                # is visibly contaminated.
+                # Reuse the beta + history flag already computed above for
+                # hedge_basis classification. When beta_match_hedge is on
+                # AND estimation failed specifically because the R² gate
+                # rejected the fit (hedge history WAS available), skip the
+                # hedge leg — silently dollar-matching here would put a
+                # directional bet into the "neutral" cohort.
                 beta = hedge_beta
                 if cfg.beta_match_hedge and beta is None and hedge_history_available:
                     logger.debug(

@@ -29,6 +29,7 @@ from cents.llm_usage import (
     record_llm_usage,
 )
 from cents.models import EVENT_TAGS, EventPolarity
+from cents.models.thesis import PremiseSource
 
 
 logger = logging.getLogger(__name__)
@@ -38,42 +39,25 @@ from cents.llm_models import HAIKU_TAGGING as _LLM_MODEL  # noqa: E402
 _LLM_TEMPERATURE = 0.0
 _RECENT_EVENT_WINDOW_DAYS = 14
 _MAX_PREMISE_TAGS = 5
-# Sector-fallback theses (random-arm control + LLM-arm thin summaries) get a
-# tighter cap so the random arm's tag count is comparable to the LLM arm's
-# typical 1-3 tags. Without this, the random arm carried ~5 sector tags per
-# open and either (a) had to skip the per-tag concentration cap entirely —
-# breaking the matched-cadence promise — or (b) hit the cap after 2 sector-
-# mates and gated tighter than LLM. Top-2 tags by relevance order (the lists
-# in SECTOR_FALLBACK_TAGS are pre-sorted most-relevant first). See cents-2xd4.
+# Sector-fallback theses get a tighter cap so the random arm's tag count is
+# comparable to the LLM arm's typical 1-3 tags. Without this, the random arm
+# carried ~5 sector tags per open and either had to skip the per-tag
+# concentration cap (breaking matched-cadence) or gate tighter than LLM.
+# Top-N tags by relevance order — the lists in SECTOR_FALLBACK_TAGS are
+# pre-sorted most-relevant first.
 _SECTOR_FALLBACK_TAG_CAP = 2
 _VALID_DIRECTIONS = frozenset({"positive", "negative"})
 
-# Minimum thesis-text length (chars) below which we treat the LLM input as
-# "thin". When the LLM also returns no tags on thin text, the classifier
-# falls back to a sector-derived tag set so synthetic/control-arm theses
-# (e.g. random orchestrator, whose summary is one boilerplate line) are
-# still invalidatable by policy events. Above this threshold we assume the
-# thesis had real content to reason over and respect the LLM's empty answer.
+# Below this thesis-text length we treat the LLM input as "thin": when the
+# LLM also returns no tags, fall back to a sector-derived tag set so
+# synthetic theses (e.g. random orchestrator) remain invalidatable by
+# policy events. Above the threshold we respect the LLM's empty answer.
 _SPARSE_SUMMARY_THRESHOLD = 50
-
-# Classifier-path labels recorded on each Thesis. Three buckets:
-#   "llm"             — LLM produced ≥1 vocabulary-mapped tag.
-#   "fallback_sector" — LLM unavailable or returned nothing usable AND the
-#                       sector-fallback path produced tags.
-#   "fallback_empty"  — Neither path produced tags.
-# Persisted on Thesis.premise_classification_source so `factory analyze` can
-# stratify outcomes by classifier path — a 30% fallback rate mixes two very
-# different signal-quality buckets into one headline number.
-PREMISE_SOURCE_LLM = "llm"
-PREMISE_SOURCE_FALLBACK_SECTOR = "fallback_sector"
-PREMISE_SOURCE_FALLBACK_EMPTY = "fallback_empty"
 
 # Sector ETF → premise tags from the EVENT_TAGS controlled vocabulary.
 # Each tag is one that a federal action in that domain would materially
-# shift the typical sector-member thesis on. Used as a fallback for theses
-# with too-thin text for the LLM to anchor on (e.g. the random-arm control).
-# All entries verified against EVENT_TAGS — additions to the vocabulary are
-# safe; renames are not, so keep this list synchronised with cents/models/event.py.
+# shift the typical sector-member thesis on. Renames in EVENT_TAGS are not
+# safe — keep this list synchronised with cents/models/event.py.
 SECTOR_FALLBACK_TAGS: dict[str, list[str]] = {
     "XLF": ["fed_policy", "rates", "financial_regulation", "debt_ceiling"],
     "XLK": ["ai_capex", "tariffs.china", "semis_policy", "antitrust", "export_controls"],
@@ -99,17 +83,15 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _record_source(sink: list[str] | None, source: str) -> None:
+def _record_source(sink: list[str] | None, source: PremiseSource) -> None:
     """Append the classifier-path label to the engine-provided sink (if any).
 
     Side-channel out-param so `classify_premise_tags` keeps its 2-tuple
-    return shape (preserves back-compat with every existing test stub that
-    unpacks `tags, directions = classify_premise_tags(...)`) while letting
-    the factory engine learn which branch produced the tags. Tests that
-    don't pass a sink read None.
+    return shape (back-compat with test stubs that unpack a 2-tuple)
+    while letting the factory engine learn which branch produced the tags.
     """
     if sink is not None:
-        sink.append(source)
+        sink.append(source.value)
 
 
 def _sector_fallback_tags(
@@ -133,7 +115,7 @@ def _sector_fallback_tags(
     has no fallback entry (e.g. SPY-only fallback, sector lookup failed).
     """
     if side not in ("long", "short"):
-        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
+        _record_source(source_sink, PremiseSource.FALLBACK_EMPTY)
         return [], {}
     # Lazy import to avoid an engine-helper cycle at module import time.
     from cents.factory.sector_map import hedge_etf_for
@@ -142,18 +124,18 @@ def _sector_fallback_tags(
         sector_etf = hedge_etf_for(symbol)
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("sector lookup failed for %s: %s", symbol, exc)
-        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
+        _record_source(source_sink, PremiseSource.FALLBACK_EMPTY)
         return [], {}
     if not sector_etf:
-        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
+        _record_source(source_sink, PremiseSource.FALLBACK_EMPTY)
         return [], {}
     tags = SECTOR_FALLBACK_TAGS.get(sector_etf)
     if not tags:
-        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
+        _record_source(source_sink, PremiseSource.FALLBACK_EMPTY)
         return [], {}
     capped = tags[:_SECTOR_FALLBACK_TAG_CAP]
     polarity = "positive" if side == "long" else "negative"
-    _record_source(source_sink, PREMISE_SOURCE_FALLBACK_SECTOR)
+    _record_source(source_sink, PremiseSource.FALLBACK_SECTOR)
     return capped, {t: polarity for t in capped}
 
 
@@ -188,14 +170,11 @@ def classify_premise_tags(
     if client is None:
         if sparse:
             return _sector_fallback_tags(symbol, side, source_sink)
-        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
+        _record_source(source_sink, PremiseSource.FALLBACK_EMPTY)
         return [], {}
 
     vocab = sorted(EVENT_TAGS)
     evidence_blob = "\n".join(f"- {e[:200]}" for e in (evidence_texts or [])[:5]) or "(no evidence)"
-    # Note: this function classifies premise tags and does NOT generate
-    # Evidence rows — it already persists its own LLM call blob via
-    # persist_call_blob (see below), so no provenance wiring is needed here.
     thesis_open, thesis_escaped, thesis_close = safe_delimit(summary[:600], "thesis")
     ev_open, ev_escaped, ev_close = safe_delimit(evidence_blob, "evidence")
     prompt = (
@@ -249,11 +228,11 @@ def classify_premise_tags(
     except CostCapExceeded:
         raise
     except Exception as e:
-        # cents-9vbs: when the LLM crashed (not "returned no tags" — actually
-        # crashed), always fall back to sector tags so the thesis isn't left
-        # uninvalidatable. The sparse-summary check only made sense for the
-        # success path where the LLM voluntarily returned []; an exception
-        # path tells us NOTHING about whether the LLM thought tags existed.
+        # LLM crashed (not "returned no tags" — actually crashed). The
+        # sparse-summary check only makes sense on the success path where
+        # the LLM voluntarily returned []; an exception path tells us
+        # nothing about whether the LLM thought tags existed. Always fall
+        # back to sector tags so the thesis isn't left uninvalidatable.
         logger.warning("classify_premise_tags LLM call failed: %s — using sector fallback", e)
         return _sector_fallback_tags(symbol, side, source_sink)
 
@@ -263,7 +242,7 @@ def classify_premise_tags(
         # that — the LLM path's "no regime dependency" answer is meaningful.
         if sparse:
             return _sector_fallback_tags(symbol, side, source_sink)
-        _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
+        _record_source(source_sink, PremiseSource.FALLBACK_EMPTY)
         return [], {}
 
     parsed = extract_json_object(text)
@@ -278,7 +257,7 @@ def classify_premise_tags(
 
     raw_dirs = parsed.get("directions") or {}
     if not isinstance(raw_dirs, dict):
-        _record_source(source_sink, PREMISE_SOURCE_LLM)
+        _record_source(source_sink, PremiseSource.LLM)
         return tags, {}
     surviving = set(tags)
     directions = {
@@ -287,7 +266,7 @@ def classify_premise_tags(
         if isinstance(k, str) and k in surviving
         and isinstance(v, str) and v in _VALID_DIRECTIONS
     }
-    _record_source(source_sink, PREMISE_SOURCE_LLM)
+    _record_source(source_sink, PremiseSource.LLM)
     return tags, directions
 
 
@@ -329,7 +308,7 @@ def _build_anthropic_client():
         return None
     try:
         import anthropic
-        # Cap per-request timeout (cents-87v): SDK default is 600s read.
+        # SDK default is 600s read-timeout — too long for the research loop.
         return anthropic.Anthropic(
             api_key=settings.anthropic_api_key,
             timeout=settings.anthropic_timeout_sec,

@@ -1,6 +1,15 @@
 """Domain models for cents."""
 
-from cents.models.thesis import Thesis, ThesisStatus, Valuation, TimeHorizon, ThesisOutcome, ThesisCohort, HedgeBasis
+from cents.models.thesis import (
+    HedgeBasis,
+    PremiseSource,
+    Thesis,
+    ThesisCohort,
+    ThesisOutcome,
+    ThesisStatus,
+    TimeHorizon,
+    Valuation,
+)
 from cents.models.evidence import Evidence, EvidenceType, ThesisDimension
 from cents.models.position import Position, PositionSide, PositionStatus
 from cents.models.outcome import Outcome, ThesisAccuracy
@@ -23,6 +32,7 @@ __all__ = [
     "ThesisOutcome",
     "ThesisCohort",
     "HedgeBasis",
+    "PremiseSource",
     "Evidence",
     "EvidenceType",
     "ThesisDimension",
