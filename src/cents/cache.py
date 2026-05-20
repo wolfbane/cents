@@ -160,6 +160,22 @@ class APICache:
         if CACHE_DISABLED or not self._table_exists:
             return
 
+        # cents-lqqw: refuse to write to namespaces marked TTL=0 (dead). The
+        # TTL=0 sentinel exists to evict left-over pre-fix rows on read; if
+        # the live code path still WRITES to that namespace we'd be growing
+        # dead rows forever until prune() catches up. Better to fail loud at
+        # the source — a stack trace pointing at the writer is the only way
+        # to find a still-wired-up dead caller.
+        ttl_days = _ttl_for(provider, endpoint)
+        if ttl_days == 0:
+            logger.warning(
+                "Refusing cache write to dead namespace %s/%s — TTL=0 means this "
+                "endpoint was superseded (e.g. bars → bars_split_v1). Update the "
+                "caller to use the live namespace.",
+                provider, endpoint,
+            )
+            return
+
         cache_key = self._make_cache_key(params)
         now = datetime.now().isoformat()
 

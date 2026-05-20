@@ -270,14 +270,20 @@ class TestFMPFundamentalsProvider:
         responses = [
             [{"companyName": "Apple Inc."}],  # profile
             [
-                {"date": "2024-06-30", "priceToEarningsRatio": 30.0, "netProfitMargin": 0.26},
-                {"date": "2024-03-31", "priceToEarningsRatio": 28.0, "netProfitMargin": 0.25},
-                {"date": "2023-12-31", "priceToEarningsRatio": 27.0, "netProfitMargin": 0.24},
+                {"date": "2024-06-30", "priceToEarningsRatio": 30.0, "netProfitMargin": 0.26,
+                 "debtToEquityRatio": 1.7, "currentRatio": 1.0,
+                 "priceToEarningsGrowthRatio": 1.9},
+                {"date": "2024-03-31", "priceToEarningsRatio": 28.0, "netProfitMargin": 0.25,
+                 "debtToEquityRatio": 1.5, "currentRatio": 1.1,
+                 "priceToEarningsGrowthRatio": 1.8},
+                {"date": "2023-12-31", "priceToEarningsRatio": 27.0, "netProfitMargin": 0.24,
+                 "debtToEquityRatio": 1.4, "currentRatio": 1.2,
+                 "priceToEarningsGrowthRatio": 1.7},
             ],  # ratios (quarterly)
             [
-                {"date": "2024-06-30", "revenuePerShare": 12.0},
-                {"date": "2024-03-31", "revenuePerShare": 11.5},
-                {"date": "2023-12-31", "revenuePerShare": 11.0},
+                {"date": "2024-06-30", "revenuePerShare": 12.0, "returnOnEquity": 0.55},
+                {"date": "2024-03-31", "revenuePerShare": 11.5, "returnOnEquity": 0.50},
+                {"date": "2023-12-31", "revenuePerShare": 11.0, "returnOnEquity": 0.45},
             ],  # metrics (quarterly)
         ]
         call_count = [0]
@@ -300,6 +306,12 @@ class TestFMPFundamentalsProvider:
         assert data.name == "Apple Inc."
         assert data.pe_ratio == 28.0  # Q1 2024 data
         assert data.profit_margin == 0.25
+        # cents-9k3w: assert ROE + debt_to_equity values to catch regressions in
+        # cents-tjr's fix (field-name change + metrics-vs-ratios dict swap).
+        assert data.debt_to_equity == 1.5
+        assert data.return_on_equity == 0.50  # comes from key-metrics, not ratios
+        assert data.peg_ratio == 1.8
+        assert data.current_ratio == 1.1
         assert data.raw["as_of"] == "2024-04-15"
 
     @patch("cents.data.fmp.get_settings")

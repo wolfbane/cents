@@ -171,7 +171,7 @@ def _one_hot(row: dict[str, str | None], prefix: str, value: str | None) -> None
 def _build_feature_rows(
     theses: Iterable[Thesis],
 ) -> tuple[list[dict[str, float]], list[int], list[datetime]]:
-    """Turn closed theses into (X rows, y labels, closed_at timestamps).
+    """Turn closed theses into (X rows, y labels, created_at timestamps).
 
     Random-arm theses are filtered out: their conviction_delta is uniform
     noise by construction, so including them in the training set shrinks
@@ -182,13 +182,16 @@ def _build_feature_rows(
 
     Numeric features always present. Categorical features (discovery,
     cohort) emit as 1.0 indicators; caller unions feature names across rows.
-    The third return value is the per-row close timestamp so callers can
-    do a time-based holdout split (regime features otherwise leak under
-    a random split).
+    The third return value is the per-row CREATED_AT timestamp so callers
+    can do a time-based holdout split that matches the regime-feature
+    snapshot window. cents-c1at: previously this returned closed_at, but
+    regime_snapshot is captured at OPEN time, so sorting by closed_at made
+    the train and holdout regimes overlap (a thesis opened in Jan, closed
+    in April had Jan-regime features but landed in 'April-old' bin).
     """
     rows: list[dict[str, float]] = []
     labels: list[int] = []
-    closed_at: list[datetime] = []
+    feature_ts: list[datetime] = []  # created_at — see cents-c1at
     for t in theses:
         if t.outcome not in (ThesisOutcome.CORRECT, ThesisOutcome.INCORRECT):
             continue
@@ -199,11 +202,17 @@ def _build_feature_rows(
         _one_hot(row, "cohort", t.cohort.value if t.cohort is not None else None)
         rows.append(row)
         labels.append(1 if t.outcome == ThesisOutcome.CORRECT else 0)
-        # Use closed_at if available, else updated_at, else created_at — the
-        # holdout split needs SOMETHING monotonic to order rows by.
-        ts = getattr(t, "closed_at", None) or getattr(t, "updated_at", None) or getattr(t, "created_at", None)
-        closed_at.append(ts if isinstance(ts, datetime) else datetime.now())
-    return rows, labels, closed_at
+        # Use created_at — regime_snapshot is captured at thesis-open time,
+        # so the holdout split must order by the SAME timestamp those
+        # features were measured at. Fallback to updated_at / closed_at only
+        # if created_at is missing (legacy rows).
+        ts = (
+            getattr(t, "created_at", None)
+            or getattr(t, "updated_at", None)
+            or getattr(t, "closed_at", None)
+        )
+        feature_ts.append(ts if isinstance(ts, datetime) else datetime.now())
+    return rows, labels, feature_ts
 
 
 def _dense_matrix(
@@ -367,20 +376,21 @@ def fit_calibration(
     future." A trailing-edge holdout gives honest generalisation metrics.
     ``holdout_seed`` is no longer used but kept for back-compat.
     """
-    rows, labels, closed_at = _build_feature_rows(closed_theses)
+    rows, labels, feature_ts = _build_feature_rows(closed_theses)
     if len(rows) < min_observations:
         return None
 
     matrix, feature_names = _dense_matrix(rows)
 
-    # Time-based holdout split.
+    # Time-based holdout split (sorted by created_at — see cents-c1at).
+    # Regime features are snapshot at OPEN time, so the train/holdout split
+    # MUST order by the same timestamp to prevent regime overlap.
     holdout_matrix: list[list[float]] = []
     holdout_labels: list[int] = []
     if holdout_pct > 0.0:
         n = len(matrix)
         n_holdout = max(1, int(round(n * holdout_pct)))
-        # Sort indices oldest→newest so the trailing-edge slice is holdout.
-        order = sorted(range(n), key=lambda i: closed_at[i])
+        order = sorted(range(n), key=lambda i: feature_ts[i])
         train_idx = set(order[: n - n_holdout])
         train_matrix = [m for i, m in enumerate(matrix) if i in train_idx]
         train_labels = [l for i, l in enumerate(labels) if i in train_idx]

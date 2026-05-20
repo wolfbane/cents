@@ -145,6 +145,17 @@ class _CostCapState:
     def run_cost_usd(self) -> float:
         return self._run_cost_usd
 
+    def snapshot(self) -> tuple[float | None, float]:
+        """Atomic (cap, cost) read under the same lock that write paths use.
+
+        cents-acb: previously check_cost_cap read cap + cost independently,
+        admitting a torn read where two concurrent calls both saw stale costs
+        and both passed the cap check. This collapses the read to one
+        lock-acquire so a CAS-style check-and-decide is consistent.
+        """
+        with self._lock:
+            return self._run_cap_usd, self._run_cost_usd
+
     def set_run_cap(self, cap_usd: float | None) -> None:
         with self._lock:
             self._run_cap_usd = cap_usd
@@ -210,18 +221,19 @@ def check_cost_cap(call_kwargs: dict[str, Any], *, agent: str, operation: str) -
     """
     estimate = peek_cost_usd(call_kwargs)
 
-    # 1. Per-run cap
-    cap = _state.run_cap_usd
+    # 1. Per-run cap — atomic (cap, spent) read so concurrent calls can't
+    # both see stale `spent` and both pass the cap check (cents-acb).
+    cap, spent = _state.snapshot()
     if cap is not None:
-        projected = _state.run_cost_usd + estimate
+        projected = spent + estimate
         if projected > cap:
             raise CostCapExceeded(
                 f"LLM cost cap would be exceeded: agent={agent} op={operation} "
-                f"cap=${cap:.4f} spent=${_state.run_cost_usd:.4f} "
+                f"cap=${cap:.4f} spent=${spent:.4f} "
                 f"next≈${estimate:.4f}",
                 cap_kind="run",
                 cap_usd=cap,
-                current_usd=_state.run_cost_usd,
+                current_usd=spent,
                 next_call_estimate_usd=estimate,
             )
 

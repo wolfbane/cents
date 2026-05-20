@@ -240,6 +240,12 @@ class EventAgent(BaseAgent):
             "alerts_fired": alerts_fired,
         }
 
+    # cents-40qg: cap how many events go into a single batch LLM call. Each
+    # event contributes ~180 max_tokens to the request, so a batch of 50 would
+    # request 9,100 max_tokens — pushing toward Haiku's per-request limit and
+    # making prompts harder to parse. 10 is a safe upper bound (~1,900 tokens).
+    _MAX_RETAG_BATCH_SIZE: int = 10
+
     def retag(
         self,
         since: date | None = None,
@@ -254,8 +260,20 @@ class EventAgent(BaseAgent):
         updates each row in place with the tagger's output. Batching cuts call
         volume ~5× — important when serial tagging hits Anthropic rate limits.
 
+        batch_size is clamped to _MAX_RETAG_BATCH_SIZE (10) and >=1.
+
         Returns {scanned, tagged, no_relevance, failed}.
         """
+        # Clamp batch_size to a safe range (cents-40qg).
+        if batch_size < 1:
+            batch_size = 1
+        elif batch_size > self._MAX_RETAG_BATCH_SIZE:
+            logger.warning(
+                "retag: batch_size=%d exceeds safe cap %d; clamping",
+                batch_size, self._MAX_RETAG_BATCH_SIZE,
+            )
+            batch_size = self._MAX_RETAG_BATCH_SIZE
+
         event_repo = EventRepository()
         since_dt = datetime.combine(since, datetime.min.time()) if since else None
         until_dt = datetime.combine(until, datetime.max.time()) if until else None
@@ -311,7 +329,11 @@ class EventAgent(BaseAgent):
             return {"fetched": 0, "new": 0, "tagged": 0, "skipped_existing": 0, "alerts_fired": 0}
 
         open_theses = thesis_repo.list(status=ThesisStatus.OPEN)
-        totals = {"fetched": 0, "new": 0, "tagged": 0, "skipped_existing": 0, "alerts_fired": 0}
+        totals = {
+            "fetched": 0, "new": 0, "tagged": 0, "skipped_existing": 0,
+            "alerts_fired": 0, "fetch_errors": 0, "stopped_early": False,
+            "first_error_window": None,
+        }
 
         cur = start_date
         while cur < end_date:
@@ -321,10 +343,18 @@ class EventAgent(BaseAgent):
                 try:
                     raw = self._fetch_federal_register_range(cur, chunk_end, page=page)
                 except RECOVERABLE_EXCEPTIONS as e:
+                    # cents-ptx1: don't silently truncate. Record that this window
+                    # paged out early so callers know the backfill is incomplete.
                     logger.warning(
                         "EventAgent backfill window %s..%s page %d failed: %s",
                         cur, chunk_end, page, e,
                     )
+                    totals["fetch_errors"] += 1
+                    totals["stopped_early"] = True
+                    if totals["first_error_window"] is None:
+                        totals["first_error_window"] = (
+                            f"{cur.isoformat()}..{chunk_end.isoformat()} page {page}: {e}"
+                        )
                     break
                 totals["fetched"] += len(raw)
                 if not raw:

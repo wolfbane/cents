@@ -815,6 +815,13 @@ class EventRepository(BaseRepository):
 class LLMUsageRepository(BaseRepository):
     """CRUD operations for LLM usage records."""
 
+    # cents-5bmj: explicit allowlist of dimensions that can be GROUP BY'd in
+    # aggregate(). Used both for input validation AND as the truth source for
+    # CLI argument choices, so a new dimension here propagates to both places.
+    AGGREGATION_DIMENSIONS: frozenset[str] = frozenset(
+        {"agent", "model", "operation", "day"}
+    )
+
     _META = ModelMeta(
         table="llm_usage",
         model=LLMUsage,
@@ -864,10 +871,16 @@ class LLMUsageRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Aggregate usage by a dimension. Returns list of dicts ordered by total calls DESC.
 
-        `dimension` must be one of: "agent", "model", "operation", "day".
+        `dimension` must be one of LLMUsageRepository.AGGREGATION_DIMENSIONS
+        (currently: "agent", "model", "operation", "day"). Adding a new
+        dimension requires both an entry in that frozenset AND any SQL
+        adjustments below — keeping the allowlist explicit prevents drift.
         """
-        if dimension not in ("agent", "model", "operation", "day"):
-            raise ValueError(f"Unsupported dimension: {dimension}")
+        if dimension not in self.AGGREGATION_DIMENSIONS:
+            raise ValueError(
+                f"Unsupported dimension: {dimension!r}. "
+                f"Must be one of: {sorted(self.AGGREGATION_DIMENSIONS)}"
+            )
 
         # SQLite stores called_at as an ISO8601 string; substr(1,10) gives YYYY-MM-DD.
         group_expr = "substr(called_at, 1, 10)" if dimension == "day" else dimension

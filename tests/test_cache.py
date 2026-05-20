@@ -167,3 +167,25 @@ class TestDetailedStats:
         # Bigger-byte endpoint should come first
         assert rows[0]["endpoint"] == "bars_split_v1"
         assert rows[1]["endpoint"] == "ratios"
+
+
+class TestDeadNamespaceWriteBlock:
+    """cents-lqqw: writes to TTL=0 (dead) namespaces are refused."""
+
+    def test_write_to_dead_namespace_is_refused(self, cache_conn):
+        """A TTL=0 namespace = no-op write + warning. Verify no row created."""
+        cache = APICache(conn=cache_conn)
+        cache.set("alpaca", "bars", {"symbol": "X"}, {"any": "data"})
+        rows = cache_conn.execute(
+            "SELECT COUNT(*) FROM api_cache WHERE provider='alpaca' AND endpoint='bars'"
+        ).fetchone()[0]
+        assert rows == 0, "Dead-namespace write should be refused"
+
+    def test_write_to_live_namespace_still_works(self, cache_conn):
+        """Sanity: TTL>0 namespaces still accept writes."""
+        cache = APICache(conn=cache_conn)
+        cache.set("alpaca", "bars_split_v1", {"symbol": "X"}, {"bars": [1, 2, 3]})
+        rows = cache_conn.execute(
+            "SELECT COUNT(*) FROM api_cache WHERE provider='alpaca' AND endpoint='bars_split_v1'"
+        ).fetchone()[0]
+        assert rows == 1

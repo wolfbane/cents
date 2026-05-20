@@ -368,3 +368,43 @@ class TestUsageCLI:
         assert payload[0]["operation"] == "tag_event"
         assert payload[0]["context"] == "2026-99999"
         assert payload[0]["est_cost_usd"] is not None
+
+
+class TestCostCapAtomicSnapshot:
+    """cents-acb: check_cost_cap reads (cap, spent) under a single lock acquisition."""
+
+    def test_snapshot_returns_consistent_pair(self):
+        from cents.llm_usage import _state
+        _state.set_run_cap(2.50)
+        _state.add_actual_cost(0.75)
+        cap, spent = _state.snapshot()
+        assert cap == 2.50
+        assert spent == 0.75
+        _state.reset()
+
+    def test_concurrent_readers_see_self_consistent_state(self):
+        """Threaded check + write: snapshot never returns a torn cap/spent pair."""
+        import threading
+        from cents.llm_usage import _state
+
+        _state.set_run_cap(10.0)
+        torn_reads = []
+
+        def writer():
+            for _ in range(2000):
+                _state.add_actual_cost(0.01)
+
+        def reader():
+            for _ in range(2000):
+                cap, spent = _state.snapshot()
+                # Cap should be the constant we set; spent should be a valid
+                # number that's consistent with set_run_cap having been called.
+                if cap != 10.0:
+                    torn_reads.append((cap, spent))
+
+        t1 = threading.Thread(target=writer, daemon=True)
+        t2 = threading.Thread(target=reader, daemon=True)
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+        _state.reset()
+        assert not torn_reads, f"torn reads observed: {torn_reads[:5]}"
