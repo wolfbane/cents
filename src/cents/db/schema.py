@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS theses (
     cohort TEXT DEFAULT 'directional',
     hedge_symbol TEXT,
     paired_thesis_id TEXT,
+    hedge_basis TEXT,
     premise_tags TEXT DEFAULT '[]',
     premise_direction TEXT DEFAULT '{}',
     regime_snapshot TEXT DEFAULT '{}',
@@ -343,6 +344,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "cohort", "ALTER TABLE theses ADD COLUMN cohort TEXT DEFAULT 'directional'"),
         ("theses", "hedge_symbol", "ALTER TABLE theses ADD COLUMN hedge_symbol TEXT"),
         ("theses", "paired_thesis_id", "ALTER TABLE theses ADD COLUMN paired_thesis_id TEXT"),
+        # cents-931f: flag how the hedge leg was sized so analytics can
+        # distinguish genuine beta-matched neutrals from degenerate
+        # dollar-match fallbacks that contaminate the paired-neutral cohort.
+        ("theses", "hedge_basis", "ALTER TABLE theses ADD COLUMN hedge_basis TEXT"),
         # Add discovery_source to label which universe/screener surfaced the symbol (added in v0.9)
         ("theses", "discovery_source", "ALTER TABLE theses ADD COLUMN discovery_source TEXT"),
         # Cost-aware position accounting (added in v0.10)

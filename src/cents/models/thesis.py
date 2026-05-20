@@ -64,6 +64,16 @@ class Thesis:
     cohort: ThesisCohort = ThesisCohort.DIRECTIONAL
     hedge_symbol: str | None = None
     paired_thesis_id: str | None = None
+    # Hedge basis flag (cents-931f): how the hedge leg was sized.
+    #   "beta"            — beta_match_hedge=true and the R² gate passed
+    #   "dollar_fallback" — beta_match_hedge=true but estimation failed
+    #                       (no history or R² below gate); the "neutral"
+    #                       cohort is contaminated by a directional bet
+    #                       on the hedge ETF and analytics should treat it
+    #                       as such
+    #   "dollar"          — beta_match_hedge=false (no estimation attempted)
+    #   None              — directional thesis with no hedge
+    hedge_basis: str | None = None
     # Regime / premise tracking
     premise_tags: list[str] = field(default_factory=list)
     # Per-tag polarity (Layer 2 #1): "positive" = thesis benefits when this

@@ -1308,6 +1308,44 @@ class FactoryEngine:
             if isinstance(fit_at_dt, datetime):
                 calibration_fit_at = fit_at_dt.isoformat()
 
+        # cents-931f: classify how the hedge leg will be sized BEFORE the
+        # thesis row is written so analytics can stratify the paired-neutral
+        # cohort by whether the "neutral" claim is genuine. Three buckets:
+        #   beta             — beta_match_hedge=true AND R² gate passed
+        #   dollar_fallback  — beta_match_hedge=true AND estimation failed
+        #                      (no history OR R² below gate); the resulting
+        #                      thesis is a directional bet on the hedge ETF
+        #                      whether or not the hedge leg gets opened
+        #   dollar           — beta_match_hedge=false (no estimation tried)
+        # Estimating beta here also lets the hedge-leg block below reuse the
+        # value rather than re-fetching history.
+        hedge_basis: str | None = None
+        hedge_beta: float | None = None
+        if hedge_symbol:
+            if not cfg.beta_match_hedge:
+                hedge_basis = "dollar"
+            else:
+                hedge_closes_for_basis, _ = self._get_history(
+                    hedge_symbol, cfg.beta_lookback_days * 2
+                )
+                if primary_closes is not None and hedge_closes_for_basis is not None:
+                    hedge_beta = estimate_beta(
+                        primary_closes, hedge_closes_for_basis,
+                        lookback=cfg.beta_lookback_days,
+                        min_r_squared=cfg.beta_min_r_squared,
+                    )
+                if hedge_beta is not None:
+                    hedge_basis = "beta"
+                else:
+                    hedge_basis = "dollar_fallback"
+                    logger.warning(
+                        "Beta-match hedge fell back to dollar-match for %s/%s "
+                        "(min_r_squared=%.2f, beta_lookback_days=%d) — "
+                        "paired-neutral cohort contaminated by directional bet",
+                        symbol, hedge_symbol,
+                        cfg.beta_min_r_squared, cfg.beta_lookback_days,
+                    )
+
         thesis = Thesis(
             title=title,
             hypothesis=hypothesis,
@@ -1320,6 +1358,7 @@ class FactoryEngine:
             stop_price=stop_price,
             cohort=cohort,
             hedge_symbol=hedge_symbol,
+            hedge_basis=hedge_basis,
             premise_tags=premise_tags or [],
             premise_direction=premise_direction or {},
             regime_snapshot=regime_snapshot,
@@ -1369,35 +1408,30 @@ class FactoryEngine:
             if hedge_price is not None and hedge_price > 0:
                 primary_notional = primary_shares * price
 
-                # Beta-match the hedge leg notional. Falls back to default_beta
-                # when history is insufficient (cents-t8r — strictly an
-                # improvement on the previous dollar-for-dollar match).
+                # Beta-match the hedge leg notional. The estimate was already
+                # made above for hedge_basis classification — reuse it here.
                 #
-                # Bug C fix: when beta_match_hedge is on AND we DO have history
-                # AND estimate_beta returns None (R² gate rejected the fit),
-                # silently falling back to default_beta=1.0 reintroduces the
-                # dollar-match bug. Skip the hedge leg in that case so the
-                # gate fails safe rather than failing to the worst behavior.
-                beta = None
-                history_available = False
-                if cfg.beta_match_hedge:
-                    hedge_closes, _ = self._get_history(
+                # Bug C fix: when beta_match_hedge is on AND estimation failed
+                # specifically because the R² gate rejected the fit (hedge
+                # history was available), silently falling back to
+                # default_beta=1.0 reintroduces the dollar-match bug. Skip
+                # the hedge leg in that case. hedge_basis="dollar_fallback"
+                # is still recorded on the thesis (cents-931f) so the cohort
+                # is visibly contaminated.
+                beta = hedge_beta
+                if cfg.beta_match_hedge and beta is None:
+                    hedge_closes_for_gate, _ = self._get_history(
                         hedge_symbol, cfg.beta_lookback_days * 2
                     )
-                    if primary_closes is not None and hedge_closes is not None:
-                        history_available = True
-                        beta = estimate_beta(
-                            primary_closes, hedge_closes,
-                            lookback=cfg.beta_lookback_days,
-                            min_r_squared=cfg.beta_min_r_squared,
-                        )
-                if cfg.beta_match_hedge and history_available and beta is None:
-                    # R² gate rejected the fit; skip the hedge leg entirely.
-                    logger.debug(
-                        "Skipping hedge leg for %s: %s R² below %.2f gate",
-                        symbol, hedge_symbol, cfg.beta_min_r_squared,
+                    history_available = (
+                        primary_closes is not None and hedge_closes_for_gate is not None
                     )
-                    return {"theses_opened": 1, "positions_opened": positions_opened}
+                    if history_available:
+                        logger.debug(
+                            "Skipping hedge leg for %s: %s R² below %.2f gate",
+                            symbol, hedge_symbol, cfg.beta_min_r_squared,
+                        )
+                        return {"theses_opened": 1, "positions_opened": positions_opened}
                 ratio = beta_match_ratio(
                     beta=beta,
                     default_beta=cfg.default_beta,

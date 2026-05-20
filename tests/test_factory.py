@@ -498,6 +498,122 @@ class TestPairedMode:
         assert {p.symbol for p in legs} == {"NVDA", "XLK"}
         assert {p.side for p in legs} == {PositionSide.LONG, PositionSide.SHORT}
 
+    def _paired_price_provider(
+        self,
+        prices: dict[str, float],
+        histories: dict[str, list[float]] | None = None,
+    ):
+        """Price provider with real get_history support — _history_supported
+        rejects MagicMock by class name, so we use a plain class."""
+        from datetime import datetime, timedelta
+
+        from cents.data.providers import PriceBar, PriceHistory
+
+        hists = histories or {}
+
+        class _PairedProvider:
+            def get_latest_price(self, symbol: str):
+                return prices.get(symbol)
+
+            def get_history(self, symbol: str, days: int = 180):
+                closes = hists.get(symbol)
+                if closes is None:
+                    return PriceHistory(symbol=symbol, bars=[])
+                now = datetime(2026, 5, 20)
+                bars = [
+                    PriceBar(
+                        timestamp=now - timedelta(days=len(closes) - i),
+                        open=c, high=c, low=c, close=c, volume=1000,
+                    )
+                    for i, c in enumerate(closes)
+                ]
+                return PriceHistory(symbol=symbol, bars=bars)
+
+        return _PairedProvider()
+
+    def test_hedge_basis_dollar_when_beta_match_off(self, factory_db):
+        """beta_match_hedge=false → hedge_basis='dollar' (no estimation attempted)."""
+        _seed_universe(["NVDA"])
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLK"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired",
+                    entry_threshold=1.0,
+                    budget_usd=10000.0,
+                    target_positions=10,
+                    beta_match_hedge=False,
+                ),
+                orchestrator=_orchestrator({"NVDA": 5.0}),
+                price_provider=_price_provider({"NVDA": 100.0, "XLK": 200.0}),
+            )
+            engine.run()
+        neutral = next(t for t in ThesisRepository().list() if t.cohort == ThesisCohort.NEUTRAL)
+        assert neutral.hedge_basis == "dollar"
+
+    def test_hedge_basis_beta_when_r2_passes(self, factory_db):
+        """High-R² history → hedge_basis='beta'."""
+        _seed_universe(["NVDA"])
+        # Perfectly-correlated history: hedge_close = 2 * underlying_close — R²=1.
+        nvda_closes = [100.0 + i * 0.5 for i in range(150)]
+        xlk_closes = [c * 2.0 for c in nvda_closes]
+        provider = self._paired_price_provider(
+            prices={"NVDA": 100.0, "XLK": 200.0},
+            histories={"NVDA": nvda_closes, "XLK": xlk_closes},
+        )
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLK"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired",
+                    entry_threshold=1.0,
+                    budget_usd=10000.0,
+                    target_positions=10,
+                    beta_match_hedge=True,
+                ),
+                orchestrator=_orchestrator({"NVDA": 5.0}),
+                price_provider=provider,
+            )
+            engine.run()
+        neutral = next(t for t in ThesisRepository().list() if t.cohort == ThesisCohort.NEUTRAL)
+        assert neutral.hedge_basis == "beta"
+
+    def test_hedge_basis_dollar_fallback_when_r2_fails(self, factory_db, caplog):
+        """Uncorrelated history → hedge_basis='dollar_fallback' AND WARNING logged."""
+        import logging
+
+        _seed_universe(["NVDA"])
+        # Two independent sequences — correlation near zero, R² below the 0.5 gate.
+        # Use deterministic but uncorrelated patterns so the test is stable.
+        nvda_closes = [100.0 + (i % 7) * 0.3 - (i % 5) * 0.2 for i in range(150)]
+        xlk_closes = [200.0 + (i % 11) * 0.4 - (i % 13) * 0.25 for i in range(150)]
+        provider = self._paired_price_provider(
+            prices={"NVDA": 100.0, "XLK": 200.0},
+            histories={"NVDA": nvda_closes, "XLK": xlk_closes},
+        )
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLK"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired",
+                    entry_threshold=1.0,
+                    budget_usd=10000.0,
+                    target_positions=10,
+                    beta_match_hedge=True,
+                ),
+                orchestrator=_orchestrator({"NVDA": 5.0}),
+                price_provider=provider,
+            )
+            with caplog.at_level(logging.WARNING, logger="cents.factory.engine"):
+                engine.run()
+        neutral = next(t for t in ThesisRepository().list() if t.cohort == ThesisCohort.NEUTRAL)
+        assert neutral.hedge_basis == "dollar_fallback"
+        # A WARNING was emitted naming both legs, the R² threshold, and the lookback.
+        warning_records = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and "dollar-match" in r.getMessage()
+        ]
+        assert warning_records, "Expected dollar-match fallback WARNING"
+        msg = warning_records[0].getMessage()
+        assert "NVDA" in msg and "XLK" in msg
+
     def test_paired_skipped_when_pair_wont_fit(self, factory_db):
         _seed_universe(["NVDA"])
         trepo = ThesisRepository()

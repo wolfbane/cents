@@ -192,6 +192,7 @@ class ThesisRepository(BaseRepository):
             ModelField("cohort", serialize=lambda v: v.value, deserialize=lambda raw: ThesisCohort(raw) if raw else ThesisCohort.DIRECTIONAL),
             ModelField("hedge_symbol", serialize=lambda v: v.upper() if v else None),
             ModelField("paired_thesis_id"),
+            ModelField("hedge_basis"),
             ModelField("premise_tags", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, [], "premise_tags")),
             ModelField("premise_direction", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "premise_direction")),
             ModelField("regime_snapshot", serialize=BaseRepository.dumps_json, deserialize=lambda raw: BaseRepository.loads_json(raw, {}, "regime_snapshot")),
