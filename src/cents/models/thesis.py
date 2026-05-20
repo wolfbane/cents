@@ -76,6 +76,10 @@ class Thesis:
     hedge_basis: str | None = None
     # Regime / premise tracking
     premise_tags: list[str] = field(default_factory=list)
+    # Recorded tag count at open time (cents-2xd4). Lets the analyst verify
+    # post-hoc that LLM and random arms have comparable tag-set distributions
+    # after the sector-fallback cap was introduced. 0 = none / pre-feature.
+    premise_tags_count: int = 0
     # Per-tag polarity (Layer 2 #1): "positive" = thesis benefits when this
     # tag's events are bullish; "negative" = thesis benefits when bearish.
     # Tags not in this dict fall back to legacy unsigned-intersection matching.

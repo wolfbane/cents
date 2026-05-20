@@ -38,6 +38,14 @@ from cents.llm_models import HAIKU_TAGGING as _LLM_MODEL  # noqa: E402
 _LLM_TEMPERATURE = 0.0
 _RECENT_EVENT_WINDOW_DAYS = 14
 _MAX_PREMISE_TAGS = 5
+# Sector-fallback theses (random-arm control + LLM-arm thin summaries) get a
+# tighter cap so the random arm's tag count is comparable to the LLM arm's
+# typical 1-3 tags. Without this, the random arm carried ~5 sector tags per
+# open and either (a) had to skip the per-tag concentration cap entirely —
+# breaking the matched-cadence promise — or (b) hit the cap after 2 sector-
+# mates and gated tighter than LLM. Top-2 tags by relevance order (the lists
+# in SECTOR_FALLBACK_TAGS are pre-sorted most-relevant first). See cents-2xd4.
+_SECTOR_FALLBACK_TAG_CAP = 2
 _VALID_DIRECTIONS = frozenset({"positive", "negative"})
 
 # Minimum thesis-text length (chars) below which we treat the LLM input as
@@ -143,7 +151,7 @@ def _sector_fallback_tags(
     if not tags:
         _record_source(source_sink, PREMISE_SOURCE_FALLBACK_EMPTY)
         return [], {}
-    capped = tags[:_MAX_PREMISE_TAGS]
+    capped = tags[:_SECTOR_FALLBACK_TAG_CAP]
     polarity = "positive" if side == "long" else "negative"
     _record_source(source_sink, PREMISE_SOURCE_FALLBACK_SECTOR)
     return capped, {t: polarity for t in capped}

@@ -365,6 +365,7 @@ class AnalyzeAxis(str, Enum):
     REGIME = "regime"
     ORCHESTRATOR = "orchestrator"
     PREMISE_CLASSIFICATION_SOURCE = "premise_classification_source"
+    PREMISE_TAGS_COUNT = "premise_tags_count"
 
 
 # Per-axis bucketing — extending the analyze surface = add a case here.
@@ -376,6 +377,7 @@ _AXIS_BUCKET = {
     AnalyzeAxis.PREMISE_CLASSIFICATION_SOURCE: (
         lambda t: getattr(t, "premise_classification_source", None) or "fallback_empty"
     ),
+    AnalyzeAxis.PREMISE_TAGS_COUNT: lambda t: str(getattr(t, "premise_tags_count", 0) or 0),
 }
 
 
@@ -387,7 +389,7 @@ _AXIS_BUCKET = {
     default="cohort",
     help=(
         "Comma-separated grouping axes "
-        "(cohort,discovery,regime,orchestrator,premise_classification_source). "
+        "(cohort,discovery,regime,orchestrator,premise_classification_source,premise_tags_count). "
         "Multiple axes produce a cross-tab. Default: cohort."
     ),
 )

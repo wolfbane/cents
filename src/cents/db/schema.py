@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS theses (
     paired_thesis_id TEXT,
     hedge_basis TEXT,
     premise_tags TEXT DEFAULT '[]',
+    premise_tags_count INTEGER DEFAULT 0,
     premise_direction TEXT DEFAULT '{}',
     premise_classification_source TEXT DEFAULT 'fallback_empty',
     regime_snapshot TEXT DEFAULT '{}',
@@ -370,6 +371,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("theses", "orchestrator_label", "ALTER TABLE theses ADD COLUMN orchestrator_label TEXT DEFAULT 'llm'"),
         # Experiment registration (cents-hvz) — which active experiment a thesis was opened under.
         ("theses", "experiment_id", "ALTER TABLE theses ADD COLUMN experiment_id TEXT"),
+        # Recorded premise tag count at open time (cents-2xd4) — lets the
+        # analyst verify post-hoc that LLM and random arms have comparable
+        # tag-set distributions after the sector-fallback cap.
+        ("theses", "premise_tags_count", "ALTER TABLE theses ADD COLUMN premise_tags_count INTEGER DEFAULT 0"),
         # Per-experiment calendar-day floor on verdict_ready (pilot uses 30, full uses 90).
         # Default 14 preserves back-compat with experiments registered before this column existed.
         ("experiments", "minimum_calendar_days", "ALTER TABLE experiments ADD COLUMN minimum_calendar_days INTEGER NOT NULL DEFAULT 14"),

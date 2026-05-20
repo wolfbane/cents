@@ -8,6 +8,7 @@ import pytest
 from cents.db import EventRepository
 from cents.factory.premise import (
     SECTOR_FALLBACK_TAGS,
+    _SECTOR_FALLBACK_TAG_CAP,
     capture_regime_snapshot,
     classify_premise_tags,
 )
@@ -185,7 +186,8 @@ class TestSectorFallback:
         tags, directions = classify_premise_tags(
             "JPM", "", [], anthropic_client=None, side="long"
         )
-        assert tags == SECTOR_FALLBACK_TAGS["XLF"]
+        # cents-2xd4: fallback list is capped to keep arm tag counts comparable.
+        assert tags == SECTOR_FALLBACK_TAGS["XLF"][:_SECTOR_FALLBACK_TAG_CAP]
         # Long thesis → "positive" on every tag (BEARISH event invalidates).
         assert directions == {t: "positive" for t in tags}
         assert all(t in EVENT_TAGS for t in tags)
@@ -200,7 +202,7 @@ class TestSectorFallback:
         tags, directions = classify_premise_tags(
             "NVDA", "x", [], anthropic_client=None, side="short"
         )
-        assert tags == SECTOR_FALLBACK_TAGS["XLK"]
+        assert tags == SECTOR_FALLBACK_TAGS["XLK"][:_SECTOR_FALLBACK_TAG_CAP]
         # Short thesis → "negative" on every tag (BULLISH event invalidates).
         assert directions == {t: "negative" for t in tags}
 
@@ -223,7 +225,7 @@ class TestSectorFallback:
         tags, directions = classify_premise_tags(
             "JPM", "short signal", [], anthropic_client=client, side="long"
         )
-        assert tags == SECTOR_FALLBACK_TAGS["XLF"]
+        assert tags == SECTOR_FALLBACK_TAGS["XLF"][:_SECTOR_FALLBACK_TAG_CAP]
         assert directions == {t: "positive" for t in tags}
 
     def test_no_fallback_when_summary_has_real_content(
@@ -348,8 +350,31 @@ class TestSectorFallback:
             "JPM", "short signal", [], anthropic_client=_ExplodingAnthropic(),
             side="long", source_sink=sink,
         )
-        assert tags == SECTOR_FALLBACK_TAGS["XLF"]
+        assert tags == SECTOR_FALLBACK_TAGS["XLF"][:_SECTOR_FALLBACK_TAG_CAP]
         assert sink == ["fallback_sector"]
+
+    def test_sector_fallback_caps_tag_count(self, db_conn, monkeypatch):
+        """cents-2xd4: sector fallback must emit no more than the cap.
+
+        Pre-fix the fallback emitted ALL sector tags (up to 5), which made
+        the random arm carry systematically more premise tags than the LLM
+        arm and either over-saturated the per-tag concentration cap or
+        forced the engine to skip the cap for random — both broke the
+        matched-cadence promise. Top-N tags by relevance ordering.
+        """
+        monkeypatch.setattr(
+            "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
+        )
+        # XLK has 5 fallback tags pre-cap — verify only the cap-many survive.
+        monkeypatch.setattr(
+            "cents.factory.sector_map.hedge_etf_for", lambda sym: "XLK"
+        )
+        tags, _ = classify_premise_tags(
+            "NVDA", "", [], anthropic_client=None, side="long"
+        )
+        assert len(tags) <= _SECTOR_FALLBACK_TAG_CAP
+        # And the surviving tags are the leading slice (most-relevant first).
+        assert tags == SECTOR_FALLBACK_TAGS["XLK"][:_SECTOR_FALLBACK_TAG_CAP]
 
     def test_sector_tags_remain_a_subset_of_event_tags(self):
         """Regression: every fallback tag must exist in EVENT_TAGS verbatim.
