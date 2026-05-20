@@ -1078,3 +1078,83 @@ class TestUsageHeadroom:
             payload = json.loads(result.output)
             assert payload["status"] == "hit_cap"
             assert payload["headroom_pct"] == 0.0
+
+
+class TestCacheCLI:
+    """cents cache stats / prune / clear (cents-ame follow-up)."""
+
+    def test_cache_stats_text(self, runner, mock_db):
+        # Empty DB: should report nothing-to-show
+        result = runner.invoke(cli, ["cache", "stats"])
+        assert result.exit_code == 0, result.output
+        assert "api_cache is empty" in result.output
+
+    def test_cache_stats_json(self, runner, mock_db):
+        # Seed a row directly into the api_cache table created by SCHEMA
+        conn = sqlite3.connect(mock_db / "data" / "cents.db")
+        conn.execute(
+            "INSERT INTO api_cache (id, provider, endpoint, cache_key, response_data, cached_at) "
+            "VALUES ('a1', 'fmp', 'ratios', 'k1', '[1,2,3]', datetime('now'))"
+        )
+        conn.commit()
+        conn.close()
+
+        result = runner.invoke(cli, ["cache", "stats", "--output", "json"])
+        assert result.exit_code == 0, result.output
+        import json
+        rows = json.loads(result.output)
+        assert any(r["provider"] == "fmp" and r["endpoint"] == "ratios" for r in rows)
+
+    def test_cache_prune_drops_dead_namespace(self, runner, mock_db):
+        # Seed a dead-namespace row + a fresh policied row. Use Python ISO
+        # format — cents writes via datetime.now().isoformat() and the prune
+        # cutoff compares against that format; SQL datetime('now') would use
+        # a different format and break the string comparison.
+        from datetime import datetime
+        now_iso = datetime.now().isoformat()
+        conn = sqlite3.connect(mock_db / "data" / "cents.db")
+        conn.execute(
+            "INSERT INTO api_cache (id, provider, endpoint, cache_key, response_data, cached_at) "
+            "VALUES ('a1', 'alpaca', 'bars', 'k1', '[]', ?)",
+            (now_iso,),
+        )
+        conn.execute(
+            "INSERT INTO api_cache (id, provider, endpoint, cache_key, response_data, cached_at) "
+            "VALUES ('a2', 'alpaca', 'bars_split_v1', 'k2', '[]', ?)",
+            (now_iso,),
+        )
+        conn.commit()
+        conn.close()
+
+        result = runner.invoke(cli, ["cache", "prune"])
+        assert result.exit_code == 0, result.output
+        # Dead namespace should be reported as pruned
+        assert "alpaca/bars" in result.output
+
+        # Re-read DB: only bars_split_v1 should remain
+        conn = sqlite3.connect(mock_db / "data" / "cents.db")
+        remaining = conn.execute(
+            "SELECT endpoint FROM api_cache"
+        ).fetchall()
+        conn.close()
+        assert len(remaining) == 1
+        assert remaining[0][0] == "bars_split_v1"
+
+    def test_cache_clear_requires_confirmation(self, runner, mock_db):
+        # No --yes → confirmation prompt; pipe in 'n' to cancel
+        result = runner.invoke(cli, ["cache", "clear"], input="n\n")
+        # Click confirmation_option exits non-zero when declined
+        assert result.exit_code != 0
+
+    def test_cache_clear_with_confirmation_wipes_table(self, runner, mock_db):
+        conn = sqlite3.connect(mock_db / "data" / "cents.db")
+        conn.execute(
+            "INSERT INTO api_cache (id, provider, endpoint, cache_key, response_data, cached_at) "
+            "VALUES ('a1', 'fmp', 'ratios', 'k1', '[]', datetime('now'))"
+        )
+        conn.commit()
+        conn.close()
+
+        result = runner.invoke(cli, ["cache", "clear", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "Cleared 1 rows" in result.output

@@ -39,6 +39,7 @@ from .eval import eval_ as eval_cmd
 from .calibration import calibration
 from .experiment import experiment
 from .shadow import shadow
+from .cache import cache
 
 # Re-export shared utilities for backwards compatibility with tests
 from ._shared import (
@@ -84,6 +85,7 @@ cli.add_command(eval_cmd, name="eval")
 cli.add_command(calibration)
 cli.add_command(experiment)
 cli.add_command(shadow)
+cli.add_command(cache)
 
 
 def main():
