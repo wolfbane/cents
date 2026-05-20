@@ -735,21 +735,61 @@ class EventRepository(BaseRepository):
         """Get event by ID."""
         return self._get_by_id(self._META, event_id)
 
+    def update(self, event: Event) -> Event:
+        """Persist updated event (used by retag to flip tag_status, tags, polarity, etc.)."""
+        return self._update(self._META, event)
+
+    def list_untagged(
+        self,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+        order: str = "asc",
+    ) -> list[Event]:
+        """List events with tag_status='tagger_skipped' within a date window.
+
+        Default order is ASC (oldest first) — retag should populate the oldest
+        unfilled lookback windows first so backtest eval-dates have something
+        to read. DESC would tag the most-recent untagged events first, which
+        helps live operation but starves backtests of old data.
+        """
+        clauses = ["tag_status = 'tagger_skipped'"]
+        params: list[Any] = []
+        if since is not None:
+            clauses.append("occurred_at >= ?")
+            params.append(since.isoformat())
+        if until is not None:
+            clauses.append("occurred_at <= ?")
+            params.append(until.isoformat())
+        where = " AND ".join(clauses)
+        order_clause = "occurred_at ASC" if order.lower() == "asc" else "occurred_at DESC"
+        return self._list(
+            self._META, where=where, params=params, limit=limit, order_by=order_clause,
+        )
+
     def list_recent(
         self,
         since: datetime | None = None,
         tags: list[str] | None = None,
         limit: int = 100,
+        until: datetime | None = None,
     ) -> list[Event]:
-        """List events occurring since a given time, optionally filtered by tag.
+        """List events occurring in a date window, optionally filtered by tag.
 
         Tag filter matches if ANY of the requested tags appears in the event's tags.
+
+        ``until`` bounds the upper end of the window — required for backtests so
+        the agent doesn't see events that occurred AFTER its ``as_of`` date
+        (cents-sxn). Live operation passes ``until=None``.
         """
         clauses: list[str] = []
         params: list[Any] = []
         if since is not None:
             clauses.append("occurred_at >= ?")
             params.append(since.isoformat())
+        if until is not None:
+            clauses.append("occurred_at <= ?")
+            params.append(until.isoformat())
         where = " AND ".join(clauses) if clauses else None
         events = self._list(self._META, where=where, params=params, limit=limit)
         if not tags:

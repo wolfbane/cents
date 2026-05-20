@@ -209,19 +209,22 @@ class FMPFundamentalsProvider:
             symbol=symbol,
             name=profile.get("companyName"),
             sector=profile.get("sector"),
-            # Valuation
-            pe_ratio=ratios.get("priceEarningsRatio"),
+            # Valuation — FMP Premium quarterly endpoint uses `priceTo*`/`debtTo*`
+            # naming (NOT the older `priceEarningsRatio`/`debtEquityRatio` forms
+            # the TTM endpoint sometimes uses — see cents-tjr).
+            pe_ratio=ratios.get("priceToEarningsRatio"),
             forward_pe=None,
-            peg_ratio=ratios.get("priceEarningsToGrowthRatio"),
+            peg_ratio=ratios.get("priceToEarningsGrowthRatio"),
             # Growth
             # Note: Historical endpoint doesn't provide revenue growth rate directly
             revenue_growth=None,
             earnings_growth=None,
-            # Profitability
+            # Profitability — returnOnEquity lives on the key-metrics endpoint,
+            # not the ratios endpoint (cents-tjr — was reading from wrong dict).
             profit_margin=ratios.get("netProfitMargin"),
-            return_on_equity=ratios.get("returnOnEquity"),
+            return_on_equity=metrics.get("returnOnEquity"),
             # Balance sheet
-            debt_to_equity=ratios.get("debtEquityRatio"),
+            debt_to_equity=ratios.get("debtToEquityRatio"),
             current_ratio=ratios.get("currentRatio"),
             # No historical recommendations available
             recommendation=None,

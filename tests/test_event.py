@@ -634,3 +634,87 @@ class TestPolarityAwareInvalidation:
         summary = agent.refresh(lookback_days=30)
         # Without direction info, bullish-on-shared-tag invalidates (legacy).
         assert summary["alerts_fired"] == 1
+
+
+class TestEventAgentLookahead:
+    """cents-sxn: research(as_of=X) must NOT return events that occurred after X."""
+
+    def test_as_of_excludes_future_events(self, db_conn, monkeypatch):
+        """An event dated AFTER as_of must not appear in the agent's evidence."""
+        from datetime import date, datetime
+        from cents.db import EventRepository, ThesisRepository, AlertRepository
+        from cents.models.event import Event, EventPolarity, EventTagStatus
+
+        # Wire repos to the in-memory test DB
+        monkeypatch.setattr("cents.agents.event.EventRepository", lambda: EventRepository(db_conn))
+        monkeypatch.setattr("cents.agents.event.ThesisRepository", lambda: ThesisRepository(db_conn))
+        monkeypatch.setattr("cents.agents.event.AlertRepository", lambda: AlertRepository(db_conn))
+
+        # Seed two events: one BEFORE as_of (should appear), one AFTER (must NOT).
+        past_event = Event(
+            source="federal_register",
+            source_id="past-1",
+            event_type="rule",
+            title="Past event — before as_of",
+            summary="A past policy event",
+            occurred_at=datetime(2025, 10, 15),
+            tags=["energy_policy"],
+            polarity=EventPolarity.BULLISH,
+            confidence=0.8,
+            tag_status=EventTagStatus.TAGGED,
+        )
+        future_event = Event(
+            source="federal_register",
+            source_id="future-1",
+            event_type="rule",
+            title="Future event — leaks lookahead",
+            summary="An event that happened after as_of",
+            occurred_at=datetime(2026, 5, 1),
+            tags=["energy_policy"],
+            polarity=EventPolarity.BEARISH,
+            confidence=0.9,
+            tag_status=EventTagStatus.TAGGED,
+        )
+        repo = EventRepository(db_conn)
+        repo.create(past_event)
+        repo.create(future_event)
+
+        agent = EventAgent()
+        result = agent.research("XOM", thesis=None, as_of=date(2025, 11, 1))
+
+        titles = [ev.content for ev in result.evidence]
+        assert any("Past event" in t for t in titles), "Past event should appear in evidence"
+        assert not any("Future event" in t for t in titles), (
+            "Future event leaked into backtest evidence — cents-sxn lookahead bug"
+        )
+
+    def test_list_recent_until_bounds_window(self, db_conn):
+        """EventRepository.list_recent honors `until` as an upper bound."""
+        from datetime import datetime
+        from cents.db import EventRepository
+        from cents.models.event import Event, EventPolarity, EventTagStatus
+
+        repo = EventRepository(db_conn)
+        repo.create(Event(
+            source="federal_register", source_id="e1",
+            event_type="rule", title="t1", summary="s1",
+            occurred_at=datetime(2025, 10, 1),
+            polarity=EventPolarity.NEUTRAL, confidence=0.5,
+            tag_status=EventTagStatus.TAGGED,
+        ))
+        repo.create(Event(
+            source="federal_register", source_id="e2",
+            event_type="rule", title="t2", summary="s2",
+            occurred_at=datetime(2026, 1, 1),
+            polarity=EventPolarity.NEUTRAL, confidence=0.5,
+            tag_status=EventTagStatus.TAGGED,
+        ))
+
+        # No upper bound → both returned
+        assert len(repo.list_recent(since=datetime(2025, 1, 1))) == 2
+        # Upper bound at 2025-12-31 → only the Oct one
+        scoped = repo.list_recent(
+            since=datetime(2025, 1, 1), until=datetime(2025, 12, 31),
+        )
+        assert len(scoped) == 1
+        assert scoped[0].source_id == "e1"

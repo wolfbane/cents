@@ -263,13 +263,16 @@ class TestFMPFundamentalsProvider:
         """Get historical fundamentals with as_of date."""
         mock_settings.return_value.fmp_api_key = "test_key"
 
-        # Mock responses for historical queries
+        # Mock responses for historical queries. FMP Premium quarterly ratios
+        # endpoint uses `priceToEarningsRatio`/`debtToEquityRatio` names — NOT
+        # the older `priceEarningsRatio` form which the agent used to read
+        # (see cents-tjr).
         responses = [
             [{"companyName": "Apple Inc."}],  # profile
             [
-                {"date": "2024-06-30", "priceEarningsRatio": 30.0, "netProfitMargin": 0.26},
-                {"date": "2024-03-31", "priceEarningsRatio": 28.0, "netProfitMargin": 0.25},
-                {"date": "2023-12-31", "priceEarningsRatio": 27.0, "netProfitMargin": 0.24},
+                {"date": "2024-06-30", "priceToEarningsRatio": 30.0, "netProfitMargin": 0.26},
+                {"date": "2024-03-31", "priceToEarningsRatio": 28.0, "netProfitMargin": 0.25},
+                {"date": "2023-12-31", "priceToEarningsRatio": 27.0, "netProfitMargin": 0.24},
             ],  # ratios (quarterly)
             [
                 {"date": "2024-06-30", "revenuePerShare": 12.0},
