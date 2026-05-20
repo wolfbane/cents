@@ -724,3 +724,78 @@ class TestForwardReturnsContinuity:
         mock_client.get_stock_latest_quote.assert_not_called()
         # Should call get_stock_bars instead
         mock_client.get_stock_bars.assert_called_once()
+
+
+class TestAlpacaTodayBarDrop:
+    """cents-ame: today's partial-day bar is stripped from cached responses."""
+
+    @patch("cents.data.alpaca.StockHistoricalDataClient")
+    @patch("cents.data.alpaca.get_settings")
+    def test_today_bar_dropped_in_live_mode(self, mock_settings, mock_client_cls):
+        """Live mode (as_of=None): a bar timestamped TODAY is removed."""
+        from datetime import date as _date, datetime, timezone
+        from cents.data.alpaca import AlpacaPriceProvider
+        # Disable cache so we test the drop logic directly
+        import os
+        os.environ["CENTS_DISABLE_CACHE"] = "1"
+        try:
+            mock_settings.return_value.alpaca_api_key = "k"
+            mock_settings.return_value.alpaca_secret_key = "s"
+
+            class FakeBar:
+                def __init__(self, ts, close):
+                    self.timestamp = ts
+                    self.open = close; self.high = close; self.low = close
+                    self.close = close; self.volume = 1000
+            fake_client = MagicMock()
+            today = _date.today()
+            yesterday = today.replace(day=max(1, today.day - 1)) if today.day > 1 else today
+            fake_client.get_stock_bars.return_value = MagicMock(data={
+                "X": [
+                    FakeBar(datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=timezone.utc), 100.0),
+                    FakeBar(datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc), 105.0),
+                ]
+            })
+            mock_client_cls.return_value = fake_client
+
+            provider = AlpacaPriceProvider()
+            history = provider.get_history("X", days=5, as_of=None)
+            # Today's bar should be dropped
+            assert all(b.timestamp.date() != today for b in history.bars)
+        finally:
+            os.environ.pop("CENTS_DISABLE_CACHE", None)
+
+    @patch("cents.data.alpaca.StockHistoricalDataClient")
+    @patch("cents.data.alpaca.get_settings")
+    def test_today_bar_preserved_in_backtest_mode(self, mock_settings, mock_client_cls):
+        """Backtest mode (as_of set to past date): all bars including the
+        as_of date are preserved — that date IS the historical truth."""
+        from datetime import date as _date, datetime, timezone
+        from cents.data.alpaca import AlpacaPriceProvider
+        import os
+        os.environ["CENTS_DISABLE_CACHE"] = "1"
+        try:
+            mock_settings.return_value.alpaca_api_key = "k"
+            mock_settings.return_value.alpaca_secret_key = "s"
+
+            class FakeBar:
+                def __init__(self, ts, close):
+                    self.timestamp = ts
+                    self.open = close; self.high = close; self.low = close
+                    self.close = close; self.volume = 1000
+            fake_client = MagicMock()
+            backtest_date = _date(2024, 6, 15)
+            fake_client.get_stock_bars.return_value = MagicMock(data={
+                "X": [
+                    FakeBar(datetime(2024, 6, 14, tzinfo=timezone.utc), 100.0),
+                    FakeBar(datetime(2024, 6, 15, tzinfo=timezone.utc), 105.0),
+                ]
+            })
+            mock_client_cls.return_value = fake_client
+
+            provider = AlpacaPriceProvider()
+            history = provider.get_history("X", days=5, as_of=backtest_date)
+            # In backtest mode the as_of bar is preserved
+            assert any(b.timestamp.date() == backtest_date for b in history.bars)
+        finally:
+            os.environ.pop("CENTS_DISABLE_CACHE", None)

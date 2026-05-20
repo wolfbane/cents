@@ -113,11 +113,31 @@ class AlpacaPriceProvider:
                     })
             return bars_data
 
-        # Always cache — same-day key prevents stale data across days, and
-        # repeated current-day requests (screeners, factory runs) hit cache.
-        # Endpoint namespace bumped to bars_split_v1 to bypass legacy
-        # unadjusted (RAW) cache entries from prior versions.
-        bars_data = cached_request("alpaca", "bars_split_v1", cache_params, do_fetch)
+        # cents-ame: when running live (as_of=None), the LAST bar in the
+        # Alpaca response is today's partial-day bar if market is open OR
+        # the pre-finalized session bar if cents runs before close. Caching
+        # that partial bar pins it for the rest of the day, so every later
+        # query returns the morning's stale snapshot even after close.
+        # Solution: drop today's bar from BOTH the cached payload AND the
+        # returned list. Callers wanting the live current price use
+        # get_latest_price() instead. Backtest mode (as_of set) is unaffected
+        # because as_of's "today" is a past finalized day.
+        def _drop_partial_today(bars: list[dict]) -> list[dict]:
+            if as_of is not None:
+                return bars
+            if not bars:
+                return bars
+            today_iso = date.today().isoformat()
+            # Bars are sorted ASC by Alpaca; the last bar is the most recent.
+            last_ts = bars[-1].get("timestamp", "")
+            if last_ts.startswith(today_iso):
+                return bars[:-1]
+            return bars
+
+        def do_fetch_clean():
+            return _drop_partial_today(do_fetch())
+
+        bars_data = cached_request("alpaca", "bars_split_v1", cache_params, do_fetch_clean)
 
         # Convert cached data back to PriceBar objects
         bars = [

@@ -743,3 +743,90 @@ class TestMigrateForeignKeys:
         assert "idx_positions_status" in indexes
         assert "idx_watchlist_symbol" in indexes
         conn.close()
+
+
+class TestMigrationPath:
+    """cents-s047: schema migration must actually exercise _migrate_schema.
+
+    Test fixtures use executescript(SCHEMA), which creates fresh tables with
+    all columns. The _migrate_schema path was never tested, so adding a
+    column there but forgetting to add it to SCHEMA (or vice versa) would
+    silently pass tests and fail at upgrade time.
+    """
+
+    def test_migrate_schema_adds_every_declared_column(self, tmp_path):
+        """Build a minimal-shape DB (legacy schema), run _migrate_schema, verify
+        every column listed in column_migrations is present."""
+        import sqlite3
+        from cents.db.schema import _migrate_schema
+
+        # Read the column_migrations list by introspecting the function so we
+        # don't have to hard-code it here — keeps the test in sync.
+        import inspect
+        from cents.db import schema as schema_mod
+        src = inspect.getsource(schema_mod._migrate_schema)
+
+        # Parse the (table, column, sql) tuples by scanning for "ADD COLUMN".
+        # Each migration is of the form ("table", "column", "ALTER TABLE ...").
+        # Robust enough for the current shape.
+        import re
+        declared: list[tuple[str, str]] = []
+        for m in re.finditer(
+            r'\(\s*"([^"]+)",\s*"([^"]+)",\s*"ALTER TABLE',
+            src,
+        ):
+            declared.append((m.group(1), m.group(2)))
+        assert declared, "Failed to introspect column_migrations — test brittle"
+
+        # Build a minimal "old-style" DB containing every table mentioned in
+        # any migration, with just an id PK so the ALTER TABLE statements work.
+        db_path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        tables_needed = sorted({t for t, _ in declared})
+        for table in tables_needed:
+            conn.execute(f"CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY)")
+        conn.commit()
+
+        # Run the migration. Should add every declared column to its table.
+        _migrate_schema(conn)
+        conn.commit()
+
+        # Verify each declared column is present
+        for table, column in declared:
+            cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            assert column in cols, (
+                f"_migrate_schema did NOT add {table}.{column} — "
+                f"either the ALTER is broken or the column name in the migration "
+                f"declaration doesn't match what's added."
+            )
+        conn.close()
+
+    def test_migrate_schema_is_idempotent(self, tmp_path):
+        """Running _migrate_schema twice must not fail (re-add) or change shape."""
+        import sqlite3
+        from cents.db.schema import _migrate_schema, SCHEMA
+
+        db_path = tmp_path / "idempotent.db"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        # Start with the full schema (so all columns present)
+        conn.executescript(SCHEMA)
+        conn.commit()
+
+        # First migration pass — should be a no-op (all columns already present)
+        _migrate_schema(conn)
+        cols_pass_1 = {
+            t: sorted(r[1] for r in conn.execute(f"PRAGMA table_info({t})"))
+            for t in ("theses", "evidence", "watchlist", "positions", "events", "experiments")
+        }
+
+        # Second pass — must not raise and must produce identical column sets
+        _migrate_schema(conn)
+        cols_pass_2 = {
+            t: sorted(r[1] for r in conn.execute(f"PRAGMA table_info({t})"))
+            for t in ("theses", "evidence", "watchlist", "positions", "events", "experiments")
+        }
+
+        assert cols_pass_1 == cols_pass_2
+        conn.close()

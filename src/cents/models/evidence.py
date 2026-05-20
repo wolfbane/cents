@@ -45,6 +45,13 @@ class Evidence:
     provenance: dict[str, str] | None = None
     id: str = field(default_factory=lambda: str(uuid4())[:8])
     timestamp: datetime = field(default_factory=datetime.now)
+    # cents-ct9k: when the agent's source data was MEASURED (vs when this
+    # Evidence row was created). The orchestrator's age-weighted conviction
+    # prefers this field if set so a technical agent reading 20-day-old bars
+    # is weighted as "20 days old" rather than "today". Agents that source
+    # from live APIs (sentiment NewsAPI, event Federal Register fetch-now)
+    # can leave this None — defaulting to timestamp is correct for them.
+    data_as_of: datetime | None = None
 
     def __post_init__(self) -> None:
         """Validate fields after initialization."""

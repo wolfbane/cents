@@ -1369,3 +1369,40 @@ class TestEvidenceAgeWeighting:
 
         # Stale (age=0.1) * confidence (1.0) * delta (10.0) = 1.0
         assert result.conviction_delta == pytest.approx(10.0 * AGE_WEIGHT_FLOOR, rel=0.01)
+
+
+class TestEvidenceDataAsOf:
+    """cents-ct9k: data_as_of overrides timestamp for age-decay weighting."""
+
+    def test_data_as_of_used_when_set(self):
+        """If data_as_of is older than timestamp, the age weight reflects data_as_of."""
+        from cents.agents.orchestrator import evidence_age_weight, AGE_WEIGHT_FLOOR
+        from cents.models import Evidence, ThesisDimension, EvidenceType
+
+        # Evidence was created NOW but the underlying data is 20 days old.
+        ev = Evidence(
+            agent="technical", content="x", source="alpaca",
+            type=EvidenceType.SUPPORTING, confidence=1.0,
+            dimension=ThesisDimension.TECHNICAL,
+            timestamp=datetime.now(),
+            data_as_of=datetime.now() - timedelta(days=20),
+        )
+        weight = evidence_age_weight(ev)
+        # Technical TTL is ~7 days; 20 days exceeds it → AGE_WEIGHT_FLOOR
+        assert weight == pytest.approx(AGE_WEIGHT_FLOOR)
+
+    def test_timestamp_used_when_data_as_of_none(self):
+        """Fallback: data_as_of=None → use timestamp (back-compat)."""
+        from cents.agents.orchestrator import evidence_age_weight
+        from cents.models import Evidence, ThesisDimension, EvidenceType
+
+        ev = Evidence(
+            agent="technical", content="x", source="alpaca",
+            type=EvidenceType.SUPPORTING, confidence=1.0,
+            dimension=ThesisDimension.TECHNICAL,
+            timestamp=datetime.now(),  # fresh
+            data_as_of=None,  # explicit
+        )
+        weight = evidence_age_weight(ev)
+        # Fresh timestamp → full weight
+        assert weight == pytest.approx(1.0)

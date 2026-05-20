@@ -35,11 +35,18 @@ def evidence_age_weight(evidence: Evidence) -> float:
 
     Evidence older than TTL still gets AGE_WEIGHT_FLOOR (not fully ignored)
     to preserve historical context.
+
+    cents-ct9k: prefers `evidence.data_as_of` (when the underlying data was
+    measured) over `evidence.timestamp` (when the Evidence row was created).
+    A technical agent reading 20-day-old bars should be weighted as
+    "20 days old," not "today." Agents that haven't been wired up to set
+    data_as_of fall back to timestamp — no behavior change for them.
     """
     dimension = evidence.dimension.value if evidence.dimension else None
     ttl = DIMENSION_TTL_DAYS.get(dimension, DEFAULT_TTL_DAYS)
 
-    age_days = (datetime.now() - evidence.timestamp).days
+    anchor = evidence.data_as_of or evidence.timestamp
+    age_days = (datetime.now() - anchor).days
     if age_days <= 0:
         return 1.0
     if age_days >= ttl:
