@@ -89,7 +89,11 @@ class EventAgent(BaseAgent):
             return None
         try:
             import anthropic
-            self._anthropic_client = anthropic.Anthropic(api_key=self.anthropic_api_key)
+            # Cap per-request timeout (cents-87v): SDK default is 600s read.
+            self._anthropic_client = anthropic.Anthropic(
+                api_key=self.anthropic_api_key,
+                timeout=get_settings().anthropic_timeout_sec,
+            )
             return self._anthropic_client
         except ImportError:
             logger.warning("anthropic package not installed; EventAgent will skip LLM tagging")

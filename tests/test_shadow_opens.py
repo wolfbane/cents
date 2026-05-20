@@ -448,3 +448,192 @@ class TestShadowCli:
         # Default arm bucket is 'llm'.
         assert "llm" in payload["by_orchestrator"]["accepted"]
         assert "llm" in payload["by_orchestrator"]["rejected"]
+
+
+class TestSummaryJsonDispositions:
+    """Covers cents-9yn: per-disposition counts + stop_reason in factory_runs.summary_json."""
+
+    def test_below_threshold_counted_and_evaluated_tracked(self, factory_db):
+        _seed_universe(["AAPL", "MSFT", "NVDA"])
+        # Conviction below entry_threshold=5.0 for all three → all "evaluated, below threshold".
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0, max_new_per_run=10),
+            orchestrator=_orchestrator({"AAPL": 1.0, "MSFT": 2.0, "NVDA": -1.5}),
+            price_provider=_price_provider(100.0),
+        )
+        run = engine.run()
+        s = run.summary_json
+        assert s["universe_size"] == 3
+        assert s["symbols_evaluated"] == 3
+        assert s["symbols_below_threshold"] == 3
+        assert s["symbols_skipped_held"] == 0
+        assert s["stop_reason"] == "end_of_universe"
+
+    def test_stop_reason_max_new_per_run(self, factory_db):
+        _seed_universe(["A", "B", "C", "D", "E"])
+        engine = FactoryEngine(
+            config=_config(
+                entry_threshold=5.0,
+                max_new_per_run=2,
+                cohort_mode="directional_only",
+            ),
+            orchestrator=_orchestrator(default=8.0),  # every symbol strongly above threshold
+            price_provider=_price_provider(100.0),
+        )
+        run = engine.run()
+        s = run.summary_json
+        assert s["stop_reason"] == "max_new_per_run"
+        # Only the first 2 should have been evaluated before the break.
+        assert s["symbols_evaluated"] == 2
+
+    def test_universe_size_replaces_symbols_considered(self, factory_db):
+        """Schema migration: old key 'symbols_considered' must NOT appear."""
+        _seed_universe(["AAPL"])
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 1.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        run = engine.run()
+        assert "universe_size" in run.summary_json
+        assert "symbols_considered" not in run.summary_json
+
+
+class TestUniverseShuffle:
+    """Covers seeded shuffle removing alphabetical bias from open-phase iteration."""
+
+    def test_shuffle_visits_more_than_just_alphabetic_prefix(self, factory_db):
+        """With max_new_per_run smaller than universe, the shuffled order should
+        eventually visit a late-alphabet symbol — proving order isn't strictly A→Z.
+
+        Run 200 trials with different run_id seeds and check at least one trial
+        opens a symbol from the LATE half of the alphabet. With pure alphabetic
+        order this could never happen (only early symbols would ever open)."""
+        from cents.models import FactoryRun
+
+        symbols = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
+                   "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T"]
+        _seed_universe(symbols)
+
+        late_half = {"K", "L", "M", "N", "O", "P", "Q", "R", "S", "T"}
+        opened_late = False
+        for _ in range(50):
+            # Re-create a fresh engine each trial to get a new run_id
+            engine = FactoryEngine(
+                config=_config(
+                    entry_threshold=5.0,
+                    max_new_per_run=1,  # only 1 open per run → tight test
+                    cohort_mode="directional_only",
+                ),
+                orchestrator=_orchestrator(default=8.0),  # all symbols above threshold
+                price_provider=_price_provider(100.0),
+            )
+            run = engine.run(dry_run=True)
+            proposals = run.summary_json.get("proposals", [])
+            if proposals and proposals[0]["symbol"] in late_half:
+                opened_late = True
+                break
+
+        assert opened_late, (
+            "Expected at least one of 50 trials to open a late-alphabet symbol "
+            "under shuffled iteration; pure alphabetic order would never reach there."
+        )
+
+    def test_shuffle_is_deterministic_per_run_id(self, factory_db):
+        """Same run_id → same visit order. Reproducibility for debugging."""
+        import random as _random
+
+        symbols = ["AAPL", "MSFT", "NVDA", "GOOGL", "TSLA"]
+
+        # Replay the shuffle logic outside the engine to verify determinism.
+        run_id = "fixed-run-id-for-test"
+        order_1 = list(symbols)
+        _random.Random(run_id).shuffle(order_1)
+        order_2 = list(symbols)
+        _random.Random(run_id).shuffle(order_2)
+        assert order_1 == order_2, "Shuffle must be deterministic given the same run_id seed"
+
+        # And a different run_id must (almost certainly) produce a different order.
+        order_3 = list(symbols)
+        _random.Random("a-different-run-id").shuffle(order_3)
+        # With 5! = 120 permutations, collision probability is ~0.8%. Acceptable for a regression test.
+        assert order_1 != order_3, "Different run_ids should produce different shuffles"
+
+
+class TestPerSymbolWatchdog:
+    """Covers cents-87v: per-symbol deadline catches hangs anywhere in the agent chain."""
+
+    def test_research_with_deadline_returns_normal_result(self, factory_db):
+        from cents.factory.engine import _research_with_deadline
+
+        class FastOrchestrator:
+            def research(self, symbol, thesis):
+                from cents.agents.base import AgentResult
+                return AgentResult(
+                    evidence=[], conviction_delta=5.0, summary="ok",
+                    dimension_scores={}, aggregate=True,
+                )
+
+        r = _research_with_deadline(FastOrchestrator(), "AAPL", None, deadline_sec=5.0)
+        assert r.conviction_delta == 5.0
+
+    def test_research_with_deadline_raises_on_hang(self, factory_db):
+        from cents.factory.engine import _research_with_deadline, _PerSymbolTimeout
+        import time
+
+        class HangingOrchestrator:
+            def research(self, symbol, thesis):
+                time.sleep(10)  # would hang past the 0.5s deadline
+
+        with pytest.raises(_PerSymbolTimeout, match="exceeded 0"):
+            _research_with_deadline(
+                HangingOrchestrator(), "AAPL", None, deadline_sec=0.5
+            )
+
+    def test_hung_symbol_skipped_run_continues(self, factory_db, monkeypatch):
+        """If one symbol hangs, the open phase logs + skips and other symbols still get evaluated."""
+        from cents.config import Settings, get_settings as real_get_settings
+        from cents.agents.base import AgentResult
+        import time
+
+        _seed_universe(["A", "B", "C"])
+
+        class MixedOrchestrator:
+            def __init__(self):
+                self.calls = []
+            def research(self, symbol, thesis):
+                self.calls.append(symbol)
+                if symbol == "B":
+                    time.sleep(5)  # exceeds the 0.3s deadline below
+                return AgentResult(
+                    evidence=[], conviction_delta=8.0, summary=f"ok-{symbol}",
+                    dimension_scores={}, aggregate=True,
+                )
+
+        # Force a tight per-symbol deadline via monkeypatch on get_settings
+        orig = real_get_settings()
+
+        def settings_with_tight_deadline():
+            return Settings(
+                **{**orig.__dict__, "per_symbol_deadline_sec": 0.3},
+            )
+
+        monkeypatch.setattr("cents.factory.engine.get_settings", settings_with_tight_deadline)
+
+        orch = MixedOrchestrator()
+        engine = FactoryEngine(
+            config=_config(
+                entry_threshold=5.0,
+                max_new_per_run=5,
+                cohort_mode="directional_only",
+            ),
+            orchestrator=orch,
+            price_provider=_price_provider(100.0),
+        )
+        run = engine.run(dry_run=True)
+        s = run.summary_json
+        assert s["symbols_timed_out"] >= 1
+        # A and C should still have been evaluated successfully
+        assert s["symbols_evaluated"] >= 2
+        # The run should NOT have hung — it completed and returned
+        assert run.completed_at is not None

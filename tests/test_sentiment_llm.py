@@ -152,8 +152,10 @@ class TestLLMScoring:
 
         # Mock filter response (return index 0)
         filter_response = MockAnthropicResponse("0")
-        # Mock scoring response (bullish)
-        score_response = MockAnthropicResponse('{"score": 0.8, "reasoning": "Strong earnings beat"}')
+        # Mock batched scoring response (bullish)
+        score_response = MockAnthropicResponse(
+            '{"scores": [{"index": 0, "score": 0.8, "reasoning": "Strong earnings beat"}]}'
+        )
 
         mock_client.messages.create.side_effect = [filter_response, score_response]
 
@@ -191,7 +193,9 @@ class TestLLMScoring:
 
         mock_client = MagicMock()
         filter_response = MockAnthropicResponse("0")
-        score_response = MockAnthropicResponse('{"score": -0.7, "reasoning": "Regulatory risk"}')
+        score_response = MockAnthropicResponse(
+            '{"scores": [{"index": 0, "score": -0.7, "reasoning": "Regulatory risk"}]}'
+        )
         mock_client.messages.create.side_effect = [filter_response, score_response]
 
         agent = SentimentAgent(anthropic_client=mock_client)
@@ -225,7 +229,9 @@ class TestLLMScoring:
 
         mock_client = MagicMock()
         filter_response = MockAnthropicResponse("0")
-        score_response = MockAnthropicResponse('{"score": 0.9, "reasoning": "Supports AI growth thesis"}')
+        score_response = MockAnthropicResponse(
+            '{"scores": [{"index": 0, "score": 0.9, "reasoning": "Supports AI growth thesis"}]}'
+        )
         mock_client.messages.create.side_effect = [filter_response, score_response]
 
         thesis = Thesis(title="AI Growth", hypothesis="NVDA will benefit from AI infrastructure spending")
@@ -516,7 +522,9 @@ class TestPromptInjectionHardening:
         assert kwargs["temperature"] == 0.0
         assert kwargs["model"].startswith("claude-haiku-4-5-")
         assert kwargs["model"] != "claude-haiku-4-5"
-        assert "untrusted" in kwargs["system"].lower()
+        system = kwargs["system"]
+        system_text = system[0]["text"] if isinstance(system, list) else system
+        assert "untrusted" in system_text.lower()
         user_content = kwargs["messages"][0]["content"]
         # Injection payload lives INSIDE the nonce-tagged <article-XXXX> delimiters.
         import re as _re
@@ -548,8 +556,191 @@ class TestPromptInjectionHardening:
         call = mock_client.messages.create.call_args
         kwargs = call.kwargs
         assert kwargs["temperature"] == 0.0
-        assert "untrusted" in kwargs["system"].lower()
+        system = kwargs["system"]
+        system_text = system[0]["text"] if isinstance(system, list) else system
+        assert "untrusted" in system_text.lower()
         user_content = kwargs["messages"][0]["content"]
         import re as _re
         assert _re.search(r"<article-[0-9a-f]{8}>", user_content)
         assert _re.search(r"</article-[0-9a-f]{8}>", user_content)
+
+
+class TestBatchedScoring:
+    """Covers _score_articles_batch and _analyze_articles batch routing (cents-3n4)."""
+
+    def setup_method(self):
+        clear_sentiment_cache()
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_batch_scores_multiple_articles_in_one_call(self, mock_settings):
+        """Three articles should be scored by ONE batch call, not three."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+        mock_settings.return_value.default_api_timeout = 10
+
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = MockAnthropicResponse(json.dumps({
+            "scores": [
+                {"index": 0, "score": 0.6, "reasoning": "bullish A"},
+                {"index": 1, "score": -0.4, "reasoning": "mild bearish B"},
+                {"index": 2, "score": 0.0, "reasoning": "neutral C"},
+            ]
+        }))
+
+        agent = SentimentAgent(anthropic_client=mock_client)
+        articles = [
+            {"title": "A", "description": "x", "url": "https://example.com/a"},
+            {"title": "B", "description": "y", "url": "https://example.com/b"},
+            {"title": "C", "description": "z", "url": "https://example.com/c"},
+        ]
+        results = agent._score_articles_batch(articles, "TEST", None)
+
+        assert mock_client.messages.create.call_count == 1
+        # Confirm the call was the batch operation, not per-article scoring.
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert "Article 0:" in call_kwargs["messages"][0]["content"]
+        assert "Article 2:" in call_kwargs["messages"][0]["content"]
+
+        assert len(results) == 3
+        # Scores returned in input order, unscaled (-1..1)
+        assert results[0][1] == 0.6
+        assert results[1][1] == -0.4
+        assert results[2][1] == 0.0
+        # ev_types follow thresholds (default positive >0.2, negative <-0.2)
+        assert results[0][0] == EvidenceType.SUPPORTING
+        assert results[1][0] == EvidenceType.CONTRADICTING
+        assert results[2][0] == EvidenceType.NEUTRAL
+        # URL cache populated for every article
+        assert "https://example.com/a" in agent._article_score_cache
+        assert "https://example.com/c" in agent._article_score_cache
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_batch_partial_missing_index_falls_back_for_that_article(self, mock_settings):
+        """If the batch response omits an article's index, that one keyword-falls-back."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+
+        mock_client = MagicMock()
+        # Index 1 missing → article B should be keyword-scored.
+        mock_client.messages.create.return_value = MockAnthropicResponse(json.dumps({
+            "scores": [
+                {"index": 0, "score": 0.5, "reasoning": "ok"},
+                {"index": 2, "score": -0.3, "reasoning": "ok"},
+            ]
+        }))
+
+        agent = SentimentAgent(anthropic_client=mock_client)
+        articles = [
+            {"title": "A beats", "description": "great", "url": "https://example.com/a"},
+            {"title": "B miss", "description": "downgrade losses", "url": "https://example.com/b"},
+            {"title": "C", "description": "", "url": "https://example.com/c"},
+        ]
+        results = agent._score_articles_batch(articles, "TEST", None)
+
+        assert len(results) == 3
+        assert results[0][3]["scoring_method"] == "llm"
+        assert results[1][3]["scoring_method"] == "keyword"  # missing index → keyword
+        assert results[2][3]["scoring_method"] == "llm"
+        # Cache populated only for LLM-scored articles
+        assert "https://example.com/a" in agent._article_score_cache
+        assert "https://example.com/b" not in agent._article_score_cache
+        assert "https://example.com/c" in agent._article_score_cache
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_batch_total_failure_keyword_fallback_for_all(self, mock_settings):
+        """Malformed batch response → every article keyword-falls-back, provenance=None."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = MockAnthropicResponse("not even json")
+
+        agent = SentimentAgent(anthropic_client=mock_client)
+        articles = [
+            {"title": "A beats", "description": "strong earnings beat", "url": "https://example.com/a"},
+            {"title": "B miss", "description": "downgrade losses", "url": "https://example.com/b"},
+        ]
+        results = agent._score_articles_batch(articles, "TEST", None)
+
+        assert len(results) == 2
+        for ev_type, score, conf, meta, provenance in results:
+            assert meta["scoring_method"] == "keyword"
+            assert provenance is None
+        # No cache writes on total failure
+        assert "https://example.com/a" not in agent._article_score_cache
+
+    @patch("cents.agents.sentiment.urlopen")
+    @patch("cents.agents.sentiment.get_settings")
+    def test_analyze_articles_uses_one_batch_call_for_two_relevant(self, mock_settings, mock_urlopen):
+        """End-to-end: 2 filtered articles → 1 filter call + 1 batch score call, NOT 3 total."""
+        mock_settings.return_value.news_api_key = "test_key"
+        mock_settings.return_value.anthropic_api_key = "test_anthropic_key"
+        mock_settings.return_value.default_api_timeout = 10
+
+        mock_news = MagicMock()
+        mock_news.read.return_value = json.dumps({
+            "articles": [
+                {"title": "A", "description": "x", "source": {"name": "N"}, "url": "https://example.com/a"},
+                {"title": "B", "description": "y", "source": {"name": "N"}, "url": "https://example.com/b"},
+            ]
+        }).encode()
+        mock_news.__enter__ = lambda s: s
+        mock_news.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_news
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = [
+            MockAnthropicResponse("0\n1"),  # filter: both relevant
+            MockAnthropicResponse(json.dumps({
+                "scores": [
+                    {"index": 0, "score": 0.4, "reasoning": "bullish"},
+                    {"index": 1, "score": -0.2, "reasoning": "mild bearish"},
+                ]
+            })),
+        ]
+
+        agent = SentimentAgent(anthropic_client=mock_client)
+        result = agent.research("TEST")
+
+        # 1 filter call + 1 batch call = 2 total (NOT 1 filter + 2 score = 3)
+        assert mock_client.messages.create.call_count == 2
+        # Both articles get LLM-scored
+        assert len(result.evidence) == 2
+        for ev in result.evidence:
+            assert ev.metadata.get("scoring_method") == "llm"
+
+
+class TestAnthropicTimeoutWiring:
+    """Covers cents-87v: SDK default 600s read-timeout is overridden to 30s
+    so a single hung Anthropic call can't burn 30+ minutes of pipeline wall-clock."""
+
+    def setup_method(self):
+        clear_sentiment_cache()
+
+    @patch("cents.agents.sentiment.get_settings")
+    def test_sentiment_client_uses_configured_timeout(self, mock_settings):
+        """SentimentAgent's lazy-built Anthropic client must use anthropic_timeout_sec."""
+        mock_settings.return_value.news_api_key = "x"
+        mock_settings.return_value.anthropic_api_key = "y"
+        mock_settings.return_value.default_api_timeout = 10
+        mock_settings.return_value.anthropic_timeout_sec = 17.5
+
+        agent = SentimentAgent()
+        client = agent._get_anthropic_client()
+        assert client is not None
+        assert client.timeout == 17.5, (
+            f"Expected sentiment Anthropic client to honor anthropic_timeout_sec=17.5, "
+            f"got timeout={client.timeout!r} — the SDK default is 600s and would re-introduce "
+            f"the 38-min single-symbol hang (cents-87v)."
+        )
+
+    @patch("cents.factory.premise.get_settings")
+    def test_premise_client_uses_configured_timeout(self, mock_settings):
+        """classify_premise_tags's lazy Anthropic client must use anthropic_timeout_sec."""
+        from cents.factory.premise import _build_anthropic_client
+        mock_settings.return_value.anthropic_api_key = "y"
+        mock_settings.return_value.anthropic_timeout_sec = 12.0
+
+        client = _build_anthropic_client()
+        assert client is not None
+        assert client.timeout == 12.0

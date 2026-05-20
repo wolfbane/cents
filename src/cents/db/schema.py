@@ -615,7 +615,11 @@ def _migrate_foreign_keys(conn: sqlite3.Connection) -> None:
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     """Initialize database with schema and return connection."""
     path = db_path or get_db_path()
-    conn = sqlite3.connect(path)
+    # check_same_thread=False allows the factory engine's per-symbol watchdog
+    # worker thread (cents-87v) to read the singleton DB. Cents is single-
+    # process serial — the main thread is blocked on thread.join while the
+    # worker runs, so SQLite is never accessed concurrently.
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)

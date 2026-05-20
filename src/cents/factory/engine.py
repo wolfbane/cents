@@ -4,9 +4,45 @@ from __future__ import annotations
 
 import json
 import logging
+import random
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Protocol
+
+
+class _PerSymbolTimeout(Exception):
+    """Raised by _research_with_deadline when a symbol's research exceeds its budget."""
+
+
+def _research_with_deadline(orchestrator, symbol: str, thesis, deadline_sec: float):
+    """Run ``orchestrator.research(symbol, thesis)`` with a hard deadline.
+
+    Catches hangs in ANY upstream (NewsAPI, FMP, Alpaca, Anthropic) without
+    coupling the watchdog to which library happens to be on the call stack.
+    The hung worker thread is daemonized and will be reaped by the OS when
+    the underlying socket eventually times out — leaking a thread is much
+    cheaper than burning 30+ minutes of wall-clock on a single symbol.
+    """
+    result_holder: list = [None]
+    exc_holder: list = [None]
+
+    def _worker():
+        try:
+            result_holder[0] = orchestrator.research(symbol, thesis)
+        except BaseException as e:  # noqa: BLE001 — propagate to caller
+            exc_holder[0] = e
+
+    t = threading.Thread(target=_worker, daemon=True, name=f"research-{symbol}")
+    t.start()
+    t.join(timeout=deadline_sec)
+    if t.is_alive():
+        raise _PerSymbolTimeout(
+            f"research({symbol}) exceeded {deadline_sec:.0f}s deadline"
+        )
+    if exc_holder[0] is not None:
+        raise exc_holder[0]
+    return result_holder[0]
 
 from cents.config import get_settings
 from cents.exceptions import CostCapExceeded
@@ -318,7 +354,12 @@ class FactoryEngine:
             run.positions_closed += open_results["preempted_positions_closed"]
 
             run.summary_json = {
-                "symbols_considered": len(symbols),
+                "universe_size": len(symbols),
+                "symbols_evaluated": open_results.get("symbols_evaluated", 0),
+                "symbols_below_threshold": open_results.get("symbols_below_threshold", 0),
+                "symbols_skipped_held": open_results.get("symbols_skipped_held", 0),
+                "symbols_timed_out": open_results.get("symbols_timed_out", 0),
+                "stop_reason": open_results.get("stop_reason", "end_of_universe"),
                 "proposals": [
                     {"kind": p.kind, "symbol": p.symbol, "detail": p.detail}
                     for p in proposals
@@ -443,7 +484,18 @@ class FactoryEngine:
     def _update_conviction(self, thesis: Thesis, orchestrator, dry_run: bool) -> None:
         if not thesis.symbol:
             return
-        result = orchestrator.research(thesis.symbol, thesis)
+        try:
+            result = _research_with_deadline(
+                orchestrator,
+                thesis.symbol,
+                thesis,
+                get_settings().per_symbol_deadline_sec,
+            )
+        except _PerSymbolTimeout as exc:
+            logger.warning(
+                "Skipping conviction update for %s — %s", thesis.symbol, exc
+            )
+            return
         if dry_run:
             return
         thesis.update_conviction(result.conviction_delta)
@@ -601,6 +653,24 @@ class FactoryEngine:
         skip_symbols = set(skip_symbols or set())
         held_symbols = self._held_symbols(open_theses) | skip_symbols
         opened_this_run = 0
+        # Per-disposition counters for dry-run observability (cents-9yn).
+        symbols_evaluated = 0
+        symbols_below_threshold = 0
+        symbols_skipped_held = 0
+        symbols_timed_out = 0  # cents-87v: hard per-symbol deadline tripped
+        stop_reason = "end_of_universe"
+        per_symbol_deadline_sec = get_settings().per_symbol_deadline_sec
+
+        # Shuffle universe order per run to eliminate systematic alphabetical bias
+        # when max_new_per_run early-stops the loop. The seed is derived from
+        # run_id so each run gets a different (but reproducible) order — both LLM
+        # and random arms see the same shuffled order within a single run.
+        # See research-design note in CLAUDE.md.
+        if run_id is not None:
+            shuffled_universe = list(universe_symbols)
+            random.Random(run_id).shuffle(shuffled_universe)
+        else:
+            shuffled_universe = list(universe_symbols)
 
         orchestrator = self._make_orchestrator()
         # Each thesis is labeled with which orchestrator opened it so the
@@ -648,14 +718,26 @@ class FactoryEngine:
         # for callers who want to study drawdown behaviour, but the engine
         # itself never refuses to open on their account.
 
-        for symbol in universe_symbols:
+        for symbol in shuffled_universe:
             if opened_this_run >= cfg.max_new_per_run:
+                stop_reason = "max_new_per_run"
                 break
             if symbol in held_symbols:
+                symbols_skipped_held += 1
                 continue
 
-            result = orchestrator.research(symbol, None)
+            symbols_evaluated += 1
+            try:
+                result = _research_with_deadline(
+                    orchestrator, symbol, None, per_symbol_deadline_sec
+                )
+            except _PerSymbolTimeout as exc:
+                symbols_timed_out += 1
+                symbols_evaluated -= 1  # didn't fully evaluate
+                logger.warning("Skipping %s — %s", symbol, exc)
+                continue
             if abs(result.conviction_delta) < cfg.entry_threshold:
+                symbols_below_threshold += 1
                 self._record_shadow(
                     dry_run=dry_run,
                     run_id=run_id,
@@ -889,6 +971,11 @@ class FactoryEngine:
             "preemptions": preemptions,
             "preempted_closed": preempted_closed,
             "preempted_positions_closed": preempted_positions_closed,
+            "symbols_evaluated": symbols_evaluated,
+            "symbols_below_threshold": symbols_below_threshold,
+            "symbols_skipped_held": symbols_skipped_held,
+            "symbols_timed_out": symbols_timed_out,
+            "stop_reason": stop_reason,
         }
 
     def _held_symbols(self, theses: list[Thesis]) -> set[str]:

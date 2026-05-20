@@ -361,11 +361,13 @@ class TestSentimentAgentEndToEndProvenance:
         monkeypatch.setenv("CENTS_LLM_BLOB_DIR", str(blob_root))
 
         mock_client = MagicMock()
-        # filter_articles call + per-article score call — return same shape; the
-        # filter response is parsed for numeric indices, the score is JSON.
+        # filter_articles call + batched score call — the score now returns
+        # a {"scores": [...]} array (one entry per article in the batch).
         mock_client.messages.create.side_effect = [
             _mock_anthropic_response("0"),  # filter: pick index 0
-            _mock_anthropic_response('{"score": 0.8, "reasoning": "bullish"}'),
+            _mock_anthropic_response(
+                '{"scores": [{"index": 0, "score": 0.8, "reasoning": "bullish"}]}'
+            ),
         ]
 
         monkeypatch.setattr(

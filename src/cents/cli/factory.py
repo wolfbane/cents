@@ -132,9 +132,22 @@ def _print_run(run, *, dry_run: bool) -> None:
     click.echo(f"  Theses closed:   {run.theses_closed}")
     click.echo(f"  Preemptions:     {run.preemptions}")
     click.echo(f"  Positions:       {run.positions_opened} opened, {run.positions_closed} closed")
+    summary = run.summary_json or {}
+    universe_size = summary.get("universe_size")
+    evaluated = summary.get("symbols_evaluated")
+    if universe_size is not None and evaluated is not None:
+        below = summary.get("symbols_below_threshold", 0)
+        held = summary.get("symbols_skipped_held", 0)
+        timed_out = summary.get("symbols_timed_out", 0)
+        stop_reason = summary.get("stop_reason", "end_of_universe")
+        timed_out_str = f", {timed_out} timed out" if timed_out else ""
+        click.echo(
+            f"  Symbols:         {evaluated} evaluated / {universe_size} in universe "
+            f"({below} below threshold, {held} held{timed_out_str}); stop: {stop_reason}"
+        )
     if run.error:
         click.echo(f"  Error: {run.error}")
-    proposals = run.summary_json.get("proposals", [])
+    proposals = summary.get("proposals", [])
     if proposals:
         click.echo("  Proposals:")
         for p in proposals:

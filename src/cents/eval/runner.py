@@ -294,7 +294,11 @@ def _build_anthropic_client():
         import anthropic
     except ImportError:
         return None
-    return anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    # Cap per-request timeout (cents-87v): SDK default is 600s read.
+    return anthropic.Anthropic(
+        api_key=settings.anthropic_api_key,
+        timeout=settings.anthropic_timeout_sec,
+    )
 
 
 _SKIP_MSG = (

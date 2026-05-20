@@ -183,7 +183,9 @@ def classify_premise_tags(
         "model": _LLM_MODEL,
         "max_tokens": 200,
         "temperature": _LLM_TEMPERATURE,
-        "system": _SYSTEM_PROMPT,
+        "system": [
+            {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+        ],
         "messages": [{"role": "user", "content": prompt}],
     }
     check_cost_cap(call_kwargs, agent="factory", operation="classify_premise")
@@ -280,7 +282,11 @@ def _build_anthropic_client():
         return None
     try:
         import anthropic
-        return anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        # Cap per-request timeout (cents-87v): SDK default is 600s read.
+        return anthropic.Anthropic(
+            api_key=settings.anthropic_api_key,
+            timeout=settings.anthropic_timeout_sec,
+        )
     except ImportError:
         logger.warning("anthropic package not installed; premise classification disabled")
         return None

@@ -34,6 +34,17 @@ class Settings:
     # processes (checked against today's `llm_usage` rows). `None` disables.
     # Overridable via `CENTS_MAX_LLM_SPEND_USD_PER_DAY`.
     max_llm_spend_usd_per_day: float | None = None
+    # Per-request timeout (seconds) on every Anthropic call. SDK default is
+    # 600s, which combined with retries can burn 30+ minutes on a single
+    # symbol's analysis when Anthropic is slow. 30s is plenty for sentiment
+    # scoring + premise classification calls. See cents-87v.
+    anthropic_timeout_sec: float = 30.0
+    # Hard deadline (seconds) on a single symbol's orchestrator.research call
+    # in the factory engine. Bounds the WHOLE per-symbol agent chain (sentiment
+    # + fundamentals + technical + macro + moat + insider + event), catching
+    # hangs in ANY upstream (NewsAPI, FMP, Alpaca, Anthropic). On timeout the
+    # symbol is logged + skipped; the run keeps going. See cents-87v.
+    per_symbol_deadline_sec: float = 90.0
 
 
 def _load_config_file(config_path: Path) -> dict:
@@ -119,5 +130,33 @@ def get_settings(config_path: str | None = None) -> Settings:
         fetch_forward_estimates=fetch_forward,
         default_api_timeout=timeout_value,
         max_llm_spend_usd_per_day=daily_cap_value,
+        anthropic_timeout_sec=_resolve_anthropic_timeout(_get),
+        per_symbol_deadline_sec=_resolve_per_symbol_deadline(_get),
     )
+
+
+def _resolve_per_symbol_deadline(get) -> float:
+    """Resolve the per-symbol research deadline (seconds).
+
+    Order: CENTS_PER_SYMBOL_DEADLINE_SEC env var → config file → 90s default.
+    """
+    raw = get("per_symbol_deadline_sec", "CENTS_PER_SYMBOL_DEADLINE_SEC", 90.0)
+    try:
+        v = float(raw)
+        return v if v > 0 else 90.0
+    except (TypeError, ValueError):
+        return 90.0
+
+
+def _resolve_anthropic_timeout(get) -> float:
+    """Resolve the Anthropic per-request timeout (seconds).
+
+    Order: CENTS_ANTHROPIC_TIMEOUT_SEC env var → config file → 30s default.
+    """
+    raw = get("anthropic_timeout_sec", "CENTS_ANTHROPIC_TIMEOUT_SEC", 30.0)
+    try:
+        v = float(raw)
+        return v if v > 0 else 30.0
+    except (TypeError, ValueError):
+        return 30.0
 

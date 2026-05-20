@@ -251,6 +251,9 @@ class TestSectorFallback:
         monkeypatch.setattr(
             "cents.factory.premise.EventRepository", lambda: EventRepository(db_conn)
         )
+        monkeypatch.setattr(
+            "cents.factory.premise._build_anthropic_client", lambda: None
+        )
         tags, directions = classify_premise_tags(
             "JPM", "", [], anthropic_client=None
         )

@@ -24,6 +24,8 @@ class TestSettings:
         assert s.default_scan_threshold == 5.0
         assert s.default_webhook is None
         assert s.default_output == "text"
+        # cents-87v: Anthropic per-request timeout default (SDK default is 600s, much too long)
+        assert s.anthropic_timeout_sec == 30.0
 
 
 class TestLoadConfigFile:
@@ -127,6 +129,38 @@ default_output = "json"
         with patch.dict(os.environ, {}, clear=True):
             settings = get_settings(str(config_file))
         assert settings.default_scan_threshold == 5.0
+
+    def test_anthropic_timeout_default_30s(self, tmp_path):
+        """cents-87v: default anthropic_timeout_sec is 30 (NOT the SDK's 600s)."""
+        with patch.dict(os.environ, {}, clear=True):
+            settings = get_settings(str(tmp_path / "nonexistent.toml"))
+        assert settings.anthropic_timeout_sec == 30.0
+
+    def test_anthropic_timeout_env_override(self, tmp_path):
+        """CENTS_ANTHROPIC_TIMEOUT_SEC env var overrides default."""
+        with patch.dict(os.environ, {"CENTS_ANTHROPIC_TIMEOUT_SEC": "15"}, clear=True):
+            settings = get_settings(str(tmp_path / "nonexistent.toml"))
+        assert settings.anthropic_timeout_sec == 15.0
+
+    def test_anthropic_timeout_config_file(self, tmp_path):
+        """anthropic_timeout_sec in config file is honored."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("anthropic_timeout_sec = 45.0")
+        with patch.dict(os.environ, {}, clear=True):
+            settings = get_settings(str(config_file))
+        assert settings.anthropic_timeout_sec == 45.0
+
+    def test_anthropic_timeout_invalid_falls_back_to_30(self, tmp_path):
+        """Malformed value falls back to the safe 30s default."""
+        with patch.dict(os.environ, {"CENTS_ANTHROPIC_TIMEOUT_SEC": "garbage"}, clear=True):
+            settings = get_settings(str(tmp_path / "nonexistent.toml"))
+        assert settings.anthropic_timeout_sec == 30.0
+
+    def test_anthropic_timeout_negative_falls_back_to_30(self, tmp_path):
+        """Negative or zero value falls back to the safe 30s default."""
+        with patch.dict(os.environ, {"CENTS_ANTHROPIC_TIMEOUT_SEC": "-5"}, clear=True):
+            settings = get_settings(str(tmp_path / "nonexistent.toml"))
+        assert settings.anthropic_timeout_sec == 30.0
 
     def test_invalid_output_format_defaults_to_text(self, tmp_path):
         """Invalid output format defaults to 'text'."""
