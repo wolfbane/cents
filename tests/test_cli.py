@@ -1197,3 +1197,136 @@ class TestCalculateHitRate:
     def test_length_mismatch_returns_none(self):
         from cents.cli._shared import calculate_hit_rate
         assert calculate_hit_rate([1.0, 2.0], [0.1]) is None
+
+
+class TestFactoryInitValidation:
+    """cents-5lj8: cents factory init must probe the configured default universe
+    and emit clear WARNINGs (not errors) when the universe is missing, empty,
+    or its tickers don't resolve at FMP."""
+
+    @pytest.fixture
+    def factory_config_path(self, tmp_path, monkeypatch):
+        """Point factory.toml at a throwaway tmp path so init never touches ~/."""
+        path = tmp_path / "factory.toml"
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(path))
+        return path
+
+    def _seed_universe(self, name, symbols, *, is_default=True):
+        """Create a universe row + optionally mark it default."""
+        from cents.db import UniverseRepository
+        from cents.models import Universe
+
+        repo = UniverseRepository()
+        repo.create(Universe(name=name, symbols=symbols, is_default=is_default))
+
+    def test_valid_default_universe_emits_no_warnings(
+        self, runner, mock_db, factory_config_path, monkeypatch
+    ):
+        """When default universe exists with symbols + FMP probe succeeds → no WARNING."""
+        self._seed_universe("sp500_lite", ["AAPL"], is_default=True)
+        monkeypatch.setenv("FMP_API_KEY", "fake-key")
+
+        # Mock the FMP profile fetch to return a non-empty payload.
+        with patch(
+            "cents.data.fmp.FMPFundamentalsProvider._fetch_json",
+            return_value=[{"symbol": "AAPL", "companyName": "Apple Inc."}],
+        ):
+            result = runner.invoke(cli, ["factory", "init"])
+
+        assert result.exit_code == 0
+        assert "Wrote factory config" in result.output
+        assert "WARNING" not in result.output
+        assert "Probed default_universe" in result.output
+        assert "AAPL" in result.output
+        assert factory_config_path.exists()
+
+    def test_missing_universe_emits_warning_and_writes_config(
+        self, runner, mock_db, factory_config_path, monkeypatch
+    ):
+        """No universe of that name → WARNING with remediation, config still written, exit 0."""
+        # Seed the DB with a universe by another name and not marked default.
+        self._seed_universe("other_uni", ["AAPL"], is_default=False)
+        monkeypatch.setenv("FMP_API_KEY", "fake-key")
+
+        result = runner.invoke(cli, ["factory", "init"])
+
+        assert result.exit_code == 0
+        assert factory_config_path.exists()
+        assert "WARNING" in result.output
+        assert "not registered" in result.output
+        # Remediation pointer.
+        assert "cents universe" in result.output
+
+    def test_empty_universe_emits_warning(
+        self, runner, mock_db, factory_config_path, monkeypatch
+    ):
+        """Universe exists but has 0 symbols → WARNING, config still written."""
+        self._seed_universe("sp500_lite", [], is_default=True)
+        monkeypatch.setenv("FMP_API_KEY", "fake-key")
+
+        result = runner.invoke(cli, ["factory", "init"])
+
+        assert result.exit_code == 0
+        assert factory_config_path.exists()
+        assert "WARNING" in result.output
+        assert "0 symbols" in result.output
+
+    def test_fmp_unreachable_emits_warning(
+        self, runner, mock_db, factory_config_path, monkeypatch
+    ):
+        """FMP probe raises → WARNING surfaces the FMP failure, config still written."""
+        self._seed_universe("sp500_lite", ["AAPL"], is_default=True)
+        monkeypatch.setenv("FMP_API_KEY", "fake-key")
+
+        with patch(
+            "cents.data.fmp.FMPFundamentalsProvider._fetch_json",
+            side_effect=RuntimeError("connection refused"),
+        ):
+            result = runner.invoke(cli, ["factory", "init"])
+
+        assert result.exit_code == 0
+        assert factory_config_path.exists()
+        assert "WARNING" in result.output
+        assert "FMP probe of AAPL failed" in result.output
+        assert "connection refused" in result.output
+
+    def test_fmp_empty_payload_emits_warning(
+        self, runner, mock_db, factory_config_path, monkeypatch
+    ):
+        """FMP returns empty list (unknown ticker) → WARNING, config still written."""
+        self._seed_universe("sp500_lite", ["BOGUS"], is_default=True)
+        monkeypatch.setenv("FMP_API_KEY", "fake-key")
+
+        with patch(
+            "cents.data.fmp.FMPFundamentalsProvider._fetch_json",
+            return_value=[],
+        ):
+            result = runner.invoke(cli, ["factory", "init"])
+
+        assert result.exit_code == 0
+        assert factory_config_path.exists()
+        assert "WARNING" in result.output
+        assert "returned no data" in result.output
+
+    def test_no_fmp_key_skips_probe_with_distinct_note(
+        self, runner, mock_db, factory_config_path, monkeypatch
+    ):
+        """No FMP key configured → softer NOTE, no FMP probe attempted, config written."""
+        self._seed_universe("sp500_lite", ["AAPL"], is_default=True)
+        monkeypatch.delenv("FMP_API_KEY", raising=False)
+        # Force settings to see no key (also clear file-based config via CENTS_CONFIG).
+        monkeypatch.setenv("CENTS_CONFIG", "/nonexistent/config.toml")
+
+        # The FMP provider should NEVER be constructed; assert via patch.
+        with patch(
+            "cents.data.fmp.FMPFundamentalsProvider.__init__",
+            side_effect=AssertionError("FMP probe must not run when key is missing"),
+        ):
+            result = runner.invoke(cli, ["factory", "init"])
+
+        assert result.exit_code == 0
+        assert factory_config_path.exists()
+        assert "NOTE" in result.output
+        assert "FMP_API_KEY not configured" in result.output
+        # Distinct from the FMP-reachability warnings.
+        assert "FMP probe of" not in result.output
