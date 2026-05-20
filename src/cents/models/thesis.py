@@ -70,6 +70,12 @@ class Thesis:
     # tag's events are bullish; "negative" = thesis benefits when bearish.
     # Tags not in this dict fall back to legacy unsigned-intersection matching.
     premise_direction: dict[str, str] = field(default_factory=dict)
+    # Which classifier path produced premise_tags (cents-83xl): "llm" =
+    # LLM produced ≥1 mapped tag; "fallback_sector" = sector defaults used
+    # because the LLM was unavailable or returned nothing usable;
+    # "fallback_empty" = neither path produced tags (also the default for
+    # legacy/manually-created theses). Stratifier for `factory analyze`.
+    premise_classification_source: str = "fallback_empty"
     regime_snapshot: dict = field(default_factory=dict)
     # Discovery (e.g. universe name or screener strategy that surfaced this symbol)
     discovery_source: str | None = None

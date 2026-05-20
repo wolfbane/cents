@@ -1016,6 +1016,64 @@ class TestFactoryCli:
         keys = {(c["discovery"], c["cohort"]) for c in cells}
         assert keys == {("value", "directional"), ("value", "neutral")}
 
+    def test_analyze_by_premise_classification_source(
+        self, factory_db, monkeypatch, tmp_path,
+    ):
+        """cents-83xl: --by premise_classification_source stratifies outcomes."""
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        trepo = ThesisRepository()
+        # LLM-classified: 1 correct
+        t1 = Thesis(
+            title="factory:A", symbol="A", tags=[TAG_FACTORY],
+            premise_classification_source="llm",
+        )
+        trepo.create(t1)
+        t1.close(ThesisOutcome.CORRECT)
+        trepo.update(t1)
+        # LLM-classified: 1 incorrect
+        t2 = Thesis(
+            title="factory:B", symbol="B", tags=[TAG_FACTORY],
+            premise_classification_source="llm",
+        )
+        trepo.create(t2)
+        t2.close(ThesisOutcome.INCORRECT)
+        trepo.update(t2)
+        # Sector fallback: 1 correct
+        t3 = Thesis(
+            title="factory:C", symbol="C", tags=[TAG_FACTORY],
+            premise_classification_source="fallback_sector",
+        )
+        trepo.create(t3)
+        t3.close(ThesisOutcome.CORRECT)
+        trepo.update(t3)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "factory", "analyze",
+            "--by", "premise_classification_source",
+            "--output", "json",
+        ])
+        assert result.exit_code == 0, result.output
+        import json
+        payload = json.loads(result.output)
+        assert payload["by"] == ["premise_classification_source"]
+        keys = {c["premise_classification_source"] for c in payload["cells"]}
+        assert keys == {"llm", "fallback_sector"}
+        llm_cell = next(
+            c for c in payload["cells"]
+            if c["premise_classification_source"] == "llm"
+        )
+        assert llm_cell["metrics"]["opened"] == 2
+        assert llm_cell["metrics"]["win_rate"] == 0.5
+        sector_cell = next(
+            c for c in payload["cells"]
+            if c["premise_classification_source"] == "fallback_sector"
+        )
+        assert sector_cell["metrics"]["opened"] == 1
+        assert sector_cell["metrics"]["win_rate"] == 1.0
+
     def test_analyze_rejects_unknown_axis(self, factory_db, monkeypatch, tmp_path):
         from cents.cli import cli
 
@@ -1374,6 +1432,174 @@ class TestPremiseDirectionPersistence:
         assert len(theses) == 1
         assert theses[0].premise_tags == ["ai_capex"]
         assert theses[0].premise_direction == {}
+
+
+class TestPremiseClassificationSourcePersistence:
+    """cents-83xl: engine records which classifier path produced premise_tags.
+
+    Distinguishing 'llm' from 'fallback_sector' from 'fallback_empty' lets
+    `factory analyze` stratify outcomes by classifier path — a 30% fallback
+    rate mixes two very different signal-quality buckets into one headline.
+    """
+
+    def test_llm_path_records_llm_source(self, factory_db, monkeypatch):
+        """A real LLM classifier (with sink populated) → source='llm'."""
+        _seed_universe(["AAPL"])
+
+        def stub(symbol, summary, evidence_texts=None, **kwargs):
+            sink = kwargs.get("source_sink")
+            if sink is not None:
+                sink.append("llm")
+            return ["ai_capex"], {"ai_capex": "positive"}
+
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags", stub
+        )
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].premise_classification_source == "llm"
+
+    def test_sector_fallback_path_records_fallback_sector(
+        self, factory_db, monkeypatch,
+    ):
+        """Sector-fallback (sink populated 'fallback_sector') → persisted."""
+        _seed_universe(["AAPL"])
+
+        def stub(symbol, summary, evidence_texts=None, **kwargs):
+            sink = kwargs.get("source_sink")
+            if sink is not None:
+                sink.append("fallback_sector")
+            return ["ai_capex"], {"ai_capex": "positive"}
+
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags", stub
+        )
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].premise_classification_source == "fallback_sector"
+
+    def test_fallback_empty_path_records_fallback_empty(
+        self, factory_db, monkeypatch,
+    ):
+        """Empty result with sink populated 'fallback_empty' → persisted."""
+        _seed_universe(["AAPL"])
+
+        def stub(symbol, summary, evidence_texts=None, **kwargs):
+            sink = kwargs.get("source_sink")
+            if sink is not None:
+                sink.append("fallback_empty")
+            return [], {}
+
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags", stub
+        )
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].premise_classification_source == "fallback_empty"
+
+    def test_legacy_2tuple_stub_inferred_llm_for_nonempty_tags(
+        self, factory_db, monkeypatch,
+    ):
+        """Back-compat: a stub returning only (tags, dir) (no sink) infers source."""
+        _seed_universe(["AAPL"])
+        # Stub doesn't touch source_sink — engine must infer from result.
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *args, **kwargs: (["ai_capex"], {"ai_capex": "positive"}),
+        )
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        # Non-empty tags + no sink hint → inferred as "llm".
+        assert theses[0].premise_classification_source == "llm"
+
+    def test_legacy_bare_list_stub_inferred_fallback_empty_for_empty(
+        self, factory_db, monkeypatch,
+    ):
+        """Back-compat: bare-list [] stub with no sink → fallback_empty inferred."""
+        _seed_universe(["AAPL"])
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *args, **kwargs: [],
+        )
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 7.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        engine.run()
+        theses = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(theses) == 1
+        assert theses[0].premise_classification_source == "fallback_empty"
+
+
+class TestCoercePremiseClassification:
+    """Unit coverage for _coerce_premise_classification shape adaptations."""
+
+    def test_accepts_3tuple_with_source(self):
+        from cents.factory.engine import _coerce_premise_classification
+        tags, direction, source = _coerce_premise_classification(
+            (["fed_policy"], {"fed_policy": "positive"}, "fallback_sector")
+        )
+        assert tags == ["fed_policy"]
+        assert direction == {"fed_policy": "positive"}
+        assert source == "fallback_sector"
+
+    def test_accepts_2tuple_infers_llm_for_nonempty(self):
+        from cents.factory.engine import _coerce_premise_classification
+        tags, direction, source = _coerce_premise_classification(
+            (["fed_policy"], {"fed_policy": "positive"})
+        )
+        assert tags == ["fed_policy"]
+        assert direction == {"fed_policy": "positive"}
+        assert source == "llm"
+
+    def test_accepts_2tuple_infers_fallback_empty_for_empty(self):
+        from cents.factory.engine import _coerce_premise_classification
+        tags, direction, source = _coerce_premise_classification(([], {}))
+        assert tags == []
+        assert direction == {}
+        assert source == "fallback_empty"
+
+    def test_accepts_bare_list(self):
+        from cents.factory.engine import _coerce_premise_classification
+        tags, direction, source = _coerce_premise_classification(["fed_policy"])
+        assert tags == ["fed_policy"]
+        assert direction == {}
+        assert source == "llm"
+
+    def test_sink_overrides_inference(self):
+        """Populated sink takes priority over inference from result."""
+        from cents.factory.engine import _coerce_premise_classification
+        # 2-tuple result with empty tags would normally infer fallback_empty,
+        # but the sink explicitly says it was a sector path that returned nothing.
+        tags, direction, source = _coerce_premise_classification(
+            ([], {}), source_sink=["fallback_sector"]
+        )
+        assert source == "fallback_sector"
 
 
 class TestCalibratedPrediction:

@@ -129,16 +129,36 @@ def _is_paired(thesis: Thesis) -> bool:
     return thesis.cohort == ThesisCohort.NEUTRAL
 
 
-def _coerce_premise_classification(value) -> tuple[list[str], dict[str, str]]:
-    """Adapt classify_premise_tags' return to (tags, direction).
+def _coerce_premise_classification(
+    value, source_sink: list[str] | None = None,
+) -> tuple[list[str], dict[str, str], str]:
+    """Adapt classify_premise_tags' return to ``(tags, direction, source)``.
 
-    The classifier returns a 2-tuple, but legacy test stubs may return a bare
-    list of tags. Accept both shapes so test fixtures need not all change at once.
+    The classifier returns a 2-tuple, but tests may stub it as:
+      - 3-tuple ``(tags, direction, source)`` — used as-is.
+      - 2-tuple ``(tags, direction)`` — source inferred (LLM if tags else empty).
+      - bare list of tags — source inferred ditto.
+
+    ``source_sink`` is the side-channel out-param the engine passes to the
+    real classifier (see ``classify_premise_tags``); when populated, it
+    overrides any inferred source. Tests that monkeypatch the classifier
+    leave the sink empty, so inference applies.
     """
+    if isinstance(value, tuple) and len(value) == 3:
+        tags, direction, source = value
+        return list(tags or []), dict(direction or {}), source or "fallback_empty"
     if isinstance(value, tuple) and len(value) == 2:
-        tags, direction = value
-        return list(tags or []), dict(direction or {})
-    return list(value or []), {}
+        tags_v, direction = value
+        tags = list(tags_v or [])
+        direction = dict(direction or {})
+    else:
+        tags = list(value or [])
+        direction = {}
+    if source_sink:
+        source = source_sink[0]
+    else:
+        source = "llm" if tags else "fallback_empty"
+    return tags, direction, source
 
 
 def _horizon_from_days(days: int) -> TimeHorizon:
@@ -839,12 +859,17 @@ class FactoryEngine:
             # on (e.g. random-arm control theses) — without that fallback,
             # the random arm is silently un-invalidatable by events.
             side_hint = "short" if result.conviction_delta < 0 else "long"
-            premise_tags, premise_direction = _coerce_premise_classification(
-                classify_premise_tags(
-                    symbol,
-                    result.summary,
-                    [getattr(e, "content", "") for e in (result.evidence or [])],
-                    side=side_hint,
+            source_sink: list[str] = []
+            premise_tags, premise_direction, premise_classification_source = (
+                _coerce_premise_classification(
+                    classify_premise_tags(
+                        symbol,
+                        result.summary,
+                        [getattr(e, "content", "") for e in (result.evidence or [])],
+                        side=side_hint,
+                        source_sink=source_sink,
+                    ),
+                    source_sink=source_sink,
                 )
             )
             # Random-arm theses skip the premise-concentration cap. The cap
@@ -1017,6 +1042,7 @@ class FactoryEngine:
                 hedge_symbol=hedge_symbol,
                 premise_tags=premise_tags,
                 premise_direction=premise_direction,
+                premise_classification_source=premise_classification_source,
                 discovery_source=discovery_source,
                 primary_shares=primary_shares,
                 primary_sizing_method=sizing_method,
@@ -1237,6 +1263,7 @@ class FactoryEngine:
         hedge_symbol: str | None,
         premise_tags: list[str] | None = None,
         premise_direction: dict[str, str] | None = None,
+        premise_classification_source: str = "fallback_empty",
         discovery_source: str | None = None,
         primary_shares: float = 0.0,
         primary_sizing_method: str = "equal_dollar",
@@ -1322,6 +1349,7 @@ class FactoryEngine:
             hedge_symbol=hedge_symbol,
             premise_tags=premise_tags or [],
             premise_direction=premise_direction or {},
+            premise_classification_source=premise_classification_source,
             regime_snapshot=regime_snapshot,
             discovery_source=discovery_source,
             calibrated_p_correct=calibrated_p,
