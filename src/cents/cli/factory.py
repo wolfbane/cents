@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 import click
 
+from cents.config import get_settings
 from cents.db import (
     FactoryRunRepository,
     LLMUsageRepository,
@@ -20,6 +21,7 @@ from cents.factory.config import (
     scaffold_factory_config,
 )
 from cents.factory.engine import FactoryEngine, TAG_FACTORY
+from cents.factory.universe_resolver import resolve_symbols
 from cents.llm_usage import cost_cap, current_run_cap_usd, current_run_spend_usd
 from cents.models import PositionStatus, ThesisCohort, ThesisOutcome, ThesisStatus
 from cents.pricing import estimate_cost_usd
@@ -48,6 +50,126 @@ def factory_init(force: bool):
     except FileExistsError as exc:
         exit_with_error(str(exc))
     click.echo(f"Wrote factory config to {path}")
+    # cents-5lj8: probe the configured default_universe so a stale/missing
+    # universe doesn't silently produce 0 candidates once cron starts running.
+    # Warnings only — operators set up cents in stages.
+    _validate_default_universe()
+
+
+def _validate_default_universe() -> None:
+    """Probe the configured default universe and emit WARNINGs on issues.
+
+    Checks (cents-5lj8):
+      1. The universe named in factory.toml resolves to a Universe row.
+      2. It has >=1 symbol after resolution.
+      3. A spot-check ticker resolves at FMP (cheap profile lookup,
+         absorbed by the cache on repeat calls).
+
+    Never raises — this is an init-time visibility aid, not a gate.
+    """
+    try:
+        cfg = load_factory_config()
+    except Exception as exc:  # pragma: no cover — defensive
+        click.echo(f"WARNING: could not load factory config to probe universe: {exc}")
+        return
+
+    universe_name = (cfg.universe or "").strip()
+    repo = UniverseRepository()
+
+    if universe_name.lower() == "default" or universe_name == "":
+        universe = repo.get_default()
+        display_name = "default"
+        not_found_remediation = (
+            "  - No universe is marked default. Create one and mark it default:\n"
+            "      cents universe create <name> --source ...\n"
+            "      cents universe set-default <name>"
+        )
+    else:
+        universe = repo.get(universe_name)
+        display_name = universe_name
+        not_found_remediation = (
+            f"  - Create one with: cents universe create {universe_name} --source ...\n"
+            f"  - Or edit {get_factory_config_path()} to point at an existing universe\n"
+            "  - Or set CENTS_FACTORY_CONFIG to point at a working config"
+        )
+
+    if universe is None:
+        click.echo(
+            f"WARNING: default_universe '{display_name}' is not registered in the cents DB."
+        )
+        click.echo(not_found_remediation)
+        return
+
+    try:
+        symbols = resolve_symbols(universe)
+    except Exception as exc:
+        click.echo(
+            f"WARNING: default_universe '{display_name}' failed to resolve symbols: {exc}"
+        )
+        click.echo(
+            "  - Check the universe's source_config (e.g. screener parent, FMP index key)\n"
+            f"  - Recreate it: cents universe create {display_name} --source ..."
+        )
+        return
+
+    if not symbols:
+        click.echo(
+            f"WARNING: default_universe '{display_name}' resolved to 0 symbols."
+        )
+        click.echo(
+            f"  - The universe exists but is empty. Recreate or extend it:\n"
+            f"      cents universe create {display_name} --source ..."
+        )
+        return
+
+    # FMP spot-check. Treat unconfigured key as a separate, softer warning
+    # (the operator may be doing offline setup; an FMP_INDEX universe would
+    # have already failed in resolve_symbols above with a clear error).
+    settings = get_settings()
+    if not settings.fmp_api_key:
+        click.echo(
+            f"NOTE: default_universe '{display_name}' has {len(symbols)} symbol(s); "
+            "skipped FMP spot-check (FMP_API_KEY not configured)."
+        )
+        click.echo(
+            "  - Set fmp_api_key in ~/.cents/config.toml (or FMP_API_KEY env var) "
+            "before scheduling cents factory run."
+        )
+        return
+
+    probe_symbol = symbols[0]
+    try:
+        from cents.data.fmp import FMPFundamentalsProvider
+
+        provider = FMPFundamentalsProvider()
+        profile = provider._fetch_json(
+            "profile", symbol=probe_symbol, use_cache=True, daily_key=True
+        )
+    except Exception as exc:
+        click.echo(
+            f"WARNING: default_universe '{display_name}' has {len(symbols)} symbol(s) "
+            f"but FMP probe of {probe_symbol} failed: {exc}"
+        )
+        click.echo(
+            "  - Verify FMP_API_KEY is valid and the network reaches financialmodelingprep.com"
+        )
+        return
+
+    if not profile:
+        click.echo(
+            f"WARNING: default_universe '{display_name}' has {len(symbols)} symbol(s) "
+            f"but FMP probe of {probe_symbol} returned no data."
+        )
+        click.echo(
+            "  - Verify the ticker is valid at FMP, or the FMP_API_KEY plan covers it\n"
+            "  - The universe may contain stale / delisted symbols"
+        )
+        return
+
+    click.echo(
+        f"Probed default_universe '{display_name}': {len(symbols)} symbol(s); "
+        f"FMP profile for {probe_symbol} OK."
+    )
 
 
 @factory.command("run")
