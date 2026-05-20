@@ -410,6 +410,73 @@ class TestMigrateSchema:
         conn.close()
 
 
+class TestHedgeBasisRoundTrip:
+    """cents-931f: hedge_basis must be readable on theses inserted via both
+    the SCHEMA-direct path (test fixtures) and the _migrate_schema path
+    (existing DBs gaining the column on upgrade)."""
+
+    def _insert_thesis(self, conn: sqlite3.Connection, tid: str, basis: str) -> None:
+        conn.execute(
+            "INSERT INTO theses (id, title, hedge_basis, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (tid, "T", basis, "2026-05-20", "2026-05-20"),
+        )
+        conn.commit()
+
+    def test_schema_direct_insert(self, tmp_path):
+        db_path = tmp_path / "schema-direct.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(SCHEMA)
+        conn.commit()
+
+        self._insert_thesis(conn, "t1", "beta")
+        self._insert_thesis(conn, "t2", "dollar_fallback")
+        self._insert_thesis(conn, "t3", "dollar")
+
+        rows = conn.execute(
+            "SELECT id, hedge_basis FROM theses ORDER BY id"
+        ).fetchall()
+        assert rows == [("t1", "beta"), ("t2", "dollar_fallback"), ("t3", "dollar")]
+        conn.close()
+
+    def test_migration_adds_hedge_basis(self, tmp_path):
+        db_path = tmp_path / "migrated.db"
+        conn = sqlite3.connect(db_path)
+        # Pre-cents-931f shape: theses table without hedge_basis.
+        conn.executescript("""
+            CREATE TABLE theses (
+                id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT,
+                symbol TEXT, business_quality TEXT, valuation TEXT, moat TEXT,
+                time_horizon TEXT, horizon_end TEXT, key_risks TEXT,
+                target_price REAL, stop_price REAL, outcome TEXT, closed_at TEXT,
+                cohort TEXT, hedge_symbol TEXT, paired_thesis_id TEXT
+            );
+            CREATE TABLE evidence (
+                id TEXT PRIMARY KEY, thesis_id TEXT, agent TEXT, type TEXT,
+                content TEXT, source TEXT, confidence REAL, metadata TEXT,
+                timestamp TEXT, dimension TEXT
+            );
+            CREATE TABLE watchlist (
+                id TEXT PRIMARY KEY, symbol TEXT UNIQUE, notes TEXT,
+                thesis_id TEXT, threshold REAL, alert_destination TEXT,
+                last_scanned TEXT, created_at TEXT
+            );
+        """)
+        conn.commit()
+
+        _migrate_schema(conn)
+
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(theses)")}
+        assert "hedge_basis" in cols
+
+        self._insert_thesis(conn, "t1", "dollar_fallback")
+        row = conn.execute(
+            "SELECT hedge_basis FROM theses WHERE id = 't1'"
+        ).fetchone()
+        assert row[0] == "dollar_fallback"
+        conn.close()
+
+
 class TestSchemaIntegrity:
     """Tests for overall schema integrity."""
 
