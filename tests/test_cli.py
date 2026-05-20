@@ -1158,3 +1158,42 @@ class TestCacheCLI:
         result = runner.invoke(cli, ["cache", "clear", "--yes"])
         assert result.exit_code == 0, result.output
         assert "Cleared 1 rows" in result.output
+
+
+class TestCalculateHitRate:
+    """Bug fix: hit-rate must skip neutral (delta=0) signals, not count them as misses."""
+
+    def test_skips_neutral_signals(self):
+        """delta=0 is 'no prediction' — excluded from both numerator and denominator."""
+        from cents.cli._shared import calculate_hit_rate
+        # 1 correct hit + 3 neutrals → hit-rate should be 100% (1/1), NOT 25% (1/4)
+        rate = calculate_hit_rate(
+            deltas=[5.0, 0.0, 0.0, 0.0],
+            returns=[0.1, 0.1, -0.1, 0.1],
+        )
+        assert rate == 1.0, f"Expected 1.0 (1 of 1 non-neutral signals hit), got {rate}"
+
+    def test_all_neutral_returns_none(self):
+        from cents.cli._shared import calculate_hit_rate
+        rate = calculate_hit_rate(
+            deltas=[0.0, 0.0, 0.0],
+            returns=[0.1, -0.1, 0.0],
+        )
+        assert rate is None
+
+    def test_mixed_hits_and_misses(self):
+        from cents.cli._shared import calculate_hit_rate
+        # 2 hits (+/+, -/-), 2 misses (+/-, -/+), 1 neutral
+        rate = calculate_hit_rate(
+            deltas=[5.0, -3.0, 4.0, -2.0, 0.0],
+            returns=[0.05, -0.02, -0.03, 0.01, 0.99],
+        )
+        assert rate == 0.5, f"Expected 0.5 (2/4 non-neutral signals hit), got {rate}"
+
+    def test_empty_inputs_return_none(self):
+        from cents.cli._shared import calculate_hit_rate
+        assert calculate_hit_rate([], []) is None
+
+    def test_length_mismatch_returns_none(self):
+        from cents.cli._shared import calculate_hit_rate
+        assert calculate_hit_rate([1.0, 2.0], [0.1]) is None

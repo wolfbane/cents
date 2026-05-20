@@ -314,9 +314,23 @@ def calculate_correlation(x: list[float], y: list[float]) -> float | None:
 
 
 def calculate_hit_rate(deltas: list[float], returns: list[float]) -> float | None:
-    """Calculate hit rate: % of times delta sign matches return sign."""
+    """Calculate hit rate: % of NON-NEUTRAL signals where delta sign matches return sign.
+
+    Neutral signals (delta == 0) are "no prediction" and excluded from BOTH the
+    numerator AND denominator. The previous implementation counted them in the
+    denominator only, which forced agents that emit delta=0 most of the time
+    (like ``insider``, which has no cluster activity in most monthly snapshots)
+    to score absurdly low hit rates (~1-2%) instead of reflecting their actual
+    accuracy when they DO have a view.
+
+    Returns None when no non-neutral signals exist.
+    """
     if not deltas or len(deltas) != len(returns):
         return None
 
-    hits = sum(1 for d, r in zip(deltas, returns) if (d > 0 and r > 0) or (d < 0 and r < 0))
-    return hits / len(deltas)
+    non_neutral = [(d, r) for d, r in zip(deltas, returns) if d != 0]
+    if not non_neutral:
+        return None
+
+    hits = sum(1 for d, r in non_neutral if (d > 0 and r > 0) or (d < 0 and r < 0))
+    return hits / len(non_neutral)
