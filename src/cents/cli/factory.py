@@ -242,6 +242,7 @@ class AnalyzeAxis(str, Enum):
     DISCOVERY = "discovery"
     REGIME = "regime"
     ORCHESTRATOR = "orchestrator"
+    PREMISE_TAGS_COUNT = "premise_tags_count"
 
 
 # Per-axis bucketing — extending the analyze surface = add a case here.
@@ -250,6 +251,9 @@ _AXIS_BUCKET = {
     AnalyzeAxis.DISCOVERY: lambda t: t.discovery_source or "unspecified",
     AnalyzeAxis.REGIME: lambda t: _regime_bucket(t.regime_snapshot),
     AnalyzeAxis.ORCHESTRATOR: lambda t: t.orchestrator_label or "unspecified",
+    # Stratify by recorded tag count (cents-2xd4). Lets the analyst verify
+    # the two arms have comparable tag-set distributions post-cap.
+    AnalyzeAxis.PREMISE_TAGS_COUNT: lambda t: str(getattr(t, "premise_tags_count", 0) or 0),
 }
 
 
@@ -260,7 +264,8 @@ _AXIS_BUCKET = {
     "by_axes",
     default="cohort",
     help=(
-        "Comma-separated grouping axes (cohort,discovery,regime,orchestrator). "
+        "Comma-separated grouping axes "
+        "(cohort,discovery,regime,orchestrator,premise_tags_count). "
         "Multiple axes produce a cross-tab. Default: cohort."
     ),
 )

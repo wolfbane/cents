@@ -169,7 +169,12 @@ class TestRandomOrchestratorEngineIntegration:
             if theses:
                 t = theses[0]
                 assert t.orchestrator_label == "random"
-                assert t.premise_tags == SECTOR_FALLBACK_TAGS["XLF"]
+                # cents-2xd4: sector fallback is capped at top-2 relevant tags
+                # so the random arm's tag-set size matches LLM's typical 1-3.
+                # Verify against the leading slice of the canonical list.
+                from cents.factory.premise import _SECTOR_FALLBACK_TAG_CAP
+                assert t.premise_tags == SECTOR_FALLBACK_TAGS["XLF"][:_SECTOR_FALLBACK_TAG_CAP]
+                assert t.premise_tags_count == len(t.premise_tags)
                 # Direction polarity must match the side the random arm took.
                 # Either all "positive" (long) or all "negative" (short).
                 assert t.premise_direction

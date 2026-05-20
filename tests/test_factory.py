@@ -255,32 +255,29 @@ class TestPremiseConcentration:
         assert run.theses_opened == 1
 
 
-    def test_random_arm_theses_dont_count_toward_cap(self, factory_db, monkeypatch):
-        """Random-arm theses carry sector-fallback tags (all 5 XLK tags per
-        open) and would otherwise saturate the per-tag cap after 2 sector-
-        mates, gating subsequent LLM-arm opens on the same sector. The cap
-        exists to throttle LLM-arm clustering; random-arm tags carry no
-        signal-driven clustering. They must not count.
+    def test_random_arm_theses_count_toward_cap(self, factory_db, monkeypatch):
+        """cents-2xd4: the random arm's sector fallback is now capped at
+        _SECTOR_FALLBACK_TAG_CAP tags, so its tag-set size is comparable to
+        the LLM arm's typical 1-3. With that asymmetry gone, the per-tag
+        concentration cap applies uniformly to BOTH arms — keeping the
+        matched-cadence promise (random arm can't pile unbounded on the
+        same regime variable while LLM hits the cap at 2).
         """
         trepo = ThesisRepository()
-        # Two RANDOM-arm theses with all 5 XLK fallback tags — would saturate
-        # the cap pre-fix.
+        # Two RANDOM-arm theses with overlapping post-cap tag — together
+        # they saturate the cap for the ai_capex+positive bucket.
         for sym in ("A", "B"):
             trepo.create(Thesis(
                 title=f"factory:{sym}",
                 symbol=sym,
                 tags=[TAG_FACTORY],
-                premise_tags=["ai_capex", "tariffs.china", "semis_policy",
-                              "antitrust", "export_controls"],
-                premise_direction={t: "positive" for t in
-                                   ["ai_capex", "tariffs.china", "semis_policy",
-                                    "antitrust", "export_controls"]},
+                premise_tags=["ai_capex", "tariffs.china"],
+                premise_direction={"ai_capex": "positive", "tariffs.china": "positive"},
                 orchestrator_label="random",
             ))
 
         _seed_universe(["C"])
-        # LLM-arm candidate C has a legit thesis-specific tag overlapping
-        # with the random arm's fallback tags.
+        # LLM-arm candidate C overlaps the random arm's ai_capex tag.
         monkeypatch.setattr(
             "cents.factory.engine.classify_premise_tags",
             lambda *a, **kw: (["ai_capex"], {"ai_capex": "positive"}),
@@ -297,8 +294,88 @@ class TestPremiseConcentration:
             price_provider=_price_provider({"C": 100.0}),
         )
         run = engine.run()
-        # C must open — pre-fix the random arm's 2 theses would have hit cap.
+        # C must NOT open — random-arm theses count toward the cap now.
+        assert run.theses_opened == 0
+
+    def test_premise_tags_count_recorded_on_open(self, factory_db, monkeypatch):
+        """cents-2xd4: every opened thesis carries the recorded tag count."""
+        _seed_universe(["AAPL"])
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **kw: (["ai_capex", "tariffs.china"],
+                              {"ai_capex": "positive", "tariffs.china": "positive"}),
+        )
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                max_per_premise_tag=10,
+            ),
+            orchestrator=_orchestrator({"AAPL": 6.0}),
+            price_provider=_price_provider({"AAPL": 100.0}),
+        )
+        run = engine.run()
         assert run.theses_opened == 1
+        thesis = ThesisRepository().list()[0]
+        assert thesis.premise_tags_count == 2
+        assert thesis.premise_tags_count == len(thesis.premise_tags)
+
+    def test_random_arm_concentration_cap_blocks_overflow(
+        self, factory_db, monkeypatch
+    ):
+        """cents-2xd4: open N random-arm theses sharing a tag and verify the
+        (cap+1)th is blocked by the per-tag concentration cap.
+
+        Pre-fix the random arm skipped the cap entirely. Now both arms are
+        gated, with the random arm's tag-set size capped at
+        _SECTOR_FALLBACK_TAG_CAP so the two arms have comparable counts.
+        """
+        from cents.agents.random_orchestrator import RandomOrchestrator
+
+        cap = 2
+        # Three random-arm candidates sharing a single tag — exactly the
+        # cohort-clustering scenario the cap exists to throttle.
+        _seed_universe(["A", "B", "C"])
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **kw: (["fed_policy"], {"fed_policy": "positive"}),
+        )
+        # Force every random call into the bullish entry-clearing region so
+        # all three are candidates; the cap (not the threshold) does the
+        # blocking work.
+        class _AlwaysBullish:
+            orchestrator_label = "random"
+            def research(self, symbol, thesis=None, as_of=None):
+                from cents.agents.base import AgentResult
+                return AgentResult(
+                    evidence=[],
+                    conviction_delta=20.0,
+                    summary=f"random control: {symbol} → delta=+20.00",
+                    dimension_scores={},
+                    aggregate=True,
+                )
+
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                max_per_premise_tag=cap,
+                budget_usd=100000.0,
+                target_positions=20,
+            ),
+            orchestrator=_AlwaysBullish(),
+            price_provider=_price_provider({"A": 100.0, "B": 100.0, "C": 100.0}),
+        )
+        run = engine.run()
+        # Exactly `cap` opens — the (cap+1)th must be blocked by the
+        # per-tag concentration cap, not by anything else.
+        assert run.theses_opened == cap
+        opened = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags]
+        assert len(opened) == cap
+        # Sanity: every opened thesis is labeled random + carries the tag.
+        for t in opened:
+            assert t.orchestrator_label == "random"
+            assert "fed_policy" in t.premise_tags
 
 
 class TestDirectionAwareOpening:

@@ -830,3 +830,33 @@ class TestMigrationPath:
 
         assert cols_pass_1 == cols_pass_2
         conn.close()
+
+    def test_premise_tags_count_added_to_both_schema_and_migration(self, tmp_path):
+        """cents-2xd4: premise_tags_count must land via SCHEMA (fresh installs)
+        AND via _migrate_schema (existing DBs) — the project convention.
+        """
+        import sqlite3
+        from cents.db.schema import SCHEMA, _migrate_schema
+
+        # Fresh install path: SCHEMA must already declare the column.
+        fresh_path = tmp_path / "fresh.db"
+        fresh = sqlite3.connect(fresh_path)
+        fresh.executescript(SCHEMA)
+        fresh.commit()
+        cols = {r[1] for r in fresh.execute("PRAGMA table_info(theses)")}
+        assert "premise_tags_count" in cols
+        fresh.close()
+
+        # Migration path: a legacy schema (without the column) gets the
+        # column added by _migrate_schema.
+        legacy_path = tmp_path / "legacy.db"
+        legacy = sqlite3.connect(legacy_path)
+        legacy.execute(
+            "CREATE TABLE theses (id TEXT PRIMARY KEY, "
+            "premise_tags TEXT DEFAULT '[]')"
+        )
+        legacy.commit()
+        _migrate_schema(legacy)
+        cols = {r[1] for r in legacy.execute("PRAGMA table_info(theses)")}
+        assert "premise_tags_count" in cols
+        legacy.close()

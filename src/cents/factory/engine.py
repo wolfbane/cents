@@ -847,22 +847,14 @@ class FactoryEngine:
                     side=side_hint,
                 )
             )
-            # Random-arm theses skip the premise-concentration cap. The cap
-            # exists to throttle clustering on the same regime-factor for the
-            # LLM arm, where premise_tags come from the orchestrator's actual
-            # summary (typically 1-3 thesis-specific tags). For the random
-            # arm, _sector_fallback_tags emits ALL ~5 sector tags per open
-            # because the summary is sparse ("random control: NVDA → delta=
-            # +17.34"), so the cap kicks in after 2 sector-mates and gates
-            # the random arm strictly tighter than the LLM arm — breaking
-            # the "matched-cadence" claim. Skipping the cap for random keeps
-            # the two arms' acceptance behaviour comparable. The cap is
-            # research-purity infrastructure for the LLM arm; the random
-            # arm has uniform-noise conviction by construction so per-tag
-            # over-concentration is a non-problem there.
-            apply_concentration_cap = (
-                cfg.max_per_premise_tag > 0 and orchestrator_label == "llm"
-            )
+            # Per-premise-tag concentration cap applies to BOTH arms. The
+            # random arm's sector fallback used to emit ~5 tags per open
+            # (vs LLM's typical 1-3), which would have made the same cap
+            # asymmetric. With _SECTOR_FALLBACK_TAG_CAP=2 in premise.py
+            # the two arms now carry comparable tag-set sizes, so the cap
+            # can be applied uniformly without breaking the matched-cadence
+            # promise. See cents-2xd4.
+            apply_concentration_cap = cfg.max_per_premise_tag > 0
             if apply_concentration_cap and self._exceeds_premise_concentration(
                 premise_tags, open_theses, cfg.max_per_premise_tag,
                 candidate_direction=premise_direction,
@@ -1203,19 +1195,17 @@ class FactoryEngine:
         has no recorded direction for a tag, it counts under the legacy
         ``(tag, "*")`` bucket so behavior is preserved for older rows.
 
-        Random-arm theses are excluded from the count. Their premise_tags come
-        from ``_sector_fallback_tags`` (all 5 sector tags per open) and would
-        otherwise saturate the cap after 2 sector-mates, gating subsequent
-        LLM-arm opens on the same sector. The cap exists to throttle LLM-arm
-        clustering on the same regime variable; random-arm sector tags carry
-        no signal-driven clustering by construction.
+        cents-2xd4: counts theses from BOTH arms now. Previously random-arm
+        theses were excluded because their sector fallback emitted ~5 tags
+        each and would saturate the cap immediately. The sector fallback is
+        now capped at _SECTOR_FALLBACK_TAG_CAP, so the two arms have
+        comparable tag counts and a uniform cap is the matched-cadence
+        choice.
         """
         if not candidate_tags:
             return False
         counts: dict[tuple[str, str], int] = {}
         for t in open_theses:
-            if getattr(t, "orchestrator_label", "llm") != "llm":
-                continue
             t_dir = t.premise_direction or {}
             for tag in t.premise_tags:
                 key = (tag, t_dir.get(tag, "*"))
@@ -1321,6 +1311,7 @@ class FactoryEngine:
             cohort=cohort,
             hedge_symbol=hedge_symbol,
             premise_tags=premise_tags or [],
+            premise_tags_count=len(premise_tags or []),
             premise_direction=premise_direction or {},
             regime_snapshot=regime_snapshot,
             discovery_source=discovery_source,
