@@ -1,0 +1,124 @@
+# sp100_static_v1 — hand-curated S&P 100 universe used by experiments/pilot_v1.yaml.
+#
+# Origin: FMP plan blocks the sp500 endpoint (bead cents-u8l). This list was
+# assembled by hand on 2026-05-19 from S&P 100 ($OEX) constituents. 102 symbols
+# total — the S&P 100 plus the GOOG/GOOGL dual-class pair and BRK.B (the
+# retail-accessible Berkshire share class; BRK.A trades over $700K/share).
+#
+# Reload into the active dataset:
+#   syms=$(awk -F',' '!/^#/ && $1 != "symbol" && $1 != "" {print $1}' \
+#            data/universes/sp100_static_v1.csv | paste -sd, -)
+#   cents universe create sp100_static_v1 --source static --symbols "$syms" \
+#     --description "Hand-curated 102 large US caps (cents-u8l). $(date +%F)"
+#   cents universe set-default sp100_static_v1
+#
+# Verify after reload (should print 102):
+#   cents universe show sp100_static_v1 | grep -E '^Symbols:'
+#
+# When editing, keep the file alphabetical and record the change in git.
+# Adding or removing symbols mid-experiment violates the pre-registered
+# universe (early-stop guard in experiments/pilot_v1.yaml).
+#
+symbol,company,notes
+AAPL,Apple Inc.,
+ABBV,AbbVie Inc.,
+ABT,Abbott Laboratories,
+ACN,Accenture plc,
+ADBE,Adobe Inc.,
+AIG,American International Group,
+AMD,Advanced Micro Devices,
+AMGN,Amgen Inc.,
+AMT,American Tower Corp,
+AMZN,Amazon.com Inc.,
+AVGO,Broadcom Inc.,
+AXP,American Express,
+BA,The Boeing Company,
+BAC,Bank of America,
+BK,Bank of New York Mellon,
+BKNG,Booking Holdings,
+BLK,BlackRock,
+BMY,Bristol-Myers Squibb,
+BRK.B,Berkshire Hathaway,Class B (non-voting); class A (BRK.A) trades >$700K/share and is not retail-accessible
+C,Citigroup,
+CAT,Caterpillar,
+CHTR,Charter Communications,
+CL,Colgate-Palmolive,
+CMCSA,Comcast,
+COF,Capital One Financial,
+COP,ConocoPhillips,
+COST,Costco Wholesale,
+CRM,Salesforce Inc.,
+CSCO,Cisco Systems,
+CVS,CVS Health,
+CVX,Chevron,
+DE,Deere & Company,
+DHR,Danaher Corp,
+DIS,The Walt Disney Company,
+DOW,Dow Inc.,
+DUK,Duke Energy,
+EMR,Emerson Electric,
+F,Ford Motor Company,
+FDX,FedEx,
+GD,General Dynamics,
+GE,GE Aerospace,(formerly General Electric — split 2024 into GE Aerospace + GE Vernova + GE HealthCare)
+GILD,Gilead Sciences,
+GM,General Motors,
+GOOG,Alphabet Class C,Non-voting class; sibling of GOOGL — both in universe = ~2x Alphabet exposure (deliberate; matches S&P 100 weighting)
+GOOGL,Alphabet Class A,Voting class; sibling of GOOG
+GS,Goldman Sachs,
+HD,The Home Depot,
+HON,Honeywell,
+IBM,International Business Machines,
+INTC,Intel,
+JNJ,Johnson & Johnson,
+JPM,JPMorgan Chase,
+KHC,Kraft Heinz,
+KO,The Coca-Cola Company,
+LIN,Linde plc,
+LLY,Eli Lilly,
+LMT,Lockheed Martin,
+LOW,Lowe's Companies,
+MA,Mastercard,
+MCD,McDonald's,
+MDLZ,Mondelez International,
+MDT,Medtronic,
+MET,MetLife,
+META,Meta Platforms,
+MMM,3M Company,
+MO,Altria Group,
+MRK,Merck & Co.,
+MS,Morgan Stanley,
+MSFT,Microsoft,
+NEE,NextEra Energy,
+NFLX,Netflix,
+NKE,Nike Inc.,
+NOW,ServiceNow,
+NVDA,NVIDIA,
+ORCL,Oracle,
+PEP,PepsiCo,
+PFE,Pfizer,
+PG,Procter & Gamble,
+PLD,Prologis,
+PM,Philip Morris International,
+PYPL,PayPal Holdings,
+QCOM,Qualcomm,
+RTX,RTX Corporation,(formerly Raytheon Technologies)
+SBUX,Starbucks,
+SCHW,Charles Schwab,
+SO,The Southern Company,
+SPG,Simon Property Group,
+T,AT&T,
+TGT,Target Corporation,
+TMO,Thermo Fisher Scientific,
+TMUS,T-Mobile US,
+TSLA,Tesla,
+TXN,Texas Instruments,
+UNH,UnitedHealth Group,
+UNP,Union Pacific,
+UPS,United Parcel Service,
+USB,U.S. Bancorp,
+V,Visa,
+VZ,Verizon Communications,
+WFC,Wells Fargo,
+WMT,Walmart,
+XOM,Exxon Mobil,
