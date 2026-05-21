@@ -46,7 +46,7 @@ minimum_calendar_days: 90
 stopping_rule: "later of 90 days AND N=400 per arm"
 
 # Operational notes (not engine-enforced):
-#   - cost cap: $15/day (set in factory.toml, NOT this file)
+#   - cost cap: $15/day (set in ~/.cents/config.toml, NOT this file)
 #   - secondary metrics reported: calibration_brier_score, mean_pnl_per_thesis,
 #     conviction_return_rank_corr
 #   - finalize verdict format (verdict.json):

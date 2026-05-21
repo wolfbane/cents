@@ -345,7 +345,7 @@ scheduled run:
 
 If you see frequent cost-cap aborts mid-pilot:
 
-- Raise the cap (the default $5/day is well above observed ~$0.20/run)
+- Raise the cap (a $10/day ceiling is well above observed ~$0.20/run)
 - Move to a tighter universe so per-run cost is bounded
 - Investigate why one run blew past expectations (`cents usage summary
   --by operation --since 1d` will show which agent spiked)
@@ -406,7 +406,7 @@ mkdir -p "$LOG_DIR"
 LLM_LOG="$LOG_DIR/factory-llm.log"
 RANDOM_LOG="$LOG_DIR/factory-random.log"
 
-cents factory run --max-cost-usd 5.00 > "$LLM_LOG" 2>&1 \
+cents factory run --max-cost-usd 10.00 > "$LLM_LOG" 2>&1 \
   || mail -s "[cents] LLM-arm run FAILED $(date)" you@example.com < "$LLM_LOG"
 
 cents factory run --orchestrator random \
@@ -415,7 +415,7 @@ cents factory run --orchestrator random \
 
 # Drift check at the end — emails on regression
 cents eval run --persist-history --gate \
-  --baseline-f1 0.85 --baseline-brier 0.18 --tolerance-pp 3 \
+  --baseline-f1 0.66 --baseline-brier 0.06 --tolerance-pp 3 \
   || mail -s "[cents] eval drift detected $(date)" you@example.com < /dev/null
 ```
 

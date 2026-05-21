@@ -20,9 +20,9 @@
 #   1. ~/.cents/factory.toml exists (run `cents factory init` if not)
 #   2. BOTH cost caps configured (daily floor + per-run insurance):
 #         a. ~/.cents/config.toml (NOT factory.toml — easy mistake):
-#              max_llm_spend_usd_per_day = 5.0
-#            OR export CENTS_MAX_LLM_SPEND_USD_PER_DAY=5.0 in the cron env.
-#         b. Pair every `cents factory run` with --max-cost-usd 5.0 in the
+#              max_llm_spend_usd_per_day = 10.0
+#            OR export CENTS_MAX_LLM_SPEND_USD_PER_DAY=10.0 in the cron env.
+#         b. Pair every `cents factory run` with --max-cost-usd 10.0 in the
 #            cron command itself. The two caps are independent layers.
 #   3. cohort_mode = "paired" (in factory.toml)
 #   4. sizing_mode = "equal_dollar" (in factory.toml)
@@ -72,7 +72,7 @@ minimum_calendar_days: 30
 stopping_rule: "later of 30 days AND N=200 per arm"
 
 # Operational notes (not engine-enforced):
-#   - cost cap: $5/day (set in ~/.cents/config.toml, NOT this file)
+#   - cost cap: $10/day (set in ~/.cents/config.toml, NOT this file)
 #   - secondary metrics reported: calibration_brier_score, mean_pnl_per_thesis
 #   - abort criteria: hit-rate gap < 0 at N=200, OR cost overrun >2x estimate
 
