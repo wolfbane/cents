@@ -1123,6 +1123,7 @@ class TestUsageHeadroom:
     def test_headroom_no_cap_configured(self, runner, mock_db, monkeypatch):
         """Reports 'no_cap_configured' when neither env nor settings supply a cap."""
         monkeypatch.delenv("CENTS_MAX_LLM_SPEND_USD_PER_DAY", raising=False)
+        monkeypatch.setenv("CENTS_CONFIG", "/nonexistent/config.toml")
         with runner.isolated_filesystem(temp_dir=mock_db):
             result = runner.invoke(cli, ["usage", "headroom", "--output", "json"])
             assert result.exit_code == 0
