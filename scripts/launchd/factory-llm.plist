@@ -6,7 +6,8 @@
   The LLM arm — runs the real 7-agent multi-agent stack. Stamps
   orchestrator_label = "llm" on every thesis opened.
 
-  Schedule: 06:30 ET, Mon-Fri (after event-refresh at 06:00).
+  Schedule: 06:30 ET = 03:30 PT, Mon-Fri (after event-refresh at 03:00 PT;
+  mini's system TZ is PT — see CLAUDE.md DST notes).
 
   --max-cost-usd 10 matches the experiment spec's per-run cap. Keep this
   in sync with experiments/<active>.yaml pre-flight item #2.
@@ -28,11 +29,11 @@
 
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
   </array>
 
   <key>RunAtLoad</key>

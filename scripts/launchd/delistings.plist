@@ -7,7 +7,8 @@
   point-in-time universe reconstruction (and survivorship-bias-aware
   backtests) have fresh data. Cheap, idempotent.
 
-  Schedule: 04:00 ET, Sundays.
+  Schedule: 04:00 ET = 01:00 PT, Sundays (mini's system TZ is PT;
+  see CLAUDE.md DST notes — 01:00 PT can occur twice on fall-back Sunday).
 -->
 <plist version="1.0">
 <dict>
@@ -26,7 +27,7 @@
   <key>StartCalendarInterval</key>
   <dict>
     <key>Weekday</key><integer>0</integer>
-    <key>Hour</key><integer>4</integer>
+    <key>Hour</key><integer>1</integer>
     <key>Minute</key><integer>0</integer>
   </dict>
 

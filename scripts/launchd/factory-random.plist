@@ -8,7 +8,8 @@
   random-arm cadence MUST match the LLM arm (same universe, same gates,
   same per-day shuffle); the only difference is conviction generation.
 
-  Schedule: 06:35 ET, Mon-Fri (5 min after factory-llm).
+  Schedule: 06:35 ET = 03:35 PT, Mon-Fri (5 min after factory-llm;
+  mini's system TZ is PT — see CLAUDE.md DST notes).
 
   __DATE_SECONDS__ is a sentinel the wrapper replaces with $(date +%s) at
   exec time. Fresh seed per day = fresh universe shuffle per day,
@@ -37,11 +38,11 @@
 
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>35</integer></dict>
   </array>
 
   <key>RunAtLoad</key>
