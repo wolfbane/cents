@@ -101,16 +101,24 @@ def _print_list(experiments) -> None:
 
 
 @experiment.command("status")
+@click.argument("name_arg", required=False, metavar="[NAME]")
 @click.option("--name", help="Experiment name (defaults to the active one)")
 @click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
-def experiment_status(name: str | None, output: str | None):
-    """Show progress of an active experiment against its targets."""
+def experiment_status(name_arg: str | None, name: str | None, output: str | None):
+    """Show progress of an active experiment against its targets.
+
+    NAME may be passed positionally OR via --name; both forms are
+    equivalent. Defaults to the active experiment when omitted.
+    """
     output = resolve_output_format(output)
+    if name and name_arg and name != name_arg:
+        exit_with_error("Pass experiment name as positional arg OR --name, not both")
+    resolved_name = name or name_arg
     repo = ExperimentRepository()
-    if name:
-        exp = repo.get_by_name(name)
+    if resolved_name:
+        exp = repo.get_by_name(resolved_name)
         if exp is None:
-            exit_with_error(f"No experiment named {name!r}")
+            exit_with_error(f"No experiment named {resolved_name!r}")
     else:
         exp = get_active_experiment(repo=repo)
         if exp is None:

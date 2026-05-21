@@ -231,6 +231,37 @@ class TestCLI:
         assert r.exit_code != 0
         assert "already active" in r.output
 
+    def test_status_positional_name_equivalent_to_flag(self, db_conn, tmp_path: Path, monkeypatch):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+        spec = tmp_path / "exp.yaml"
+        spec.write_text(_yaml_spec("pos-test"))
+        runner = CliRunner()
+        runner.invoke(cli, ["experiment", "register", str(spec)])
+
+        r_positional = runner.invoke(cli, ["experiment", "status", "pos-test", "--output", "json"])
+        r_flag = runner.invoke(cli, ["experiment", "status", "--name", "pos-test", "--output", "json"])
+        assert r_positional.exit_code == 0
+        assert r_flag.exit_code == 0
+        assert json.loads(r_positional.output)["name"] == "pos-test"
+        assert json.loads(r_positional.output) == json.loads(r_flag.output)
+
+    def test_status_positional_and_flag_conflict_errors(self, db_conn, tmp_path: Path, monkeypatch):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "factory.toml"))
+        spec = tmp_path / "exp.yaml"
+        spec.write_text(_yaml_spec("conflict-test"))
+        runner = CliRunner()
+        runner.invoke(cli, ["experiment", "register", str(spec)])
+
+        r = runner.invoke(cli, [
+            "experiment", "status", "conflict-test", "--name", "something-else",
+        ])
+        assert r.exit_code != 0
+        assert "positional arg OR --name" in r.output
+
 
 class TestEngineIntegration:
     def test_engine_stamps_experiment_id_on_opened_theses(self, db_conn, tmp_path: Path, monkeypatch):
