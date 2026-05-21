@@ -63,6 +63,46 @@ You should see `✓ FMP`, `✓ Alpaca`, `✓ Anthropic`, `✓ NewsAPI`, `✓ FRE
 The output also prints the active dataset path — useful for confirming step
 4.
 
+### 2b. (Optional) If you bulk-copied `~/.cents/` from a development machine
+
+A development laptop's `~/.cents/` tree picks up scratch state the pilot
+host doesn't want. If the whole folder came over (not just `config.toml`
++ `factory.toml`), clean it up before continuing.
+
+**The laptop's `test.db` is the most valuable thing in the copy.** It
+typically has user-research tables already cleared but external-ingested
+tables (`events`, `api_cache`, `delistings`, `universes`) preserved.
+Renaming it to the pilot's dataset saves hours of re-ingestion on day
+one. Confirm with `sqlite3 ~/.cents/data/test.db "SELECT
+(SELECT COUNT(*) FROM theses), (SELECT COUNT(*) FROM events),
+(SELECT COUNT(*) FROM universes);"` — you want theses=0,
+events>>0, universes>0.
+
+```bash
+# Repurpose the laptop's pre-cleaned DB as the pilot dataset.
+mv ~/.cents/data/test.db ~/.cents/data/pilot_v1.db
+
+# Drop laptop-specific scratch.
+rm -f  ~/.cents/data/*.bak-*               # session backups
+rm -f  ~/.cents/data/marc.db               # other laptop portfolios
+rm -f  ~/.cents/data/cents.db              # default portfolio, usually empty stub
+rm -rf ~/.cents/data/eval_history          # mini accumulates its own from t=0
+rm -rf ~/.cents/data/llm_calls             # laptop's provenance blobs aren't pilot-relevant
+
+# Reset the dataset selector — laptop's active="test" doesn't translate.
+rm ~/.cents/datasets.toml
+cents portfolio add pilot_v1 ~/.cents/data/pilot_v1.db
+cents portfolio use pilot_v1
+
+# Sanity check: the renamed DB still has its preserved external data.
+cents factory status   # expect 0 open theses, schema intact
+cents universe list    # expect sp100_static_v1 + any other laptop-side universes
+```
+
+If the bulk copy didn't include a pre-cleaned `test.db` (or if you'd
+rather start truly fresh), skip the rename and fall through to step 4
+for a green-field dataset.
+
 ### 3. Factory config
 
 If `~/.cents/factory.toml` doesn't exist on the mini:
