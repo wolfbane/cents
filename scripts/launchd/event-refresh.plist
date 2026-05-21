@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.dollars-and-cents.event-refresh
+  Pulls Federal Register events daily before the factory tick so that
+  PREMISE_INVALIDATION alerts have fresh inputs.
+
+  Schedule: 06:00 ET, Mon-Fri.
+
+  Deploy: sed -i '' "s|\$HOME|$HOME|g" then move to ~/Library/LaunchAgents/.
+  See OPERATIONS.md.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.event-refresh</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.cents/bin/cents-wrap</string>
+    <string>event-refresh</string>
+    <string>event</string>
+    <string>refresh</string>
+  </array>
+
+  <!-- 06:00 ET weekdays. launchd has no TZ key; the wrapper sets TZ=America/New_York. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/.cents/logs/launchd-event-refresh.out</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.cents/logs/launchd-event-refresh.err</string>
+</dict>
+</plist>

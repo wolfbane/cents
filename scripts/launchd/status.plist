@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.dollars-and-cents.status
+  Daily experiment-status snapshot. Persists today's progress (N per arm,
+  calendar days elapsed) as a JSON log for trend-watching. Cheap; useful
+  for spotting when the cron tick has actually stopped firing.
+
+  Schedule: 18:00 ET, Mon-Fri.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.status</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.cents/bin/cents-wrap</string>
+    <string>status</string>
+    <string>experiment</string>
+    <string>status</string>
+    <string>--output</string>
+    <string>json</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/.cents/logs/launchd-status.out</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.cents/logs/launchd-status.err</string>
+</dict>
+</plist>

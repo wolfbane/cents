@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.dollars-and-cents.factory-random
+  The control arm — uniform conviction in [-30, +30], no LLM calls.
+  Stamps orchestrator_label = "random" on every thesis opened. The
+  random-arm cadence MUST match the LLM arm (same universe, same gates,
+  same per-day shuffle); the only difference is conviction generation.
+
+  Schedule: 06:35 ET, Mon-Fri (5 min after factory-llm).
+
+  __DATE_SECONDS__ is a sentinel the wrapper replaces with $(date +%s) at
+  exec time. Fresh seed per day = fresh universe shuffle per day,
+  matching the LLM arm's Random(run_id) shuffle. DO NOT replace with a
+  fixed seed — that would make the random arm see the same symbol order
+  every day, which is a subtle but real non-match between arms.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.factory-random</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.cents/bin/cents-wrap</string>
+    <string>factory-random</string>
+    <string>factory</string>
+    <string>run</string>
+    <string>--orchestrator</string>
+    <string>random</string>
+    <string>--orchestrator-seed</string>
+    <string>__DATE_SECONDS__</string>
+    <string>--max-cost-usd</string>
+    <string>10</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/.cents/logs/launchd-factory-random.out</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.cents/logs/launchd-factory-random.err</string>
+</dict>
+</plist>

@@ -63,6 +63,25 @@ Use `--output json` for machine-readable output. Run `cents --help` or `cents <c
 
 For running the factory + event refresh + shadow backfill on a daily cadence (cron / launchd recipes, cost-cap discipline, editable-install drift), see the [Scheduling page](https://dollars-and-cents.ai/scheduling/) — the docs surface for the 90-day forward test.
 
+## Deployment topology
+
+Pilots and registered experiments run on a **dedicated Mac mini** (macOS 26,
+always plugged in), not on the development laptop. The mini owns the
+single source of truth for the pilot's labeled outcomes dataset; the
+laptop is used for code edits, worktrees, ad-hoc CLI invocations against a
+scratch portfolio, and eval baseline locking. Solo developer, same
+`~/.cents/config.toml` (same API keys) on both machines.
+
+**The laptop must never run `cents factory run` against a registered
+experiment.** Two machines ticking the same experiment_id produces two
+disjoint cohorts that merge silently into hit-rate analytics — unrecoverable
+contamination. Use `cents portfolio` to swap to a scratch dataset on the
+laptop before any ad-hoc factory experimentation.
+
+`OPERATIONS.md` covers first-time mini setup, the launchd recipe, daily
+cadence, health checks, and failure-mode recovery. Read it before standing
+up a new pilot machine or diagnosing a missed scheduled run.
+
 ## Build & Test
 
 ```bash
@@ -74,7 +93,7 @@ pytest -k "premise"           # By keyword
 pytest --lf                   # Re-run last failures
 ```
 
-A reinstall (`pip install -e .`) is required after switching the working tree between a worktree-built feature and the main checkout, otherwise `cents` may dispatch to stale installed code.
+A reinstall (`pip install -e .`) is required after switching the working tree between a worktree-built feature and the main checkout, otherwise `cents` may dispatch to stale installed code (symptom + diagnosis below in "things that aren't obvious").
 
 ## High-level architecture
 
@@ -165,6 +184,12 @@ Transversal: cents/finance/ — UTILITIES, not gates
 - **`factory analyze --include-cost-per-outcome`** is opt-in. Adds `llm_cost_per_opened` / `llm_cost_per_judged` / `llm_cost_per_correct` to every cohort cell plus `llm_cost_total_usd`. Unattributable LLM calls (no `thesis_id` and no `symbol`-within-window match) accumulate at the top level as `unattributable_cost_usd`. Attribution rule: `llm_usage.context` matches `thesis.id` directly, OR matches `thesis.symbol` AND `called_at` falls within `thesis.created_at..closed_at`. Random-arm cells naturally pick up $0.
 - **`factory analyze --by orchestrator`** stratifies by `orchestrator_label` (`llm` vs `random`). Combine with `--by cohort,orchestrator` for the 2×2 win-rate table the experiment's primary metric reads against.
 - **Eval harness has a CI gate and a drift detector.** `cents eval run --gate --baseline-f1 N --baseline-brier N --tolerance-pp N` exits 2 on regression (distinct from skipped=1). `--persist-baseline` writes/updates `baseline.json` (locked_at defaults to null so a fresh install never fails a build). `cents eval run --persist-history` appends today's metrics to `~/.cents/data/eval_history/YYYY-MM-DD.jsonl`; `cents eval drift-check` reads the trailing 7 days and fires `AlertType.MODEL_DRIFT` if F1 falls >5pp below the trailing-7 median. Bootstrap CIs (1000 samples, seed=17) come for free in both text and JSON output.
+
+- **PREMISE_INVALIDATION is structurally one-sided between arms.** Only LLM-arm theses go through `classify_premise_tags`; the random-arm orchestrator skips it and leaves `premise_tags = []`. Empty `premise_tags` can never intersect with an event's tags, so **random-arm theses are structurally immune to PREMISE_INVALIDATION**. The corollary: premise classifier noise cuts only against the LLM arm. False-positive tags → spurious invalidations → smaller LLM-arm N. False negatives → missed invalidations that should have fired. Net effect: a head wind on the LLM arm that makes a positive hit-rate delta vs. random *more* defensible, not less. Worth tracking LLM-arm INVALIDATED rate as a sanity check during pilots — a climb above ~20% of opens suggests the classifier's false-positive rate is materially shrinking cohort N. Current locked baseline (`src/cents/eval/baseline.json`) is premise F1 = 0.66 — both over- and under-predicts tags in roughly equal measure.
+- **Model selection is a code change, not a config change.** Every Anthropic call (sentiment, event, premise classifier, eval harness) routes through a single constant in `cents/llm_models.py` (`HAIKU_TAGGING = "claude-haiku-4-5-20251001"`). There is no env var or config switch — swapping models for a new experiment means editing the constant and re-registering with a fresh factory.toml SHA. Deliberate: the per-call provenance hash chain (`prompt_sha256` / `input_sha256` / `output_sha256`) is meaningful only because the model is held constant across all evidence rows in an experiment. Mixing models silently breaks that audit.
+- **Eval `baseline.json` travels with the git clone; `eval_history/*.jsonl` is per-machine user state.** `src/cents/eval/baseline.json` is a packaged (git-tracked) file — the locked F1 + Brier reference for the drift gate. A fresh clone on a new machine gets the baseline for free, which is what makes the laptop→Mac-mini handoff clean. `~/.cents/data/eval_history/YYYY-MM-DD.jsonl` is user state per machine — `cents eval drift-check` reads this trailing-7-day local history. Drift detection therefore needs ≥3 days of accumulated history on the *target* machine before it has anything to compare against; seed it with `cents eval run --persist-history` on first deploy.
+- **The `cents` CLI doesn't read from a fixed DB path.** `~/.cents/datasets.toml` has an `active` field selecting which entry from the `[datasets]` map the CLI uses; managed via `cents portfolio {list,add,use,current}`. The active path is also printed by `cents status` — always copy-paste from there for ad-hoc sqlite work, because raw `sqlite3 ~/.cents/data/cents.db "..."` will silently hit the wrong DB if the active dataset points elsewhere (e.g. `test.db`, `marc.db`). The fresh-install default is `active = "default"` → `~/.cents/data/cents.db`; named portfolios are opt-in.
+- **`pip install -e .` stale-worktree drift, symptom + diagnosis.** Symptom is `ModuleNotFoundError: No module named 'cents.cli'` even though `cents --version` worked earlier in the session. Cause: `pip show cents` shows an `Editable project location` that no longer exists on disk (typically a removed worktree). Cure: `pip install -e .` from the canonical checkout. The diagnostic: `pip show cents | grep "Editable project location"` should match the directory you actually want.
 
 ### Repository + persistence
 

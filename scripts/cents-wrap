@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Wrapper for cron / launchd dispatch.
+#
+# Purpose: give scheduled jobs a single entry point that fixes timezone,
+# resolves the cents binary explicitly (no PATH lookup), substitutes a few
+# deploy-time-dynamic args, and tees output to a per-day log directory.
+#
+# Deployed to ~/.cents/bin/cents-wrap on the Mac mini (see OPERATIONS.md).
+# Edit CENTS_BIN below to match the venv location on the target machine.
+#
+# Usage:
+#   cents-wrap <job-name> <cents arg> [<cents arg>...]
+#
+# Sentinel substitution (any arg that exactly matches a sentinel is replaced):
+#   __DATE_SECONDS__   →  $(date +%s)        per-day reproducible seed
+#   __DATE_ISO__       →  $(date +%Y-%m-%d)  today's date
+#
+# Example plist ProgramArguments for the random arm:
+#   <string>$HOME/.cents/bin/cents-wrap</string>
+#   <string>factory-random</string>
+#   <string>factory</string>
+#   <string>run</string>
+#   <string>--orchestrator</string>
+#   <string>random</string>
+#   <string>--orchestrator-seed</string>
+#   <string>__DATE_SECONDS__</string>
+#   <string>--max-cost-usd</string>
+#   <string>10</string>
+
+set -euo pipefail
+
+# Anchor schedules to US market hours regardless of machine timezone.
+export TZ="America/New_York"
+
+# Resolve cents explicitly. Adjust to wherever your editable install lives.
+CENTS_BIN="${CENTS_BIN:-$HOME/.venvs/cents/bin/cents}"
+
+if [[ ! -x "$CENTS_BIN" ]]; then
+    echo "[cents-wrap] ERROR: $CENTS_BIN is not executable" >&2
+    echo "[cents-wrap] Edit CENTS_BIN in this script (or export CENTS_BIN env var)" >&2
+    exit 127
+fi
+
+# Per-day log directory under $HOME/.cents/logs/YYYY-MM-DD/.
+LOG_DIR="$HOME/.cents/logs/$(date +%Y-%m-%d)"
+mkdir -p "$LOG_DIR"
+
+CMD_NAME="${1:?cents-wrap: first arg must be a job name}"; shift
+
+# Sentinel substitution — plists can't run shell expansion, so we do it here.
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        __DATE_SECONDS__) ARGS+=("$(date +%s)") ;;
+        __DATE_ISO__)     ARGS+=("$(date +%Y-%m-%d)") ;;
+        *)                ARGS+=("$arg") ;;
+    esac
+done
+
+LOG_FILE="$LOG_DIR/${CMD_NAME}.log"
+
+{
+    echo "[cents-wrap] $(date -Iseconds) start $CMD_NAME"
+    echo "[cents-wrap] cmd: $CENTS_BIN ${ARGS[*]}"
+} >>"$LOG_FILE"
+
+# Exec cents — output appended to the per-day log. Exit code propagates to launchd.
+"$CENTS_BIN" "${ARGS[@]}" >>"$LOG_FILE" 2>&1
+EXIT=$?
+
+echo "[cents-wrap] $(date -Iseconds) end $CMD_NAME exit=$EXIT" >>"$LOG_FILE"
+exit "$EXIT"

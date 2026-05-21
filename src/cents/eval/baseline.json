@@ -1,7 +1,7 @@
 {
-  "premise_f1": 0.0,
-  "sentiment_brier": 1.0,
-  "locked_at": null,
-  "model_snapshot": null,
-  "note": "Run `cents eval run --persist-baseline` to lock in current metrics. Until locked, the CI gate is permissive."
+  "premise_f1": 0.6599645180366647,
+  "sentiment_brier": 0.05828289473684211,
+  "locked_at": "2026-05-20T16:04:15",
+  "model_snapshot": "claude-haiku-4-5-20251001",
+  "note": "Locked baseline. The CI gate now compares incoming metrics to these values. Re-run `cents eval run --persist-baseline` to re-lock after an intentional model bump."
 }

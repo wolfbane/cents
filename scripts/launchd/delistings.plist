@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.dollars-and-cents.delistings
+  Weekly delistings refresh — keeps the delistings table current so
+  point-in-time universe reconstruction (and survivorship-bias-aware
+  backtests) have fresh data. Cheap, idempotent.
+
+  Schedule: 04:00 ET, Sundays.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.delistings</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.cents/bin/cents-wrap</string>
+    <string>delistings</string>
+    <string>universe</string>
+    <string>ingest-delistings</string>
+  </array>
+
+  <!-- Weekday 0 = Sunday in launchd. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key><integer>0</integer>
+    <key>Hour</key><integer>4</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/.cents/logs/launchd-delistings.out</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.cents/logs/launchd-delistings.err</string>
+</dict>
+</plist>

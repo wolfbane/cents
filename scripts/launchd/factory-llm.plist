@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.dollars-and-cents.factory-llm
+  The LLM arm — runs the real 7-agent multi-agent stack. Stamps
+  orchestrator_label = "llm" on every thesis opened.
+
+  Schedule: 06:30 ET, Mon-Fri (after event-refresh at 06:00).
+
+  --max-cost-usd 10 matches the experiment spec's per-run cap. Keep this
+  in sync with experiments/<active>.yaml pre-flight item #2.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.factory-llm</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.cents/bin/cents-wrap</string>
+    <string>factory-llm</string>
+    <string>factory</string>
+    <string>run</string>
+    <string>--max-cost-usd</string>
+    <string>10</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/.cents/logs/launchd-factory-llm.out</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.cents/logs/launchd-factory-llm.err</string>
+</dict>
+</plist>

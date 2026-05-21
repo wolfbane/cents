@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.dollars-and-cents.eval-run
+  Daily eval against the golden fixture sets. Appends today's F1 + Brier
+  to ~/.cents/data/eval_history/YYYY-MM-DD.jsonl so the drift detector
+  has data to compare against.
+
+  Does NOT pass --persist-baseline — that's a deliberate one-shot
+  operation done at experiment registration time on the dev laptop, not
+  on every daily tick.
+
+  Schedule: 18:30 ET, Mon-Fri. Drift check (eval-drift.plist) runs 5
+  minutes later against today's row.
+
+  Cost: ~$0.20-1.50 per run on Haiku (302 premise + 380 sentiment
+  fixtures). Counts against the daily LLM cap.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.eval-run</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.cents/bin/cents-wrap</string>
+    <string>eval-run</string>
+    <string>eval</string>
+    <string>run</string>
+    <string>--persist-history</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/.cents/logs/launchd-eval-run.out</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.cents/logs/launchd-eval-run.err</string>
+</dict>
+</plist>
