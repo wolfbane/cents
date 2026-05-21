@@ -61,11 +61,14 @@ LOG_FILE="$LOG_DIR/${CMD_NAME}.log"
 
 {
     echo "[cents-wrap] $(date -Iseconds) start $CMD_NAME"
-    echo "[cents-wrap] cmd: $CENTS_BIN ${ARGS[*]}"
+    echo "[cents-wrap] cmd: $CENTS_BIN ${ARGS[*]:-}"
 } >>"$LOG_FILE"
 
 # Exec cents — output appended to the per-day log. Exit code propagates to launchd.
-"$CENTS_BIN" "${ARGS[@]}" >>"$LOG_FILE" 2>&1
+# ${ARGS[@]+"${ARGS[@]}"} is the bash-3.2-safe form for an empty array under
+# `set -u`. macOS ships bash 3.2 as /bin/bash; plain "${ARGS[@]}" errors with
+# 'unbound variable' when no cents args are passed.
+"$CENTS_BIN" ${ARGS[@]+"${ARGS[@]}"} >>"$LOG_FILE" 2>&1
 EXIT=$?
 
 echo "[cents-wrap] $(date -Iseconds) end $CMD_NAME exit=$EXIT" >>"$LOG_FILE"
