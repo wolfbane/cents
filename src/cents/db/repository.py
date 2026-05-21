@@ -549,12 +549,24 @@ class AlertRepository(BaseRepository):
         """Create a new alert."""
         return self._insert(self._META, alert)
 
-    def list_unread(self) -> list[Alert]:
+    def list_unread(self, since: datetime | None = None) -> list[Alert]:
         """List unread alerts."""
-        return self._list(self._META, where="read = 0")
+        where = "read = 0"
+        params: tuple[Any, ...] = ()
+        if since is not None:
+            where += " AND created_at >= ?"
+            params = (_isoformat(since),)
+        return self._list(self._META, where=where, params=params)
 
-    def list_all(self, limit: int = 50) -> list[Alert]:
+    def list_all(self, limit: int = 50, since: datetime | None = None) -> list[Alert]:
         """List all alerts."""
+        if since is not None:
+            return self._list(
+                self._META,
+                where="created_at >= ?",
+                params=(_isoformat(since),),
+                limit=limit,
+            )
         return self._list(self._META, limit=limit)
 
     def find_invalidation_for(

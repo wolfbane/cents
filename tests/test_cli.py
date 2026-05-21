@@ -420,6 +420,99 @@ class TestAlertCLIExtended:
             assert result.exit_code == 0
             assert "Marked" in result.output
 
+    def _seed_alerts(self, db_path):
+        from datetime import datetime, timedelta
+        from cents.db import AlertRepository
+        from cents.models import Alert, AlertType
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        repo = AlertRepository(conn)
+        now = datetime.now()
+        old = Alert(
+            symbol="OLD",
+            alert_type=AlertType.CONVICTION_CHANGE,
+            message="old alert",
+            created_at=now - timedelta(days=10),
+        )
+        recent = Alert(
+            symbol="NEW",
+            alert_type=AlertType.CONVICTION_CHANGE,
+            message="recent alert",
+            created_at=now - timedelta(minutes=5),
+        )
+        repo.create(old)
+        repo.create(recent)
+        conn.close()
+
+    def test_alert_list_since_today(self, runner, mock_db):
+        """--since today shows only alerts from today."""
+        db_path = os.environ["CENTS_DB_PATH"]
+        self._seed_alerts(db_path)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "list", "--since", "today"])
+            assert result.exit_code == 0
+            assert "NEW" in result.output
+            assert "OLD" not in result.output
+
+    def test_alert_list_since_iso_date(self, runner, mock_db):
+        """--since accepts ISO date."""
+        from datetime import datetime, timedelta
+
+        db_path = os.environ["CENTS_DB_PATH"]
+        self._seed_alerts(db_path)
+        yesterday = (datetime.now() - timedelta(days=1)).date().isoformat()
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "list", "--since", yesterday])
+            assert result.exit_code == 0
+            assert "NEW" in result.output
+            assert "OLD" not in result.output
+
+    def test_alert_list_since_relative_hours(self, runner, mock_db):
+        """--since Nh accepts relative hours."""
+        db_path = os.environ["CENTS_DB_PATH"]
+        self._seed_alerts(db_path)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "list", "--since", "24h"])
+            assert result.exit_code == 0
+            assert "NEW" in result.output
+            assert "OLD" not in result.output
+
+    def test_alert_list_since_relative_days(self, runner, mock_db):
+        """--since Nd accepts relative days; 30d window includes 10-day-old alert."""
+        db_path = os.environ["CENTS_DB_PATH"]
+        self._seed_alerts(db_path)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "list", "--since", "30d"])
+            assert result.exit_code == 0
+            assert "NEW" in result.output
+            assert "OLD" in result.output
+
+    def test_alert_list_since_invalid(self, runner, mock_db):
+        """--since with invalid value exits non-zero with clear error."""
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "list", "--since", "yesterday"])
+            assert result.exit_code != 0
+            assert "yesterday" in result.output or "yesterday" in (result.stderr or "")
+
+    def test_alert_list_since_composes_with_all(self, runner, mock_db):
+        """--all --since composes: shows read+unread within window."""
+        from cents.db import AlertRepository
+
+        db_path = os.environ["CENTS_DB_PATH"]
+        self._seed_alerts(db_path)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        repo = AlertRepository(conn)
+        for a in repo.list_unread():
+            repo.mark_read(a.id)
+        conn.close()
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "list", "--all", "--since", "today"])
+            assert result.exit_code == 0
+            assert "NEW" in result.output
+            assert "OLD" not in result.output
+
 
 class TestResearchCLI:
     """Tests for research command."""
