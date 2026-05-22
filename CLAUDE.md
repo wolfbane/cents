@@ -14,7 +14,7 @@ cents thesis twin <id> --hedge-with SOXX        # paired-neutral twin of an exis
 cents position open NVDA --size 100 --price 135 --thesis <id>
 cents watch add NVDA --thesis <id>
 cents scan
-cents alert list
+cents alert list --since today              # also accepts ISO date or Nh/Nd
 
 # Regime-aware substrate
 cents event refresh                              # pull Federal Register events, fire PREMISE_INVALIDATION alerts
@@ -31,12 +31,12 @@ cents factory run --orchestrator random        # control arm (uniform conviction
 cents factory run --orchestrator random --orchestrator-seed 42   # reproducible control arm
 cents factory run --max-cost-usd 5.00          # abort if cumulative LLM spend would exceed this
 cents factory status
-cents factory analyze --by discovery,cohort,regime
+cents factory analyze --by discovery,cohort,regime,orchestrator,hedge_basis
 
 # Pre-registered experiments (makes the pipeline falsifiable)
 cents experiment register <spec.yaml>   # freezes factory.toml SHA; stamps every opened thesis
 cents experiment list
-cents experiment status                 # progress against minimum_n_per_arm
+cents experiment status pilot_v1        # progress against minimum_n_per_arm (NAME also accepts --name)
 cents experiment finalize <name> --verdict verdict.json
 
 # Cost tracking + reproducibility
@@ -160,13 +160,16 @@ Transversal: cents/finance/ — UTILITIES, not gates
 - **`classify_premise_tags` returns a 2-tuple `(tags, direction)`** — `direction` is `{tag: "positive"|"negative"}`. The factory engine uses `_coerce_premise_classification` to accept legacy bare-list stubs from older tests.
 - **A neutral-cohort thesis owns BOTH legs** as two `Position` rows on the same `thesis_id` (one LONG on `symbol`, one SHORT on `hedge_symbol`). It is NOT two linked theses. Closing the thesis closes both legs naturally.
 - **The hedge leg is dollar-matched by default.** `beta_match_hedge=false` in the scaffolded TOML and the FactoryConfig default. When opted in, `cents/finance/hedging.py:estimate_beta` does 60-day OLS of log returns vs the hedge ETF, clamps to `[beta_min, beta_max]` (default `[0.10, 5.0]`), and refuses estimation when R² is below `beta_min_r_squared` (default 0.5) — in which case the engine **skips the hedge leg** rather than silently falling back to dollar-match.
+- **`Thesis.hedge_basis` records how the neutral leg was sized.** `HedgeBasis.BETA` (genuine beta-matched), `DOLLAR_FALLBACK` (beta_match_hedge=true but estimation degraded — e.g. low R² or clamp hit), or `DOLLAR` (equal-dollar by config). Directional theses are `None` and bucket as "directional" in `factory analyze --by hedge_basis`. Stratifying neutral cohorts by basis is the only way to tell whether a "neutral" result reflects skill or a hedge that was never actually beta-neutral.
+- **`Thesis.premise_classification_source` records which path produced the tags.** `PremiseSource.LLM` (classifier returned ≥1 vocabulary-mapped tag), `FALLBACK_SECTOR` (LLM produced nothing usable, sector-derived tags applied), or `FALLBACK_EMPTY` (neither path produced tags; also the default for legacy / manually-created theses). Stratify with `factory analyze` — a sustained high FALLBACK_SECTOR share on the LLM arm means the classifier is underperforming, not that the signal is bad.
+- **Repository (de)serialize round-trips str-Enums as enums, not raw strings.** `hedge_basis`, `premise_classification_source`, `valuation`, `time_horizon`, `outcome`, `cohort` all bind as TEXT on write but must come back as their Enum type on read. Pattern-match callers (`match t.hedge_basis: case HedgeBasis.BETA:`) will silently miss every branch if a new Enum field skips this — string equality keeps working, masking the bug. When adding a new str-Enum field on `Thesis`, mirror the existing pattern in `ThesisRepository` (see commit `7eae145`).
 - **Direction follows signal sign.** Bullish `conviction_delta` opens LONG underlying (+ SHORT hedge in paired mode); bearish opens SHORT underlying (+ LONG hedge). Target/stop semantics flip — short theses' target sits *below* entry, stop above.
 - **`cohort_mode=paired` is the factory default** for measurement reasons (the neutral cohort is the control group for separating skill from regime beta). Both the scaffolded `factory init` config and `FactoryConfig` ship `paired`. The hedge leg is dollar-matched by default; flip `beta_match_hedge=true` to opt into beta-matched sizing.
 - **Sizing is equal-dollar by default** — `budget_usd / target_positions` shared between primary and hedge legs. Flip `sizing_mode = "vol_scaled"` to opt into inverse-vol sizing targeting `target_vol_pct_per_position` of annualized $-volatility, capped at `max_position_pct` of budget.
 - **Calibration is RECORDED, never gates an open.** `calibrated_p_correct` lands on every Thesis row when a model exists, but the engine deliberately doesn't skip opens at low p. The point is to study what actually happened at every p value — that's the research question. `cents/finance/calibration.py` is a utility.
 - **`Position.pnl` is NET of costs.** `Position.gross_pnl` is the pre-cost figure. `costs_applied_usd` accumulates commission + slippage + short borrow + gap penalty across both open and close. Cohort analytics should always use `pnl`, not `gross_pnl`.
 - **Stop fills are gap-aware.** When closing on a stop trigger (`ThesisOutcome.INCORRECT`), `realized_exit_price = min/max(mark, stop_price)` (worst-for-position direction) plus `gap_slippage_bps`. Position stores both the signal `exit_price` and the modeled `realized_exit_price`.
-- **The engine does NOT gate on drawdown, liquidity, or borrow** in the default research configuration. `compute_drawdown` / `passes_liquidity_gate` / `passes_borrow_gate` are utilities in `cents/finance/` for callers writing their own analytics. Research mode records what happened; it doesn't filter what gets to happen.
+- **Sentiment LLM calls are cached per (symbol, article-set, thesis, model, day).** `cents/agents/sentiment.py:_sentiment_cache_params` keys filter + score calls on a SHA256 of sorted article URLs (`_article_set_hash`), the thesis-hypothesis hash, the model constant, and today's date. Same corpus + same thesis on the same day → cache hit, no LLM call. Add/remove one article or change the thesis hypothesis → different hash → miss. The `_day` field deliberately scopes hits to a single trading day; cross-day reuse is intentionally not allowed because article relevance decays.
 - **Anthropic per-request timeout is capped at 30s.** The SDK default is 600s read-timeout which, combined with 2 retries × exponential backoff, can burn 30+ minutes on a single hung call (cents-87v repro: MCD lost 38 min mid-symbol). Every Anthropic client constructed by cents (`sentiment.py`, `event.py`, `premise.py`, `eval/runner.py`) passes `timeout=settings.anthropic_timeout_sec` (default 30s). Override via `CENTS_ANTHROPIC_TIMEOUT_SEC` env var or `anthropic_timeout_sec` in `~/.cents/config.toml`. Worst-case bound per LLM call is now ~106s (30s × 2 retries + exponential backoff up to 8s).
 - **Open phase is first-fit on a per-run shuffled universe, not best-fit.** The loop in `cents/factory/engine.py:_open_phase` walks `universe_symbols` and opens the first `max_new_per_run` symbols that exceed `entry_threshold` and pass gates — it does NOT pre-score every symbol and pick the top-N. To remove systematic ordering bias (e.g. always opening A-side symbols on alphabetical static universes), the engine shuffles the universe in place using `random.Random(run_id).shuffle(...)` before iterating: each run gets a different (reproducible) order, both LLM and random arms see the same order within a run. Raising `max_new_per_run` widens coverage proportionally but does not re-rank.
 - **Live (non-paper) trading is hard-gated.** `AlpacaClient(paper=False)` raises `BrokerError` unless BOTH `CENTS_ALLOW_LIVE_TRADING=1` AND `CENTS_LIVE_TRADING_ACK` matches `LIVE_TRADING_ACK_PHRASE` verbatim (27 words). All factory + CLI broker callers hard-code `paper=True`. See `/scope/` — real-money trading is explicitly out of scope.
