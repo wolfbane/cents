@@ -22,6 +22,8 @@ class ShadowOpen:
       - "concentration_cap": premise tag already at max_per_premise_tag
       - "budget_locked": notional + new position > budget and no preemption qualified
       - "no_price": no live price available, candidate dropped
+      - "sector_lookup_transient": FMP fundamentals unreachable, hedge ETF
+        unresolvable; skipped rather than silently degraded to SPY
     """
 
     symbol: str

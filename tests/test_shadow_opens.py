@@ -150,6 +150,92 @@ class TestEngineRecordsShadowOpens:
         assert s.primary_side == "LONG"  # delta >= 0 => long
         assert s.horizon_days == 30
 
+    def test_no_price_records_shadow_and_writes_no_thesis(self, factory_db):
+        """Transient Alpaca outage at open time → skip, not zombie thesis.
+
+        Repro of the 2026-05-22 06:35 ET pilot failure where 5 random-arm
+        theses were registered with no positions because get_latest_price
+        returned None for every symbol. The price-missing gate must run
+        BEFORE thesis_repo.create, otherwise the thesis lands with no
+        downstream positions and pollutes experiment N counters.
+        """
+        _seed_universe(["AAPL", "MSFT"])
+        engine = FactoryEngine(
+            config=_config(entry_threshold=5.0),
+            orchestrator=_orchestrator({"AAPL": 20.0, "MSFT": 20.0}),
+            # AAPL has no live price; MSFT does. Only MSFT should open.
+            price_provider=_price_provider({"AAPL": None, "MSFT": 200.0}),
+        )
+        engine.run()
+
+        theses = ThesisRepository().list()
+        opened_symbols = {t.symbol for t in theses}
+        assert opened_symbols == {"MSFT"}, (
+            f"expected only MSFT to open (AAPL price=None should skip); got {opened_symbols}"
+        )
+
+        # No orphan positions for AAPL.
+        positions = PositionRepository().list()
+        assert all(p.symbol != "AAPL" for p in positions), (
+            "AAPL must produce zero positions when price is missing"
+        )
+
+        # Shadow row records the rejection.
+        shadow_rows = ShadowOpenRepository().list()
+        no_price_rows = [s for s in shadow_rows if s.reason == "no_price"]
+        assert len(no_price_rows) == 1
+        s = no_price_rows[0]
+        assert s.symbol == "AAPL"
+        assert s.conviction_delta == pytest.approx(20.0)
+        assert s.would_be_entry_price is None
+        assert s.primary_side == "LONG"
+
+    def test_sector_lookup_transient_records_shadow(self, factory_db, monkeypatch):
+        """Transient FMP outage during paired-mode open → skip, not SPY-hedge.
+
+        When sector_map.hedge_etf_for raises TransientSectorLookupError
+        (FMP unreachable), the engine must skip the symbol rather than
+        proceed with a SPY-hedged "neutral" thesis. Sibling to the
+        no_price skip — both gate the open phase before thesis_repo.create.
+        """
+        from cents.factory.sector_map import TransientSectorLookupError
+
+        _seed_universe(["AAPL", "MSFT"])
+
+        def fake_hedge_etf_for(symbol):
+            if symbol == "AAPL":
+                raise TransientSectorLookupError("FMP unreachable for AAPL")
+            return "XLK"
+
+        monkeypatch.setattr(
+            "cents.factory.engine.hedge_etf_for", fake_hedge_etf_for
+        )
+
+        engine = FactoryEngine(
+            config=_config(
+                entry_threshold=5.0,
+                cohort_mode="paired",
+            ),
+            orchestrator=_orchestrator({"AAPL": 20.0, "MSFT": 20.0}),
+            price_provider=_price_provider({"AAPL": 150.0, "MSFT": 200.0, "XLK": 180.0}),
+        )
+        engine.run()
+
+        theses = ThesisRepository().list()
+        opened_symbols = {t.symbol for t in theses}
+        assert opened_symbols == {"MSFT"}, (
+            f"AAPL must skip on transient sector lookup; got opened={opened_symbols}"
+        )
+
+        # No orphan AAPL positions either.
+        positions = PositionRepository().list()
+        assert all(p.symbol != "AAPL" for p in positions)
+
+        shadow_rows = ShadowOpenRepository().list()
+        transient_rows = [s for s in shadow_rows if s.reason == "sector_lookup_transient"]
+        assert len(transient_rows) == 1
+        assert transient_rows[0].symbol == "AAPL"
+
     def test_negative_below_threshold_marks_short_side(self, factory_db):
         _seed_universe(["JPM"])
         engine = FactoryEngine(

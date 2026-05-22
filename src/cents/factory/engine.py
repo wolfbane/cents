@@ -75,7 +75,7 @@ from cents.finance.calibration import (
     build_predict_features,
     load_latest_model,
 )
-from cents.factory.sector_map import hedge_etf_for
+from cents.factory.sector_map import TransientSectorLookupError, hedge_etf_for
 from cents.factory.universe_resolver import resolve_symbols
 from cents.finance import (
     Cost,
@@ -842,8 +842,59 @@ class FactoryEngine:
             new_conviction = max(0.0, min(100.0, 50.0 + result.conviction_delta))
             price = price_provider.get_latest_price(symbol)
 
+            # Skip-on-missing-price: a transient price-provider outage
+            # (e.g. Alpaca network-unreachable) must NOT produce a thesis
+            # row with no positions. Without this gate, the thesis lands
+            # (see _open_thesis_and_positions ~line 1379) but every
+            # position write is gated on `price is not None and price > 0`
+            # downstream, so the thesis becomes a zombie — counted toward
+            # experiment N but unjudgeable. See ShadowOpen vocab "no_price".
+            if price is None or price <= 0:
+                logger.warning(
+                    "Skipping %s — no entry price available (provider returned %r)",
+                    symbol, price,
+                )
+                self._record_shadow(
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    symbol=symbol,
+                    conviction_delta=result.conviction_delta,
+                    reason="no_price",
+                    price=None,
+                    premise_tags=[],
+                    premise_direction={},
+                    discovery_source=discovery_source,
+                    orchestrator_label=orchestrator_label,
+                    regime_snapshot=phase_regime_snapshot,
+                )
+                continue
+
             paired = cfg.cohort_mode == "paired"
-            hedge_symbol = hedge_etf_for(symbol) if paired else None
+            try:
+                hedge_symbol = hedge_etf_for(symbol) if paired else None
+            except TransientSectorLookupError as exc:
+                # FMP unreachable — refuse to silently degrade to SPY hedge.
+                # A "neutral" thesis hedged against SPY (instead of the
+                # symbol's actual sector ETF) is directional bet wearing a
+                # neutral cohort label. Skip the symbol; next run retries.
+                logger.warning(
+                    "Skipping %s — sector lookup transient failure (%s)",
+                    symbol, exc,
+                )
+                self._record_shadow(
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    symbol=symbol,
+                    conviction_delta=result.conviction_delta,
+                    reason="sector_lookup_transient",
+                    price=price,
+                    premise_tags=[],
+                    premise_direction={},
+                    discovery_source=discovery_source,
+                    orchestrator_label=orchestrator_label,
+                    regime_snapshot=phase_regime_snapshot,
+                )
+                continue
             if paired and not hedge_symbol:
                 logger.debug("Skipping %s — no hedge ETF available for paired mode", symbol)
                 continue
