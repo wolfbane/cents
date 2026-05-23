@@ -233,6 +233,11 @@ def cost_by_thesis(
     Behaviour matches the factory analyzer line-for-line — when that
     rule changes, this function must change too.
     """
+    # Default ``since`` to the earliest thesis in ``rows`` so we don't
+    # scan the entire llm_usage table on long-lived DBs. Calls before
+    # any thesis was opened can't possibly attribute to one of them.
+    if since is None and rows:
+        since = min(r.created_at for r in rows)
     usage_rows = LLMUsageRepository().list_recent(since=since, limit=None)
     by_id = {r.id: r for r in rows}
     by_symbol: dict[str, list[ThesisRow]] = defaultdict(list)

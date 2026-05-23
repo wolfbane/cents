@@ -45,9 +45,9 @@ def pilot(ctx):
 def dashboard(experiment_name: str | None, once: bool, cost_window_days: int):
     """Render the live ops dashboard.
 
-    Single-render mode by default — the loop / refresh behavior is
-    explicitly opt-in for the hands-on case, because the launchd job
-    just wants one PNG-equivalent pass.
+    Default is an interactive refresh loop (press Enter to re-pull,
+    Ctrl-C to exit) for hands-on operator use. ``--once`` renders a
+    single frame and exits — the launchd / cron mode.
     """
     try:
         from rich.console import Console

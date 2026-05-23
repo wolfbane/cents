@@ -1,11 +1,13 @@
 """``cents report`` — static visualization exports.
 
 Emits PNGs + JSON sidecars (+ one HTML sunburst) into a dated snapshot
-directory under ``website/public/reports/YYYY-MM-DD/`` by default. The
-``--publish`` flag also mirrors the snapshot into ``reports/latest/``
-so the public site picks up the newest run.
+directory at ``./reports/YYYY-MM-DD/`` by default (override with
+``--out``). ``--publish`` mirrors the snapshot to
+``<out_root>/latest/`` so the public site picks up the newest run;
+typically combined with ``--out website/public/reports/`` for the
+Starlight build.
 
-Dated snapshots are honest — you can show how the chart looked
+Dated snapshots are honest — you can show how a chart looked
 mid-pilot. The trade-off was discussed in the design conversation:
 default to dated + gitignored locally, opt-in to publish.
 """
@@ -66,7 +68,16 @@ def report(
         from cents.viz import queries as q
         from cents.viz import static as viz_static
         from cents.viz import sunburst as viz_sunburst
-    except ImportError:
+
+        # Pre-flight the third-party deps so a missing extra surfaces
+        # here as a friendly message, not as a RuntimeError from
+        # ``_lazy_plt()`` (which is raised mid-render). ``static.py``
+        # and ``sunburst.py`` deliberately import their heavy deps
+        # lazily; we trigger them once now while we still have the
+        # try/except around them.
+        viz_static._lazy_plt()
+        import plotly  # noqa: F401
+    except (ImportError, RuntimeError):
         click.echo(
             "cents report needs the [viz] extra:  pip install -e '.[viz]'",
             err=True,

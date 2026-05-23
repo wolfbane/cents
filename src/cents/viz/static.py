@@ -36,18 +36,27 @@ from cents.models.thesis import ThesisOutcome, ThesisStatus
 # Matplotlib import is wrapped so a missing extra fails at call time,
 # not at import time. ``cents.viz.queries`` must remain importable in
 # the no-viz path.
+# Module-level cache. ``matplotlib.use("Agg")`` must be called BEFORE
+# pyplot is imported, so a second call from a later render_* function
+# warns (or errors on newer matplotlib). Cache on first hit and reuse.
+_plt = None
+
+
 def _lazy_plt():
+    global _plt
+    if _plt is not None:
+        return _plt
     try:
         import matplotlib
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-
-        return plt
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "cents report needs the [viz] extra: pip install -e '.[viz]'"
         ) from exc
+    _plt = plt
+    return _plt
 
 
 def _write_sidecar(path: Path, payload: dict[str, Any]) -> None:
@@ -244,7 +253,15 @@ def render_invalidation_funnel(
         arm_rows = [r for r in rows if r.orchestrator_label == arm]
         opened = len(arm_rows)
         counts = {o: sum(1 for r in arm_rows if r.outcome == o) for o in outcomes_order}
-        sidecar[arm] = {"opened": opened, **{k.value: v for k, v in counts.items()}}
+        # Still-open theses (outcome=None) don't fit into outcomes_order
+        # but DO contribute to ``opened``. Surface them as a distinct
+        # "open" bucket so the bar length reconciles with n=opened.
+        open_n = sum(1 for r in arm_rows if r.outcome is None)
+        sidecar[arm] = {
+            "opened": opened,
+            "open": open_n,
+            **{k.value: v for k, v in counts.items()},
+        }
 
         left = 0.0
         for outcome in outcomes_order:
@@ -254,6 +271,11 @@ def render_invalidation_funnel(
             ax.barh(i, n, left=left, color=colors[outcome], edgecolor="white", label=outcome.value if i == 0 else None)
             ax.text(left + n / 2, i, f"{outcome.value}\n{n}", ha="center", va="center", fontsize=8, color="white")
             left += n
+        if open_n:
+            ax.barh(i, open_n, left=left, color="#f7f7f7",
+                    edgecolor="#999", linestyle=":", label="open" if i == 0 else None)
+            ax.text(left + open_n / 2, i, f"open\n{open_n}",
+                    ha="center", va="center", fontsize=8, color="#444")
         ax.text(-2, i, f"{arm}  n={opened}", ha="right", va="center", fontsize=10)
 
     ax.set_yticks([])

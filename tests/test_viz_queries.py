@@ -13,6 +13,15 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from freezegun import freeze_time
+
+# Anchor every test that touches a date window (cumulative_pnl,
+# tag_concentration, daily_llm_costs, …) to a fixed clock so the
+# fixture timestamps and ``datetime.now()`` calls inside the queries
+# module stay aligned. Without this, tests pass today but start failing
+# whenever the real clock moves far enough past the fixture's
+# ``2026-05-22`` that the window misses the seeded rows.
+_FROZEN_NOW = "2026-05-22 12:00:00"
 
 from cents.db.repository import (
     LLMUsageRepository,
@@ -43,11 +52,18 @@ def populated_db(tmp_path, monkeypatch):
     monkeypatch.setenv("CENTS_DB_PATH", str(tmp_path / "viz.db"))
     reset_connection()
 
+    # Freeze the clock for both the fixture body AND every test that
+    # consumes the fixture, so that ``datetime.now()`` calls inside the
+    # queries module (window builders, cost cutoffs, …) see the same
+    # "today" as the seeded timestamps. ``stop()`` runs in the teardown.
+    freezer = freeze_time(_FROZEN_NOW)
+    freezer.start()
+
     t_repo = ThesisRepository()
     p_repo = PositionRepository()
     u_repo = LLMUsageRepository()
 
-    now = datetime(2026, 5, 22, 12, 0, 0)
+    now = datetime.now()
     week_ago = now - timedelta(days=7)
     fortnight = now - timedelta(days=14)
 
@@ -195,6 +211,7 @@ def populated_db(tmp_path, monkeypatch):
 
     yield {"now": now}
 
+    freezer.stop()
     reset_connection()
 
 

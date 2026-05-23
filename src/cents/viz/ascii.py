@@ -84,9 +84,16 @@ def render_experiment_progress(
         "",
     )
 
+    # Readiness is checked against the EXPECTED arms (llm + random) so
+    # an absent arm reads as "0 opened", not "not enough info → ready".
+    # Otherwise an experiment with only-LLM theses could falsely satisfy
+    # the N-gate.
+    expected_arms = ("llm", "random")
     n_ready = all(
-        (m.opened >= minimum_n_per_arm) for m in metrics_by_arm.values()
-    ) if metrics_by_arm else False
+        (metrics_by_arm.get(arm).opened if metrics_by_arm.get(arm) else 0)
+        >= minimum_n_per_arm
+        for arm in expected_arms
+    )
     cal_ready = elapsed >= minimum_calendar_days
     if n_ready and cal_ready:
         verdict = Text("✓ ready to finalize", style="bold green")
@@ -137,7 +144,7 @@ def render_cost_drift_strip(
     plt.bar(xs, values, marker="hd")
     plt.xticks(xs, day_labels)
     plt.title("LLM spend ($/day)")
-    if daily_cap_usd:
+    if daily_cap_usd is not None:
         plt.hline(daily_cap_usd, color="red")
         plt.ylim(0, max(daily_cap_usd * 1.1, max(values, default=0.0) * 1.1, 1.0))
 
@@ -165,7 +172,7 @@ def render_cost_drift_strip(
 
     summary = Text()
     today_cost = costs[-1].cost_usd if costs else 0.0
-    if daily_cap_usd:
+    if daily_cap_usd is not None:
         summary.append(f"today ${today_cost:.2f} / cap ${daily_cap_usd:.2f}")
     else:
         summary.append(f"today ${today_cost:.2f}")
