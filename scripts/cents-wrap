@@ -64,6 +64,33 @@ LOG_FILE="$LOG_DIR/${CMD_NAME}.log"
     echo "[cents-wrap] cmd: $CENTS_BIN ${ARGS[*]:-}"
 } >>"$LOG_FILE"
 
+# Network preflight for factory runs.
+#
+# Factory runs need both Alpaca (prices) and FMP (fundamentals/sector) to be
+# reachable; a transient network outage during the launchd-fire window has
+# produced zombie theses and SPY-fallback contamination in the past. For
+# factory-* jobs, check both hosts with a short connect timeout and skip
+# the run cleanly if either is unreachable. Exit 0 so launchd treats this
+# as "deliberately skipped" rather than a crash.
+#
+# Other job types (eval, status, delistings, event-refresh) don't gate on
+# this — eval is local, status is local, event-refresh has its own retry
+# logic, and delistings is idempotent.
+if [[ "$CMD_NAME" == factory-* ]]; then
+    PREFLIGHT_FAILED=""
+    for host in api.alpaca.markets financialmodelingprep.com; do
+        if ! curl --connect-timeout 3 --max-time 5 -sS -o /dev/null "https://${host}/" 2>/dev/null; then
+            echo "[cents-wrap] preflight FAILED: ${host} unreachable" >>"$LOG_FILE"
+            PREFLIGHT_FAILED="$host"
+        fi
+    done
+    if [[ -n "$PREFLIGHT_FAILED" ]]; then
+        echo "[cents-wrap] $(date -Iseconds) SKIP $CMD_NAME — network preflight failed (${PREFLIGHT_FAILED})" >>"$LOG_FILE"
+        exit 0
+    fi
+    echo "[cents-wrap] preflight OK (alpaca + fmp reachable)" >>"$LOG_FILE"
+fi
+
 # Exec cents — output appended to the per-day log. Exit code propagates to launchd.
 # ${ARGS[@]+"${ARGS[@]}"} is the bash-3.2-safe form for an empty array under
 # `set -u`. macOS ships bash 3.2 as /bin/bash; plain "${ARGS[@]}" errors with
