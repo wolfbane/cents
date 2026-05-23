@@ -49,6 +49,15 @@ broker = [
     # bound forces an explicit migration when a major drops.
     "alpaca-py>=0.30.0,<1.0",
 ]
+viz = [
+    # Visualization stack. Optional — only `cents pilot dashboard` and
+    # `cents report` require these. The data layer (cents/viz/queries.py)
+    # has no third-party dependencies and is always importable.
+    "rich>=13.0.0",            # tables + layout for the ASCII dashboard
+    "plotext>=5.2.8",          # in-terminal plots for the dashboard
+    "matplotlib>=3.7.0",       # static PNG exports for cents report
+    "plotly>=5.18.0",          # sunburst-only; static HTML export
+]
 [project.scripts]
 cents = "cents.cli:cli"
 
