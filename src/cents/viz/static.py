@@ -531,8 +531,17 @@ def render_tag_regime_heatmap(
     import numpy as np
     arr = np.array([[float("nan") if v is None else v for v in row] for row in grid])
 
+    # Low-N cells encode as NaN. Set the colormap's "bad" colour to a
+    # distinct light grey so they read as "not enough data" instead of
+    # rendering as white (which on the RdYlGn colormap looks like a
+    # mid-rate value).
+    cmap = plt.get_cmap("RdYlGn").copy()
+    cmap.set_bad(color="#e0e0e0")
+
     fig, ax = plt.subplots(figsize=(1.4 * len(regimes) + 4, 0.55 * len(tags) + 2))
-    im = ax.imshow(arr, cmap="RdYlGn", vmin=0.3, vmax=0.7, aspect="auto")
+    im = ax.imshow(
+        np.ma.masked_invalid(arr), cmap=cmap, vmin=0.3, vmax=0.7, aspect="auto",
+    )
     ax.set_xticks(range(len(regimes)))
     ax.set_xticklabels(regimes, rotation=30, ha="right")
     ax.set_yticks(range(len(tags)))

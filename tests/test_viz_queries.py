@@ -371,13 +371,19 @@ def test_eval_history_missing_dir_returns_empty(tmp_path):
 
 
 def test_eval_history_reads_jsonl(tmp_path):
-    today = date.today()
-    p = tmp_path / f"{today.isoformat()}.jsonl"
-    p.write_text(
-        '{"date":"X","premise_f1":0.7,"sentiment_brier":0.2}\n'
-        '{"date":"X","premise_f1":0.75,"sentiment_brier":0.18}\n'
-    )
-    pts = q.eval_history(days=1, root=tmp_path)
+    # Freeze the clock so this test isn't flaky across the midnight
+    # boundary: the test writes a JSONL named with ``date.today()`` but
+    # ``eval_history()`` looks for ``datetime.now().date()``. Without
+    # freezing, a test that starts just before midnight and the query
+    # that runs just after would disagree about "today".
+    with freeze_time(_FROZEN_NOW):
+        today = date.today()
+        p = tmp_path / f"{today.isoformat()}.jsonl"
+        p.write_text(
+            '{"date":"X","premise_f1":0.7,"sentiment_brier":0.2}\n'
+            '{"date":"X","premise_f1":0.75,"sentiment_brier":0.18}\n'
+        )
+        pts = q.eval_history(days=1, root=tmp_path)
     assert len(pts) == 1
     # Latest row on the date wins.
     assert pts[0].premise_f1 == pytest.approx(0.75)

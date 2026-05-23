@@ -222,12 +222,8 @@ def render_cost_per_correct(
         else:
             table.add_row(label, _hbar(per, max_val, width=22), f"${per:.3f}", ratio)
 
-    # Threshold annotation: if any cell's $/correct beats the random
-    # arm's by more than its hit-rate lift permits, the LLM arm is
-    # paying to lose. We can't compute that here without more inputs;
-    # the static-report version has the full math.
     footer = Text(
-        "lower is better · ⚠ if any LLM cell > random·random_baseline.cost_per_correct × ratio_of_hit_rates, the LLM arm is paying to lose",
+        "lower is better — $ per correct thesis · random arm is the $0 baseline",
         style="dim",
     )
     return Panel(Group(table, footer), title="cost per correct", border_style="cyan")

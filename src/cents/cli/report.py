@@ -185,5 +185,14 @@ def _load_regime_spans(path: Path | None) -> list[tuple[str, str, str]]:
     if path is None:
         return []
     import json
-    raw = json.loads(path.read_text())
-    return [(str(s), str(e), str(l)) for s, e, l in raw]
+    try:
+        raw = json.loads(path.read_text())
+        return [(str(s), str(e), str(l)) for s, e, l in raw]
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        # Surface as a Click error so the user sees a one-liner, not a
+        # traceback. The file lives outside the package and is hand-edited;
+        # bad input here is operator error, not a bug.
+        raise click.BadParameter(
+            f"could not read --regime-spans {path}: {exc}",
+            param_hint="--regime-spans",
+        ) from exc

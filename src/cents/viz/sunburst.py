@@ -1,9 +1,12 @@
 """Agent-contribution sunburst (chart 9), via plotly.
 
-Two-level pie: outer ring is per-agent total ``conviction_delta`` on
-correct theses, inner ring is the top contributing rule/metric per
-agent (parsed from the evidence row's content suffix — see CLAUDE.md
-"Agent evidence rows carry fired-rule attribution").
+Two-level pie: outer ring is the per-agent count of evidence rows
+filed on correct theses, inner ring is the count split by the rule
+that fired (parsed from the evidence row's content suffix — see
+CLAUDE.md "Agent evidence rows carry fired-rule attribution"). The
+question this chart answers is "which agents and rules were named in
+the evidence trail of correct theses, and at what relative frequency?"
+— it does NOT aggregate the agents' ``conviction_delta`` values.
 
 This is the only chart that uses plotly. The rest of the viz stack
 sticks to matplotlib for static exports because PNGs are easier to
@@ -94,10 +97,10 @@ def render_agent_contribution_sunburst(
     fig = go.Figure(go.Sunburst(
         labels=labels, parents=parents, values=values,
         branchvalues="total",
-        hovertemplate="<b>%{label}</b><br>contribution: %{value}<extra></extra>",
+        hovertemplate="<b>%{label}</b><br>evidence rows: %{value}<extra></extra>",
     ))
     fig.update_layout(
-        title="Agent contribution on correct theses (by fired rule)",
+        title="Evidence-row count on correct theses (by agent, then fired rule)",
         margin=dict(t=60, l=10, r=10, b=10),
     )
 
