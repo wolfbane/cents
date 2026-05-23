@@ -40,6 +40,8 @@ from .calibration import calibration
 from .experiment import experiment
 from .shadow import shadow
 from .cache import cache
+from .pilot import pilot
+from .report import report
 
 # Re-export shared utilities for backwards compatibility with tests
 from ._shared import (
@@ -86,6 +88,8 @@ cli.add_command(calibration)
 cli.add_command(experiment)
 cli.add_command(shadow)
 cli.add_command(cache)
+cli.add_command(pilot)
+cli.add_command(report)
 
 
 def main():
