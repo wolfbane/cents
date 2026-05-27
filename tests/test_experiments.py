@@ -21,7 +21,7 @@ from cents.experiments import (
     status_snapshot,
 )
 from cents.experiments.registry import ExperimentSpecError
-from cents.models import Experiment, Thesis, ThesisStatus
+from cents.models import Experiment, Thesis, ThesisOutcome, ThesisStatus
 
 
 @pytest.fixture
@@ -160,6 +160,27 @@ class TestStatusSnapshot:
                 t.status = ThesisStatus.CLOSED
                 trepo.update(t)
         snap = status_snapshot(exp)
+        assert snap["minimum_n_per_arm_reached"] is True
+
+    def test_status_counts_orphan_invalidated_as_closed(self, db_conn, tmp_path: Path):
+        path = tmp_path / "e.yaml"
+        path.write_text(
+            "experiment: e\nhypothesis: h\nprimary_metric: m\nminimum_n_per_arm: 2\n"
+        )
+        exp = register_experiment(spec_path=path)
+        trepo = ThesisRepository()
+        for arm in ("llm", "random"):
+            for i in range(2):
+                t = Thesis(
+                    title=f"{arm}-{i}", symbol=f"{arm[0].upper()}{i}",
+                    experiment_id=exp.id, orchestrator_label=arm,
+                )
+                trepo.create(t)
+                t.status = ThesisStatus.INVALIDATED
+                t.outcome = ThesisOutcome.INVALIDATED
+                trepo.update(t)
+        snap = status_snapshot(exp)
+        assert snap["closed_by_arm"] == {"llm": 2, "random": 2}
         assert snap["minimum_n_per_arm_reached"] is True
 
 
