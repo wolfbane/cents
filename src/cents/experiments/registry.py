@@ -284,7 +284,10 @@ def status_snapshot(
     for t in in_exp:
         label = t.orchestrator_label or "llm"
         by_arm[label] = by_arm.get(label, 0) + 1
-        if t.status == ThesisStatus.CLOSED:
+        # status=INVALIDATED is an orphan terminal state from an older
+        # invalidation code path; rows carry outcome=invalidated and a closed_at.
+        # Count them so the cadence/verdict don't silently drop legitimate closes.
+        if t.status in (ThesisStatus.CLOSED, ThesisStatus.INVALIDATED):
             closed_by_arm[label] = closed_by_arm.get(label, 0) + 1
 
     anchor = now or datetime.now()
