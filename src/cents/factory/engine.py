@@ -419,6 +419,7 @@ class FactoryEngine:
 
             run.summary_json = {
                 "universe_size": len(symbols),
+                "orchestrator": open_results.get("orchestrator_label", "llm"),
                 "symbols_evaluated": open_results.get("symbols_evaluated", 0),
                 "symbols_below_threshold": open_results.get("symbols_below_threshold", 0),
                 "symbols_skipped_held": open_results.get("symbols_skipped_held", 0),
@@ -449,23 +450,31 @@ class FactoryEngine:
             # the partial run first so analytics still see how far it got.
             logger.warning("Factory run aborted by cost cap")
             run.error = "cost_cap_exceeded"
-            run.completed_at = self._clock()
+            # Accumulate BEFORE stamping completed_at: the upper-bound filter
+            # in _accumulate_llm_cost would drop usage rows whose called_at
+            # lands microseconds after the stamp (cents code-review 2026-06-12).
             self._accumulate_llm_cost(run)
+            run.completed_at = self._clock()
             self.run_repo.create(run)
             raise
         except Exception as exc:  # pragma: no cover — surfaced via run.error
             logger.exception("Factory run failed")
             run.error = str(exc)
 
-        run.completed_at = self._clock()
         self._accumulate_llm_cost(run)
+        run.completed_at = self._clock()
         self.run_repo.create(run)
         return run
 
     # ---- phases -----------------------------------------------------------
 
     def _accumulate_llm_cost(self, run: FactoryRun) -> None:
-        """Diff llm_usage rows in [started_at, completed_at] into the run record."""
+        """Diff llm_usage rows since started_at into the run record.
+
+        When ``run.completed_at`` is already set it bounds the window from
+        above; callers in ``run()`` accumulate BEFORE stamping completed_at so
+        in-flight usage rows aren't dropped by the upper-bound filter.
+        """
         usage_repo = LLMUsageRepository()
         rows = usage_repo.list_recent(since=run.started_at, limit=10000)
         cost = 0.0
@@ -946,6 +955,35 @@ class FactoryEngine:
                 )
                 continue
 
+            # Fail-closed hedge feasibility (paired mode). A paired thesis
+            # whose hedge leg can't be priced must not open at all —
+            # persisting it would put a one-legged directional bet into the
+            # NEUTRAL control cohort with a hedge_basis label claiming a
+            # hedge exists. Checked BEFORE the budget/preemption block so a
+            # doomed candidate can never preempt a live thesis.
+            hedge_price: float | None = None
+            if paired and hedge_symbol and not dry_run:
+                hedge_price = price_provider.get_latest_price(hedge_symbol)
+                if hedge_price is None or hedge_price <= 0:
+                    logger.warning(
+                        "Skipping %s — no hedge price for %s (provider returned %r)",
+                        symbol, hedge_symbol, hedge_price,
+                    )
+                    self._record_shadow(
+                        dry_run=dry_run,
+                        run_id=run_id,
+                        symbol=symbol,
+                        conviction_delta=result.conviction_delta,
+                        reason="no_hedge_price",
+                        price=price,
+                        premise_tags=premise_tags,
+                        premise_direction=premise_direction,
+                        discovery_source=discovery_source,
+                        orchestrator_label=orchestrator_label,
+                        regime_snapshot=phase_regime_snapshot,
+                    )
+                    continue
+
             # ---- per-symbol gates + sizing (v0.10) ----
             # Compute sizing BEFORE the liquidity/budget/preemption math so
             # each check reflects the realistic position size, not the
@@ -1075,6 +1113,7 @@ class FactoryEngine:
                 delta=result.conviction_delta,
                 price=price,
                 hedge_symbol=hedge_symbol,
+                hedge_price=hedge_price,
                 premise_tags=premise_tags,
                 premise_direction=premise_direction,
                 premise_classification_source=premise_classification_source,
@@ -1085,6 +1124,23 @@ class FactoryEngine:
                 borrow_rate_pa_pct=borrow.borrow_rate_pa_pct,
                 orchestrator_label=orchestrator_label,
             )
+            if new_open.get("skip_reason"):
+                # Fail-closed skip inside _open_new_thesis (e.g. beta-match
+                # R² gate rejected the hedge fit). No thesis row was written.
+                self._record_shadow(
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    symbol=symbol,
+                    conviction_delta=result.conviction_delta,
+                    reason=new_open["skip_reason"],
+                    price=price,
+                    premise_tags=premise_tags,
+                    premise_direction=premise_direction,
+                    discovery_source=discovery_source,
+                    orchestrator_label=orchestrator_label,
+                    regime_snapshot=phase_regime_snapshot,
+                )
+                continue
             theses_opened += new_open["theses_opened"]
             positions_opened += new_open["positions_opened"]
             open_theses = self.thesis_repo.list(status=ThesisStatus.OPEN)
@@ -1107,6 +1163,7 @@ class FactoryEngine:
             "symbols_skipped_held": symbols_skipped_held,
             "symbols_timed_out": symbols_timed_out,
             "stop_reason": stop_reason,
+            "orchestrator_label": orchestrator_label,
         }
 
     def _held_symbols(self, theses: list[Thesis]) -> set[str]:
@@ -1290,6 +1347,7 @@ class FactoryEngine:
         delta: float,
         price: float | None,
         hedge_symbol: str | None,
+        hedge_price: float | None = None,
         premise_tags: list[str] | None = None,
         premise_direction: dict[str, str] | None = None,
         premise_classification_source: str = "fallback_empty",
@@ -1310,6 +1368,12 @@ class FactoryEngine:
           - Directional: SHORT underlying.
           - Paired: SHORT underlying + LONG hedge ETF.
           - target_price below entry (price has to drop to win), stop_price above.
+
+        Fail-closed contract: when the hedge leg can't be built honestly
+        (no hedge price, or beta-match R² gate rejected the fit), this
+        returns ``{"theses_opened": 0, "positions_opened": 0,
+        "skip_reason": ...}`` WITHOUT writing a thesis row. A one-legged
+        thesis must never wear the NEUTRAL cohort label.
         """
         cfg = self.config
         now = self._clock()
@@ -1372,10 +1436,27 @@ class FactoryEngine:
         hedge_basis: HedgeBasis | None = None
         hedge_beta: float | None = None
         # True iff the first-pass estimation had both primary AND hedge
-        # close series available. Lets the hedge-leg block distinguish
-        # "R² gate rejected" from "history missing" without re-fetching.
+        # close series available. Distinguishes "R² gate rejected" from
+        # "history missing" without re-fetching.
         hedge_history_available = False
         if hedge_symbol:
+            # Hedge price is required to build the hedge leg. _open_phase
+            # pre-fetches it (fail-closed, shadow reason "no_hedge_price");
+            # direct callers fall back to a fetch here. Checked BEFORE the
+            # thesis row is written so a one-legged thesis can never land
+            # in the NEUTRAL cohort.
+            if hedge_price is None:
+                hedge_price = self._make_price_provider().get_latest_price(hedge_symbol)
+            if hedge_price is None or hedge_price <= 0:
+                logger.warning(
+                    "Refusing to open %s — no hedge price for %s (provider returned %r)",
+                    symbol, hedge_symbol, hedge_price,
+                )
+                return {
+                    "theses_opened": 0,
+                    "positions_opened": 0,
+                    "skip_reason": "no_hedge_price",
+                }
             if not cfg.beta_match_hedge:
                 hedge_basis = HedgeBasis.DOLLAR
             else:
@@ -1393,14 +1474,33 @@ class FactoryEngine:
                     )
                 if hedge_beta is not None:
                     hedge_basis = HedgeBasis.BETA
+                elif hedge_history_available:
+                    # History WAS available but the R² gate rejected the fit.
+                    # Fail closed: opening with a dollar-matched (or absent)
+                    # hedge leg would put a directional bet into the NEUTRAL
+                    # cohort. Note: when the budget was full, the caller may
+                    # already have preempted a thesis for this candidate —
+                    # rare (opt-in beta-match AND full budget AND R² reject)
+                    # and benign: the preempted slot frees for the next run.
+                    logger.warning(
+                        "Refusing to open %s — %s beta fit rejected "
+                        "(R² below %.2f over %dd); skipping open entirely",
+                        symbol, hedge_symbol,
+                        cfg.beta_min_r_squared, cfg.beta_lookback_days,
+                    )
+                    return {
+                        "theses_opened": 0,
+                        "positions_opened": 0,
+                        "skip_reason": "hedge_beta_rejected",
+                    }
                 else:
+                    # Hedge/primary history unavailable — dollar-match the
+                    # leg and record the degradation on the thesis row.
                     hedge_basis = HedgeBasis.DOLLAR_FALLBACK
                     logger.warning(
                         "Beta-match hedge fell back to dollar-match for %s/%s "
-                        "(min_r_squared=%.2f, beta_lookback_days=%d) — "
-                        "paired-neutral cohort contaminated by directional bet",
+                        "(history unavailable) — neutral leg sized without beta",
                         symbol, hedge_symbol,
-                        cfg.beta_min_r_squared, cfg.beta_lookback_days,
                     )
 
         thesis = Thesis(
@@ -1435,53 +1535,45 @@ class FactoryEngine:
         # happened at every p value, which is the research question.
 
         positions_opened = 0
-        # ---- Primary leg (vol-scaled sizing + open cost) ----
-        if price is not None and price > 0 and primary_shares > 0:
-            open_cost = apply_open_cost(
-                shares=primary_shares,
-                price=price,
-                commission_per_share_usd=cfg.commission_per_share_usd,
-                slippage_bps=cfg.slippage_bps,
-            )
-            self.position_repo.create(Position(
-                symbol=symbol,
-                side=primary_side,
-                entry_price=price,
-                size=primary_shares,
-                thesis_id=thesis.id,
-                paper=True,
-                notes=(
-                    f"opened by factory ({direction_label}); "
-                    f"sizing={primary_sizing_method}"
-                ),
-                costs_applied_usd=open_cost.total,
-                sizing_method=primary_sizing_method,
-                borrow_rate_pa_pct=(borrow_rate_pa_pct if primary_side == PositionSide.SHORT else None),
-            ))
-            positions_opened += 1
+        # Position writes are guarded by a compensating delete: a DB failure
+        # mid-creation must not leave a thesis row with zero/partial legs —
+        # such a "zombie" counts toward experiment N but is unjudgeable
+        # (cents code-review 2026-06-12).
+        created_position_ids: list[str] = []
+        try:
+            # ---- Primary leg (vol-scaled sizing + open cost) ----
+            if price is not None and price > 0 and primary_shares > 0:
+                open_cost = apply_open_cost(
+                    shares=primary_shares,
+                    price=price,
+                    commission_per_share_usd=cfg.commission_per_share_usd,
+                    slippage_bps=cfg.slippage_bps,
+                )
+                primary_pos = Position(
+                    symbol=symbol,
+                    side=primary_side,
+                    entry_price=price,
+                    size=primary_shares,
+                    thesis_id=thesis.id,
+                    paper=True,
+                    notes=(
+                        f"opened by factory ({direction_label}); "
+                        f"sizing={primary_sizing_method}"
+                    ),
+                    costs_applied_usd=open_cost.total,
+                    sizing_method=primary_sizing_method,
+                    borrow_rate_pa_pct=(borrow_rate_pa_pct if primary_side == PositionSide.SHORT else None),
+                )
+                self.position_repo.create(primary_pos)
+                created_position_ids.append(primary_pos.id)
+                positions_opened += 1
 
-        # ---- Hedge leg (beta-matched sizing) ----
-        if hedge_symbol and price is not None and price > 0 and primary_shares > 0:
-            hedge_provider = self._make_price_provider()
-            hedge_price = hedge_provider.get_latest_price(hedge_symbol)
-            if hedge_price is not None and hedge_price > 0:
+            # ---- Hedge leg (beta-matched sizing) ----
+            # hedge_price was validated > 0 before the thesis row was written.
+            if hedge_symbol and price is not None and price > 0 and primary_shares > 0:
                 primary_notional = primary_shares * price
-
-                # Reuse the beta + history flag already computed above for
-                # hedge_basis classification. When beta_match_hedge is on
-                # AND estimation failed specifically because the R² gate
-                # rejected the fit (hedge history WAS available), skip the
-                # hedge leg — silently dollar-matching here would put a
-                # directional bet into the "neutral" cohort.
-                beta = hedge_beta
-                if cfg.beta_match_hedge and beta is None and hedge_history_available:
-                    logger.debug(
-                        "Skipping hedge leg for %s: %s R² below %.2f gate",
-                        symbol, hedge_symbol, cfg.beta_min_r_squared,
-                    )
-                    return {"theses_opened": 1, "positions_opened": positions_opened}
                 ratio = beta_match_ratio(
-                    beta=beta,
+                    beta=hedge_beta,
                     default_beta=cfg.default_beta,
                     min_beta=cfg.beta_min,
                     max_beta=cfg.beta_max,
@@ -1507,7 +1599,7 @@ class FactoryEngine:
                     hedge_borrow = (
                         cfg.borrow_rate_pa_pct if hedge_side == PositionSide.SHORT else None
                     )
-                    self.position_repo.create(Position(
+                    hedge_pos = Position(
                         symbol=hedge_symbol,
                         side=hedge_side,
                         entry_price=hedge_price,
@@ -1521,8 +1613,25 @@ class FactoryEngine:
                         costs_applied_usd=hedge_open_cost.total,
                         sizing_method=sizing_label,
                         borrow_rate_pa_pct=hedge_borrow,
-                    ))
+                    )
+                    self.position_repo.create(hedge_pos)
+                    created_position_ids.append(hedge_pos.id)
                     positions_opened += 1
+        except Exception:
+            logger.exception(
+                "Position write failed for %s — rolling back thesis %s to avoid "
+                "an unjudgeable zombie row", symbol, thesis.id,
+            )
+            for pos_id in created_position_ids:
+                try:
+                    self.position_repo.delete(pos_id)
+                except Exception:
+                    logger.exception("Rollback: failed to delete position %s", pos_id)
+            try:
+                self.thesis_repo.delete(thesis.id)
+            except Exception:
+                logger.exception("Rollback: failed to delete thesis %s", thesis.id)
+            raise
 
         return {"theses_opened": 1, "positions_opened": positions_opened}
 

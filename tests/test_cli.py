@@ -1424,3 +1424,86 @@ class TestFactoryInitValidation:
         assert "FMP_API_KEY not configured" in result.output
         # Distinct from the FMP-reachability warnings.
         assert "FMP probe of" not in result.output
+
+
+class TestAlertDigest:
+    """Tests for `cents alert digest` — the scheduled-log alert summary."""
+
+    def _seed(self, db_path):
+        from datetime import datetime, timedelta
+
+        from cents.db import AlertRepository
+        from cents.models import Alert, AlertType
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        repo = AlertRepository(conn)
+        now = datetime.now()
+        repo.create(Alert(
+            symbol="NVDA",
+            alert_type=AlertType.PREMISE_INVALIDATION,
+            message="tariff event opposes thesis premise",
+            created_at=now - timedelta(hours=2),
+        ))
+        repo.create(Alert(
+            symbol="MSFT",
+            alert_type=AlertType.PREMISE_INVALIDATION,
+            message="export-control event opposes thesis premise",
+            created_at=now - timedelta(hours=3),
+            read=True,
+        ))
+        repo.create(Alert(
+            symbol="EVAL",
+            alert_type=AlertType.MODEL_DRIFT,
+            message="F1 fell 6pp below trailing-7 median",
+            created_at=now - timedelta(hours=1),
+        ))
+        # Outside the 24h window — must not appear.
+        repo.create(Alert(
+            symbol="OLD",
+            alert_type=AlertType.PREMISE_INVALIDATION,
+            message="stale",
+            created_at=now - timedelta(days=3),
+        ))
+        conn.close()
+
+    def test_digest_groups_by_type(self, runner, mock_db):
+        db_path = os.environ["CENTS_DB_PATH"]
+        self._seed(db_path)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "digest", "--since", "24h"])
+        assert result.exit_code == 0
+        assert "premise_invalidation" in result.output
+        assert "model_drift" in result.output
+        assert "n=2" in result.output  # two premise invalidations in window
+        assert "OLD" not in result.output
+
+    def test_digest_json_payload(self, runner, mock_db):
+        import json
+
+        db_path = os.environ["CENTS_DB_PATH"]
+        self._seed(db_path)
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(
+                cli, ["alert", "digest", "--since", "24h", "--output", "json"]
+            )
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["total"] == 3
+        assert payload["by_type"]["premise_invalidation"]["count"] == 2
+        assert payload["by_type"]["premise_invalidation"]["unread"] == 1
+        assert payload["by_type"]["model_drift"]["count"] == 1
+        latest = payload["by_type"]["premise_invalidation"]["latest"]
+        assert latest["symbol"] == "NVDA"  # most recent of the two
+
+    def test_digest_empty_exits_zero(self, runner, mock_db):
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "digest"])
+        assert result.exit_code == 0
+        assert "0 alert(s)" in result.output
+
+    def test_digest_quiet_if_empty(self, runner, mock_db):
+        with runner.isolated_filesystem(temp_dir=mock_db):
+            result = runner.invoke(cli, ["alert", "digest", "--quiet-if-empty"])
+        assert result.exit_code == 0
+        assert result.output.strip() == ""

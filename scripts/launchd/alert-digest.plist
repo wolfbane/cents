@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.dollars-and-cents.alert-digest
+  Daily alert digest — surfaces PREMISE_INVALIDATION / MODEL_DRIFT (and any
+  other) alerts that landed in the DB during the trailing 24h. Without this
+  job they fire silently into the alerts table. Cheap, read-only, no LLM
+  calls. Output lands in the per-day wrapper log; read it when checking
+  the mini.
+
+  Schedule: 19:15 ET = 16:15 PT, Mon-Fri (after eval-drift at 16:00 PT so
+  any MODEL_DRIFT alert fired today is included in the same day's digest.
+  Mini's system TZ is PT — see CLAUDE.md DST notes).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.alert-digest</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.cents/bin/cents-wrap</string>
+    <string>alert-digest</string>
+    <string>alert</string>
+    <string>digest</string>
+    <string>--since</string>
+    <string>24h</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/.cents/logs/launchd-alert-digest.out</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.cents/logs/launchd-alert-digest.err</string>
+</dict>
+</plist>

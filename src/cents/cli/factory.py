@@ -356,6 +356,205 @@ def _print_status(payload: dict) -> None:
     click.echo(f"Recent runs:   {len(payload['recent_runs'])}")
 
 
+# ---- funnel -----------------------------------------------------------------
+#
+# Per-arm open-phase funnel: evaluated → rejected (by reason) → opened, plus
+# cross-arm crowding attribution for concentration_cap rejections. Built for
+# the pilot_v1 post-mortem question: "who is eating the LLM arm's opens —
+# the threshold, the tag cap, or the other arm's book?"
+
+
+def _funnel_signed_return(shadow) -> float | None:
+    """Direction-aware forward return: had we opened, SHORT wins when fwd < 0."""
+    fr = shadow.forward_return_30d
+    if fr is None:
+        fr = shadow.forward_return_60d
+    if fr is None:
+        return None
+    return -fr if (shadow.primary_side or "").upper() == "SHORT" else fr
+
+
+def _funnel_reason_cell(shadows: list) -> dict:
+    """n / backfilled / mean signed fwd return / hit-rate for one (arm, reason)."""
+    signed = [r for r in (_funnel_signed_return(s) for s in shadows) if r is not None]
+    return {
+        "n": len(shadows),
+        "backfilled_n": len(signed),
+        "mean_fwd_return": (sum(signed) / len(signed)) if signed else None,
+        "hit_rate": (sum(1 for r in signed if r > 0) / len(signed)) if signed else None,
+    }
+
+
+def _funnel_crowding(shadows: list, factory_theses: list, cap: int) -> dict:
+    """Attribute concentration_cap rejections to the arm(s) holding the bucket.
+
+    For each rejected candidate, reconstructs which theses were open at
+    rejection time and shared a capped (tag, direction) bucket with it, then
+    counts the blockers by orchestrator arm. Uses the CURRENT cap value —
+    if max_per_premise_tag changed inside the window, attribution is
+    approximate.
+    """
+    out: dict[str, dict] = {}
+    for s in shadows:
+        if s.reason != "concentration_cap":
+            continue
+        arm = s.orchestrator_label or "llm"
+        cell = out.setdefault(arm, {
+            "blocked_n": 0,
+            "blocked_with_other_arm_blocker": 0,
+            "blocking_theses_by_arm": {},
+        })
+        cell["blocked_n"] += 1
+
+        open_at_rejection = [
+            t for t in factory_theses
+            if t.created_at <= s.created_at
+            and (t.closed_at is None or t.closed_at >= s.created_at)
+        ]
+        s_dir = s.premise_direction or {}
+        blockers: dict[str, object] = {}
+        for tag in s.premise_tags or []:
+            want_dir = s_dir.get(tag, "*")
+            sharing = [
+                t for t in open_at_rejection
+                if tag in (t.premise_tags or [])
+                and (t.premise_direction or {}).get(tag, "*") == want_dir
+            ]
+            if len(sharing) >= cap:
+                for t in sharing:
+                    blockers[t.id] = t
+        blocker_arms = [
+            (getattr(t, "orchestrator_label", None) or "llm") for t in blockers.values()
+        ]
+        for blocker_arm in blocker_arms:
+            counts = cell["blocking_theses_by_arm"]
+            counts[blocker_arm] = counts.get(blocker_arm, 0) + 1
+        if any(b != arm for b in blocker_arms):
+            cell["blocked_with_other_arm_blocker"] += 1
+    return out
+
+
+@factory.command("funnel")
+@click.option("--since-days", type=int, default=30, help="Look-back window in days")
+@click.option("--output", "-o", type=click.Choice(["text", "json"]), help="Output format")
+def factory_funnel(since_days: int, output: str | None):
+    """Per-arm open-phase funnel: evaluated → rejected (by reason) → opened.
+
+    Run `cents shadow backfill` first so rejection rows carry forward
+    returns — those tell you whether a rejection rule is leaving signal
+    on the table. The crowding section attributes concentration_cap
+    rejections to the arm(s) whose open theses held the bucket.
+    """
+    from cents.db import ShadowOpenRepository
+
+    output = resolve_output_format(output)
+    cfg = load_factory_config()
+    cutoff = datetime.now() - timedelta(days=since_days)
+
+    run_repo = FactoryRunRepository()
+    thesis_repo = ThesisRepository()
+    shadow_repo = ShadowOpenRepository()
+
+    runs = [
+        r for r in run_repo.list()
+        if not r.dry_run and r.started_at >= cutoff
+    ]
+    shadows = [s for s in shadow_repo.list() if s.created_at >= cutoff]
+    factory_theses = [t for t in thesis_repo.list() if TAG_FACTORY in t.tags]
+    opened_in_window = [t for t in factory_theses if t.created_at >= cutoff]
+
+    arms: dict[str, dict] = {}
+
+    def _arm_cell(arm: str) -> dict:
+        return arms.setdefault(arm, {
+            "runs": 0,
+            "evaluated": 0,
+            "skipped_held": 0,
+            "timed_out": 0,
+            "opened": 0,
+            "rejections": {},
+        })
+
+    for r in runs:
+        summary = r.summary_json or {}
+        cell = _arm_cell(summary.get("orchestrator") or "unknown")
+        cell["runs"] += 1
+        cell["evaluated"] += summary.get("symbols_evaluated", 0) or 0
+        cell["skipped_held"] += summary.get("symbols_skipped_held", 0) or 0
+        cell["timed_out"] += summary.get("symbols_timed_out", 0) or 0
+
+    by_arm_reason: dict[tuple[str, str], list] = {}
+    for s in shadows:
+        by_arm_reason.setdefault(
+            (s.orchestrator_label or "llm", s.reason), []
+        ).append(s)
+    for (arm, reason), rows in sorted(by_arm_reason.items()):
+        _arm_cell(arm)["rejections"][reason] = _funnel_reason_cell(rows)
+
+    for t in opened_in_window:
+        _arm_cell(t.orchestrator_label or "llm")["opened"] += 1
+
+    payload = {
+        "since_days": since_days,
+        "max_per_premise_tag": cfg.max_per_premise_tag,
+        "arms": arms,
+        "crowding": _funnel_crowding(shadows, factory_theses, cfg.max_per_premise_tag),
+        "notes": [
+            "Runs recorded before summary_json carried 'orchestrator' group under arm 'unknown'.",
+            "Crowding attribution uses the CURRENT max_per_premise_tag; approximate if the cap changed inside the window.",
+            "Forward-return columns require `cents shadow backfill` to have run past each row's horizon.",
+        ],
+    }
+    respond_with_output(output, payload, lambda: _print_funnel(payload))
+
+
+def _print_funnel(payload: dict) -> None:
+    def _pct(v: float | None) -> str:
+        return "—" if v is None else f"{v * 100:+.2f}%"
+
+    def _rate(v: float | None) -> str:
+        return "—" if v is None else f"{v * 100:.0f}%"
+
+    click.echo("")
+    click.echo(
+        f"Open-phase funnel — last {payload['since_days']} days "
+        f"(max_per_premise_tag={payload['max_per_premise_tag']})"
+    )
+    click.echo("-" * 72)
+    for arm in sorted(payload["arms"].keys()):
+        cell = payload["arms"][arm]
+        click.echo(f"arm '{arm}' ({cell['runs']} runs):")
+        click.echo(f"  evaluated            {cell['evaluated']:>5}")
+        click.echo(f"  skipped (held)       {cell['skipped_held']:>5}")
+        if cell["timed_out"]:
+            click.echo(f"  timed out            {cell['timed_out']:>5}")
+        for reason in sorted(cell["rejections"].keys()):
+            rcell = cell["rejections"][reason]
+            click.echo(
+                f"  {reason:<20} {rcell['n']:>5}   "
+                f"[fwd n={rcell['backfilled_n']:>3}  "
+                f"mean={_pct(rcell['mean_fwd_return']):>8}  "
+                f"hit={_rate(rcell['hit_rate']):>4}]"
+            )
+        click.echo(f"  opened               {cell['opened']:>5}")
+        click.echo("")
+    crowding = payload.get("crowding") or {}
+    if crowding:
+        click.echo("Cross-arm crowding (concentration_cap rejections):")
+        for arm in sorted(crowding.keys()):
+            c = crowding[arm]
+            blockers = ", ".join(
+                f"{a}={n}" for a, n in sorted(c["blocking_theses_by_arm"].items())
+            ) or "n/a"
+            click.echo(
+                f"  {arm}: {c['blocked_n']} blocked; blocking theses by arm: {blockers}; "
+                f"{c['blocked_with_other_arm_blocker']}/{c['blocked_n']} had ≥1 other-arm blocker"
+            )
+        click.echo("")
+    for note in payload.get("notes") or []:
+        click.echo(f"note: {note}")
+
+
 from enum import Enum
 
 

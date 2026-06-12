@@ -653,9 +653,17 @@ class TestPairedMode:
         neutral = next(t for t in ThesisRepository().list() if t.cohort == ThesisCohort.NEUTRAL)
         assert neutral.hedge_basis == "beta"
 
-    def test_hedge_basis_dollar_fallback_when_r2_fails(self, factory_db, caplog):
-        """Uncorrelated history → hedge_basis='dollar_fallback' AND WARNING logged."""
+    def test_open_refused_when_beta_r2_fails(self, factory_db, caplog):
+        """Uncorrelated history + beta_match → NO thesis, shadow 'hedge_beta_rejected'.
+
+        Fail-closed contract (code-review 2026-06-12): when the R² gate
+        rejects the fit while history WAS available, the open is skipped
+        entirely — previously the thesis landed in the NEUTRAL cohort with
+        hedge_basis='dollar_fallback' and no hedge leg at all.
+        """
         import logging
+
+        from cents.db import ShadowOpenRepository
 
         _seed_universe(["NVDA"])
         # Two independent sequences — correlation near zero, R² below the 0.5 gate.
@@ -679,17 +687,78 @@ class TestPairedMode:
                 price_provider=provider,
             )
             with caplog.at_level(logging.WARNING, logger="cents.factory.engine"):
-                engine.run()
-        neutral = next(t for t in ThesisRepository().list() if t.cohort == ThesisCohort.NEUTRAL)
-        assert neutral.hedge_basis == "dollar_fallback"
-        # A WARNING was emitted naming both legs, the R² threshold, and the lookback.
+                run = engine.run()
+        assert run.theses_opened == 0
+        assert all(t.cohort != ThesisCohort.NEUTRAL for t in ThesisRepository().list())
+        shadows = ShadowOpenRepository().list(reason="hedge_beta_rejected")
+        assert len(shadows) == 1
+        assert shadows[0].symbol == "NVDA"
+        # A WARNING was emitted naming both legs and the R² threshold.
         warning_records = [
             r for r in caplog.records
-            if r.levelno == logging.WARNING and "dollar-match" in r.getMessage()
+            if r.levelno == logging.WARNING and "beta fit rejected" in r.getMessage()
         ]
-        assert warning_records, "Expected dollar-match fallback WARNING"
+        assert warning_records, "Expected beta-fit-rejected WARNING"
         msg = warning_records[0].getMessage()
         assert "NVDA" in msg and "XLK" in msg
+
+    def test_open_refused_when_hedge_price_missing(self, factory_db):
+        """Paired mode + hedge price unavailable → NO thesis, shadow 'no_hedge_price'.
+
+        Previously the thesis row landed with cohort=NEUTRAL and only the
+        primary leg — a directional bet contaminating the control cohort.
+        """
+        from cents.db import ShadowOpenRepository
+
+        _seed_universe(["NVDA"])
+        provider = self._paired_price_provider(
+            prices={"NVDA": 100.0},  # no XLK price
+            histories={"NVDA": [100.0 + i * 0.1 for i in range(150)]},
+        )
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLK"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired",
+                    entry_threshold=1.0,
+                    budget_usd=10000.0,
+                    target_positions=10,
+                ),
+                orchestrator=_orchestrator({"NVDA": 5.0}),
+                price_provider=provider,
+            )
+            run = engine.run()
+        assert run.theses_opened == 0
+        assert ThesisRepository().list() == []
+        shadows = ShadowOpenRepository().list(reason="no_hedge_price")
+        assert len(shadows) == 1
+        assert shadows[0].symbol == "NVDA"
+
+    def test_position_write_failure_rolls_back_thesis(self, factory_db):
+        """A DB failure during position creation must not leave a zombie thesis."""
+        _seed_universe(["NVDA"])
+        provider = self._paired_price_provider(
+            prices={"NVDA": 100.0, "XLK": 200.0},
+            histories={"NVDA": [100.0] * 150, "XLK": [200.0] * 150},
+        )
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLK"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired",
+                    entry_threshold=1.0,
+                    budget_usd=10000.0,
+                    target_positions=10,
+                ),
+                orchestrator=_orchestrator({"NVDA": 5.0}),
+                price_provider=provider,
+            )
+            with patch.object(
+                engine.position_repo, "create", side_effect=RuntimeError("disk full")
+            ):
+                run = engine.run()
+        # The run records the error; no thesis row survives the rollback.
+        assert run.error is not None and "disk full" in run.error
+        assert ThesisRepository().list() == []
+        assert run.theses_opened == 0
 
     def test_paired_skipped_when_pair_wont_fit(self, factory_db):
         _seed_universe(["NVDA"])
@@ -1911,3 +1980,126 @@ class TestCalibratedPrediction:
         assert theses[0].calibrated_p_correct == 0.3
         positions = [p for p in PositionRepository().list() if p.thesis_id == theses[0].id]
         assert positions and all(p.size > 0 for p in positions)
+
+
+class TestFactoryFunnel:
+    """Tests for `cents factory funnel` — per-arm rejection funnel + crowding."""
+
+    def _seed(self):
+        from cents.db import ShadowOpenRepository
+        from cents.models import FactoryRun, ShadowOpen
+
+        now = datetime.now()
+        run_repo = FactoryRunRepository()
+        run_repo.create(FactoryRun(
+            universe_name="test",
+            started_at=now - timedelta(hours=2),
+            completed_at=now - timedelta(hours=1),
+            summary_json={
+                "orchestrator": "llm",
+                "symbols_evaluated": 10,
+                "symbols_skipped_held": 3,
+                "symbols_timed_out": 1,
+            },
+        ))
+
+        trepo = ThesisRepository()
+        # Two open random-arm theses holding the (ai_capex, positive) bucket.
+        for i in range(2):
+            trepo.create(Thesis(
+                title=f"factory:long RND{i}",
+                symbol=f"RND{i}",
+                conviction=55.0,
+                tags=[TAG_FACTORY],
+                premise_tags=["ai_capex"],
+                premise_direction={"ai_capex": "positive"},
+                orchestrator_label="random",
+                created_at=now - timedelta(days=2),
+            ))
+        # One LLM-arm open in the window.
+        trepo.create(Thesis(
+            title="factory:long AAPL",
+            symbol="AAPL",
+            conviction=60.0,
+            tags=[TAG_FACTORY],
+            orchestrator_label="llm",
+            created_at=now - timedelta(days=1),
+        ))
+
+        srepo = ShadowOpenRepository()
+        # Backfilled below-threshold rejection (LONG, +5% forward).
+        srepo.create(ShadowOpen(
+            symbol="MSFT",
+            conviction_delta=4.0,
+            reason="below_threshold",
+            primary_side="LONG",
+            forward_return_30d=0.05,
+            orchestrator_label="llm",
+            created_at=now - timedelta(hours=3),
+        ))
+        # Tag-cap rejection: LLM candidate blocked on the bucket the two
+        # random theses hold.
+        srepo.create(ShadowOpen(
+            symbol="NVDA",
+            conviction_delta=9.0,
+            reason="concentration_cap",
+            primary_side="LONG",
+            premise_tags=["ai_capex"],
+            premise_direction={"ai_capex": "positive"},
+            orchestrator_label="llm",
+            created_at=now - timedelta(hours=3),
+        ))
+
+    def test_funnel_json(self, factory_db, monkeypatch, tmp_path):
+        import json
+
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        self._seed()
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["factory", "funnel", "--since-days", "30", "--output", "json"]
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+
+        llm = payload["arms"]["llm"]
+        assert llm["runs"] == 1
+        assert llm["evaluated"] == 10
+        assert llm["skipped_held"] == 3
+        assert llm["timed_out"] == 1
+        assert llm["opened"] == 1
+        assert llm["rejections"]["below_threshold"]["n"] == 1
+        assert llm["rejections"]["below_threshold"]["backfilled_n"] == 1
+        assert llm["rejections"]["below_threshold"]["mean_fwd_return"] == pytest.approx(0.05)
+        assert llm["rejections"]["concentration_cap"]["n"] == 1
+        # Random arm opened 2 theses in the window (no runs / shadows seeded).
+        assert payload["arms"]["random"]["opened"] == 2
+
+        # Crowding: the LLM rejection was blocked by 2 random-arm theses.
+        crowding = payload["crowding"]["llm"]
+        assert crowding["blocked_n"] == 1
+        assert crowding["blocking_theses_by_arm"] == {"random": 2}
+        assert crowding["blocked_with_other_arm_blocker"] == 1
+
+    def test_funnel_text_renders(self, factory_db, monkeypatch, tmp_path):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        self._seed()
+        runner = CliRunner()
+        result = runner.invoke(cli, ["factory", "funnel"])
+        assert result.exit_code == 0, result.output
+        assert "Open-phase funnel" in result.output
+        assert "concentration_cap" in result.output
+        assert "Cross-arm crowding" in result.output
+        assert "random=2" in result.output
+
+    def test_funnel_empty_db(self, factory_db, monkeypatch, tmp_path):
+        from cents.cli import cli
+
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(tmp_path / "f.toml"))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["factory", "funnel"])
+        assert result.exit_code == 0, result.output

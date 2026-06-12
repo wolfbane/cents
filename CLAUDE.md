@@ -15,6 +15,7 @@ cents position open NVDA --size 100 --price 135 --thesis <id>
 cents watch add NVDA --thesis <id>
 cents scan
 cents alert list --since today              # also accepts ISO date or Nh/Nd
+cents alert digest --since 24h              # per-type summary for scheduled-run logs (launchd: alert-digest.plist)
 
 # Regime-aware substrate
 cents event refresh                              # pull Federal Register events, fire PREMISE_INVALIDATION alerts
@@ -32,6 +33,7 @@ cents factory run --orchestrator random --orchestrator-seed 42   # reproducible 
 cents factory run --max-cost-usd 5.00          # abort if cumulative LLM spend would exceed this
 cents factory status
 cents factory analyze --by discovery,cohort,regime,orchestrator,hedge_basis
+cents factory funnel --since-days 30   # per-arm rejection funnel + cross-arm tag-cap crowding (run shadow backfill first)
 
 # Pre-registered experiments (makes the pipeline falsifiable)
 cents experiment register <spec.yaml>   # freezes factory.toml SHA; stamps every opened thesis
@@ -87,7 +89,7 @@ up a new pilot machine or diagnosing a missed scheduled run.
 ```bash
 pip install -e ".[dev]"       # Install with test deps
 pip install -e ".[broker]"    # Add Alpaca trading (paper only — see /scope/)
-pytest                        # Full suite (~721 tests, ~30s)
+pytest                        # Full suite (~990 tests, ~65s)
 pytest tests/test_factory.py  # Single file
 pytest -k "premise"           # By keyword
 pytest --lf                   # Re-run last failures
@@ -159,8 +161,8 @@ Transversal: cents/finance/ — UTILITIES, not gates
 - **Premise invalidation is polarity-aware.** `Event.matches_premise(tags, direction)` requires tag overlap, and for BULLISH/BEARISH events the polarity must oppose the thesis's `premise_direction` on a shared tag (a bullish event on a "positive"-direction thesis confirms, doesn't invalidate). NEUTRAL/UNCLEAR events fall back to legacy unsigned intersection — they DO invalidate when tags overlap. The fail-open choice is deliberate: an ambiguous-polarity tariff event with a shared tag should not silently fail to alert a tariff-dependent thesis. Empty `premise_direction` (legacy theses) also falls back to unsigned intersection.
 - **`classify_premise_tags` returns a 2-tuple `(tags, direction)`** — `direction` is `{tag: "positive"|"negative"}`. The factory engine uses `_coerce_premise_classification` to accept legacy bare-list stubs from older tests.
 - **A neutral-cohort thesis owns BOTH legs** as two `Position` rows on the same `thesis_id` (one LONG on `symbol`, one SHORT on `hedge_symbol`). It is NOT two linked theses. Closing the thesis closes both legs naturally.
-- **The hedge leg is dollar-matched by default.** `beta_match_hedge=false` in the scaffolded TOML and the FactoryConfig default. When opted in, `cents/finance/hedging.py:estimate_beta` does 60-day OLS of log returns vs the hedge ETF, clamps to `[beta_min, beta_max]` (default `[0.10, 5.0]`), and refuses estimation when R² is below `beta_min_r_squared` (default 0.5) — in which case the engine **skips the hedge leg** rather than silently falling back to dollar-match.
-- **`Thesis.hedge_basis` records how the neutral leg was sized.** `HedgeBasis.BETA` (genuine beta-matched), `DOLLAR_FALLBACK` (beta_match_hedge=true but estimation degraded — e.g. low R² or clamp hit), or `DOLLAR` (equal-dollar by config). Directional theses are `None` and bucket as "directional" in `factory analyze --by hedge_basis`. Stratifying neutral cohorts by basis is the only way to tell whether a "neutral" result reflects skill or a hedge that was never actually beta-neutral.
+- **The hedge leg is dollar-matched by default.** `beta_match_hedge=false` in the scaffolded TOML and the FactoryConfig default. When opted in, `cents/finance/hedging.py:estimate_beta` does 60-day OLS of log returns vs the hedge ETF, clamps to `[beta_min, beta_max]` (default `[0.10, 5.0]`), and refuses estimation when R² is below `beta_min_r_squared` (default 0.5) — in which case the engine **refuses to open the thesis at all** (shadow reason `hedge_beta_rejected`) rather than putting a non-beta-neutral pair into the NEUTRAL cohort. Likewise, a paired candidate whose hedge ETF has no price is skipped entirely (shadow reason `no_hedge_price`) — a one-legged thesis must never wear the NEUTRAL label.
+- **`Thesis.hedge_basis` records how the neutral leg was sized.** `HedgeBasis.BETA` (genuine beta-matched), `DOLLAR_FALLBACK` (beta_match_hedge=true but price history was unavailable so the leg was dollar-matched — low-R² fits no longer fall back, they refuse the open), or `DOLLAR` (equal-dollar by config). Directional theses are `None` and bucket as "directional" in `factory analyze --by hedge_basis`. Stratifying neutral cohorts by basis is the only way to tell whether a "neutral" result reflects skill or a hedge that was never actually beta-neutral.
 - **`Thesis.premise_classification_source` records which path produced the tags.** `PremiseSource.LLM` (classifier returned ≥1 vocabulary-mapped tag), `FALLBACK_SECTOR` (LLM produced nothing usable, sector-derived tags applied), or `FALLBACK_EMPTY` (neither path produced tags; also the default for legacy / manually-created theses). Stratify with `factory analyze` — a sustained high FALLBACK_SECTOR share on the LLM arm means the classifier is underperforming, not that the signal is bad.
 - **Repository (de)serialize round-trips str-Enums as enums, not raw strings.** `hedge_basis`, `premise_classification_source`, `valuation`, `time_horizon`, `outcome`, `cohort` all bind as TEXT on write but must come back as their Enum type on read. Pattern-match callers (`match t.hedge_basis: case HedgeBasis.BETA:`) will silently miss every branch if a new Enum field skips this — string equality keeps working, masking the bug. When adding a new str-Enum field on `Thesis`, mirror the existing pattern in `ThesisRepository` (see commit `7eae145`).
 - **Direction follows signal sign.** Bullish `conviction_delta` opens LONG underlying (+ SHORT hedge in paired mode); bearish opens SHORT underlying (+ LONG hedge). Target/stop semantics flip — short theses' target sits *below* entry, stop above.
