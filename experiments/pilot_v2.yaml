@@ -1,0 +1,137 @@
+# Pilot v2 — clean restart after the pilot_v1 shakedown.
+#
+# pilot_v1 was a contaminated shakedown: a batch of engine + experiment-design
+# defects (found 2026-06-13/14) made its data uninterpretable. This spec bakes
+# in the fixes and re-pre-registers a HONEST measurement before committing to
+# the full hit_rate_delta run.
+#
+# What changed since pilot_v1 (and why v1 is discarded, not pooled):
+#   1. [#13] Hedge close-path bug — the short hedge leg's exit price was being
+#      clamped to the UNDERLYING's stop price, fabricating ~$23.5k of phantom
+#      loss across 4 legs. Fixed; clamp now applies to the primary leg only.
+#   2. [#15] Premise-invalidation was FORCE-CLOSING theses on tag-overlapping
+#      policy events — 86% of v1 theses died as `invalidated` at ~2.7 days,
+#      ZERO ever reached target. v1 measured "time until a tag-overlapping
+#      Federal Register doc appears," not predictive value. Now RECORD-ONLY
+#      (close_on_invalidation=false): the alert is a recorded covariate and the
+#      thesis runs to target/stop/horizon. NEUTRAL/UNCLEAR events no longer
+#      invalidate (fail-closed); invalidation firing gated at confidence >= 0.7.
+#   3. PRIMARY METRIC is now the NEUTRAL SPREAD P&L, not the underlying's
+#      direction. v1's hit_rate was labeled on the underlying leg hitting
+#      ±10%/−5% — i.e. it scored absolute direction (beta), the exact thing the
+#      paired hedge exists to strip out. The hypothesis is about the spread, so
+#      the metric must be too. See primary_metric below.
+#   4. beta_match_hedge = TRUE (was false). Dollar-matched hedges left net beta
+#      in the "neutral" cohort; beta-matching actually isolates skill from beta.
+#      Trade-off: low-R² fits are refused (#12 fail-closed, shadow reason
+#      `hedge_beta_rejected`), so N accrues slower and the opened population
+#      skews toward names with a stable sector beta — a DISCLOSED, stratifiable
+#      selection (stratify by `hedge_basis`), strictly better than an
+#      undisclosed beta leak.
+#   5. news_cutoff_time = "09:30" (was "" / leaky). Same-day intraday news was
+#      leaking forward-return language into the LLM arm's sentiment signal —
+#      only the LLM arm reads news, so the leak inflated the arm under test.
+#
+# Pre-flight checklist before `cents experiment register experiments/pilot_v2.yaml`:
+#   1. Running binary is v0.11+ (record-only invalidation is the default).
+#      `cents factory status` must reflect the merged master (PRs #12–#15).
+#   2. ~/.cents/factory.toml has, for this run:
+#         cohort_mode          = "paired"
+#         sizing_mode          = "equal_dollar"
+#         beta_match_hedge      = true          # << changed for v2
+#         news_cutoff_time      = "09:30"       # << added for v2
+#         close_on_invalidation = false         # record-only (default; pin it explicitly)
+#   3. BOTH cost caps configured (daily floor in ~/.cents/config.toml:
+#      max_llm_spend_usd_per_day = 10.0; AND --max-cost-usd 10.0 on each run).
+#   4. `cents factory status` reports 0 open factory-tag theses (close any
+#      carryover first — v1's 19 open theses must be closed before register).
+#   5. `cents universe ingest-delistings` run within the last 24h; universe
+#      default points at sp100_static_v1 (102 symbols).
+#   6. `cents usage headroom` returns status=ok.
+#   7. `cents eval run --gate ... --tolerance-pp 3` passes (model not drifted).
+#   8. Random arm cron hard-codes a fixed/derived `--orchestrator-seed`.
+
+name: pilot_v2
+hypothesis: >
+  On S&P 100 paired-neutral, BETA-MATCHED theses (sp100_static_v1, 102
+  symbols), the LLM orchestrator's conviction produces a higher mean
+  net SPREAD P&L per thesis than the matched-cadence random control.
+  Primary go/no-go: the LLM arm's mean per-thesis spread P&L is
+  directionally ahead of the random arm's at N per arm. A delta of zero
+  or negative triggers ABORT before committing to the full experiment.
+
+# PRIMARY METRIC: mean net spread P&L per closed thesis, LLM arm minus random
+# arm. "Spread P&L" = sum of `Position.pnl` (NET of costs) across BOTH legs of
+# a thesis — i.e. the long-short pair's realized P&L, NOT the underlying leg's
+# move. This is what `cents cohort` computes per-cohort; for the per-arm read,
+# group closed neutral-cohort theses by `orchestrator_label` and take the mean
+# of (Σ leg pnl) per thesis. Do NOT use the outcome-label hit-rate from
+# `factory analyze` as the primary read — that is labeled on the underlying
+# leg (beta-contaminated) and is reported here only as a diagnostic secondary.
+primary_metric: mean_net_spread_pnl_per_thesis__llm_minus_random
+
+# Pilot N is intentionally modest (go/no-go, not falsification). The LLM arm is
+# the binding constraint: it opens only ~1.5/run (real conviction clears
+# entry_threshold=7 less often than the random arm's uniform deltas), and
+# beta-match refusals reduce it further. At a 30-day horizon, ~75 closed/arm is
+# a realistic ~10–12 week directional read. Extend (see decision tree) if the
+# signal is borderline rather than under-powering a verdict.
+minimum_n_per_arm: 75
+
+# Calendar floor reflects the 30-day horizon: with record-only invalidation,
+# theses run their full horizon (v1's "~50-60 days" assumed the old
+# force-close churn and is VOID). First closes land ~30 days in; ~75 closed/arm
+# on the slow (LLM) arm is ~10–12 weeks. The floor guards against calling a
+# verdict before enough theses have completed a full forward window.
+minimum_calendar_days: 75
+
+stopping_rule: "later of 75 calendar days AND N=75 per arm (slower arm binds)"
+
+# Secondary metrics (reported, not the go/no-go):
+#   - spread_sign_hit_rate: fraction of theses with positive spread P&L
+#     (per arm). This is the on-hypothesis hit-rate (cents cohort win_rate),
+#     distinct from the underlying-direction label.
+#   - mean_pnl_per_thesis by hedge_basis (beta vs dollar_fallback) — required
+#     because beta-match refusals make the opened set a selected sample.
+#   - calibration_brier_score; arm-by-arm INVALIDATED + concentration_cap
+#     rejection rates (via `cents factory funnel`) to confirm matched cadence.
+#
+# Abort criteria (independent of the spread-P&L delta):
+#   - cost overrun: actual/estimated daily LLM spend > 2.0
+#   - matched-cadence broken: if LLM-arm concentration_cap rejection rate
+#     materially exceeds random's (arms no longer comparable cadence)
+
+# Decision tree — PRE-COMMIT BEFORE SEEING DATA. Evaluate at the stopping rule
+# (N >= 75 per arm AND calendar >= 75 days). Metric is the mean net spread P&L
+# per thesis, LLM minus random (USD/thesis), net of modeled costs.
+#
+#   spread_pnl_delta (USD/thesis)   verdict    next action
+#   -----------------------------   -------    --------------------------------
+#   < 0                             ABORT      do not run the full experiment;
+#                                              publish the negative result;
+#                                              propose a different design.
+#   0 to < +0.25% of position size  EXTEND     run to N=150/arm for a finer read
+#                                              (~4–5 more weeks); re-evaluate.
+#   >= +0.25% of position size      PROCEED    register the full hit_rate_delta
+#                                              run (amended to spread-P&L primary
+#                                              + beta_match + S&P universe call).
+#
+# (0.25% of the ~$3,333 per-leg position ≈ $8/thesis — a deliberately modest
+#  bar for a coarse, low-N pilot; tighten for the full run.)
+#
+# Early-stop guards (pre-registration discipline):
+#   - Do NOT change pilot config mid-run.
+#   - Do NOT add universe symbols mid-run.
+#   - Do NOT raise --max-cost-usd mid-run except for documented LLM rate spikes.
+#
+# Known limitations carried into v2 (disclose in the writeup, do not "fix" mid-run):
+#   - ARM CADENCE is only approximately matched: the random arm saturates
+#     max_new_per_run=5 while the LLM arm is threshold-limited (~1.5/run), so
+#     the random arm accrues N faster. This is an N-timeline asymmetry, not a
+#     per-thesis bias; the stopping rule binds on the slower (LLM) arm. A future
+#     refinement would cap the random arm's daily opens to the LLM arm's
+#     realized count for textbook matched cadence.
+#   - target/stop still trigger on the UNDERLYING leg (risk exits), so holding
+#     periods vary and are mildly correlated with the underlying's move. The
+#     metric is measured on the spread P&L at close regardless; a purer design
+#     would run every thesis to the fixed horizon.
