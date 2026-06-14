@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.dollars-and-cents.factory-verify
+  Post-run health check for the daily factory arms (factory-llm, factory-random).
+  Runs ~/.cents/bin/factory-verify, which writes a PASS/WARN/FAIL report to
+  ~/.cents/logs/<date>/factory-verify.log and drops a FACTORY_VERIFY_<verdict>
+  marker file on non-PASS. It confirms both arms fired cleanly into the active
+  experiment and flags network-skip, factory.toml SHA drift, LLM-arm beta-match
+  starvation, spend pressure, and zombie/SPY-fallback contamination.
+
+  Schedule: 08:30 ET = 05:30 PT, Mon-Fri (after factory-llm at 06:30 ET and
+  factory-random at 06:35 ET complete; mini's system TZ is PT, so Hour is PT =
+  ET - 3 — see CLAUDE.md DST notes).
+
+  This is the $HOME template; the deployed copy in ~/Library/LaunchAgents/
+  factory-verify.plist uses absolute paths. Deploy: expand $HOME, copy to
+  ~/Library/LaunchAgents/factory-verify.plist, then
+  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/factory-verify.plist`.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.dollars-and-cents.factory-verify</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.cents/bin/factory-verify</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/.cents/logs/launchd-factory-verify.out</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.cents/logs/launchd-factory-verify.err</string>
+</dict>
+</plist>
