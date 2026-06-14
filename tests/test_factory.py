@@ -765,6 +765,50 @@ class TestCloseTriggers:
         reloaded = ThesisRepository().get(t.id)
         assert reloaded.outcome == ThesisOutcome.INCORRECT
 
+    def test_stop_clamp_applies_only_to_primary_leg_not_hedge(self, factory_db):
+        """Regression: a stop hit on the underlying must NOT clamp the hedge
+        leg's fill to the underlying's stop price. The hedge trades on a
+        different price scale, so clamping it (e.g. an XLI short to CAT's ~$869
+        stop instead of XLI's ~$170 mark) corrupts realized P&L. The hedge leg
+        must fill at its own mark. See _close_thesis_positions."""
+        _seed_universe([])
+        trepo = ThesisRepository()
+        prepo = PositionRepository()
+        t = Thesis(
+            title="factory:PAIR",
+            symbol="UND",
+            tags=[TAG_FACTORY],
+            stop_price=95.0,
+            cohort=ThesisCohort.NEUTRAL,
+            hedge_symbol="HDG",
+        )
+        trepo.create(t)
+        prepo.create(Position(
+            symbol="UND", side=PositionSide.LONG, entry_price=100.0, size=1.0,
+            thesis_id=t.id,
+        ))
+        prepo.create(Position(
+            symbol="HDG", side=PositionSide.SHORT, entry_price=50.0, size=1.0,
+            thesis_id=t.id,
+        ))
+        # UND drops to 90 (< 95 stop → INCORRECT); HDG marks at 49.
+        engine = FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider({"UND": 90.0, "HDG": 49.0}),
+        )
+        engine.run()
+        assert ThesisRepository().get(t.id).outcome == ThesisOutcome.INCORRECT
+        legs = {
+            p.symbol: p
+            for p in PositionRepository().list(status=PositionStatus.CLOSED)
+            if p.thesis_id == t.id
+        }
+        # Primary leg clamps to worst-for-long: min(mark=90, stop=95) = 90.
+        assert legs["UND"].realized_exit_price == pytest.approx(90.0)
+        # Hedge leg fills at its OWN mark (49), NOT the underlying's 95 stop.
+        assert legs["HDG"].realized_exit_price == pytest.approx(49.0)
+
     def test_horizon_expired_closes_as_unclear(self, factory_db):
         _seed_universe([])
         t = self._seed_open_thesis(

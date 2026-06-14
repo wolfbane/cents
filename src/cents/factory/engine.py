@@ -674,9 +674,15 @@ class FactoryEngine:
             # Gap-aware fill: when the close was triggered by a stop hit, use
             # whichever is worse for the position — last observed price or the
             # stop price — so we stop pretending fills happen exactly at stop.
+            # The stop lives on the PRIMARY (underlying) leg's price scale, so
+            # the clamp + gap penalty apply ONLY to that leg — never to the
+            # hedge leg, whose price is on a different scale. Clamping the hedge
+            # to the underlying's stop corrupts its fill (e.g. an XLI short
+            # "filling" at CAT's ~$869 stop instead of XLI's ~$170 mark).
             realized = exit_signal
             gap_bps = 0.0
-            if triggered_stop and thesis.stop_price is not None:
+            is_primary = pos.symbol == thesis.symbol
+            if triggered_stop and is_primary and thesis.stop_price is not None:
                 if pos.side == PositionSide.LONG:
                     realized = min(exit_signal, thesis.stop_price)
                 else:
