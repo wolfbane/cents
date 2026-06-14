@@ -27,6 +27,14 @@ default_target_pct = 10.0      # close-position trigger as % off entry (positive
 max_new_per_run = 5            # rate-limit on new theses opened per run
 max_per_premise_tag = 2        # max open theses sharing any single premise tag (0 disables)
 
+# Premise-invalidation behaviour (v0.11). When a policy event opposes an open
+# thesis's premise the EventAgent records a PREMISE_INVALIDATION alert (a
+# covariate). By default the thesis is NOT closed — it runs to target / stop /
+# horizon so the forward-return outcome is actually observed, not censored at
+# the event. Set true to also force-close on invalidation (pre-v0.11 behaviour;
+# closes ~86% of theses at ~3 days on tag-overlapping events — research-invalid).
+close_on_invalidation = false
+
 # Vol-scaled sizing (v0.10). When enabled, replaces equal-dollar sizing with
 # inverse-vol scaling toward a target per-position daily $-vol fraction.
 sizing_mode = "equal_dollar"   # "equal_dollar" (research default) or "vol_scaled"
@@ -81,6 +89,10 @@ class FactoryConfig:
     default_target_pct: float = 10.0
     max_new_per_run: int = 5
     max_per_premise_tag: int = 2
+    # Premise-invalidation (v0.11). False = record the alert but let the thesis
+    # run to target/stop/horizon (research default); True = force-close on
+    # invalidation (pre-v0.11 trading-style behaviour).
+    close_on_invalidation: bool = False
     # Sizing (v0.10).
     sizing_mode: str = "equal_dollar"
     target_vol_pct_per_position: float = 0.5

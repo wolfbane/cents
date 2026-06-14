@@ -125,14 +125,14 @@ class Event:
 
         * BULLISH or BEARISH events match only when the event polarity is
           *opposite* the thesis's direction on at least one overlapping tag.
-        * NEUTRAL or UNCLEAR events fall back to legacy unsigned set-
-          intersection — an ambiguous-polarity tariff event that shares a
-          tag with a tariff-dependent thesis should NOT silently fail to
-          alert. The inline comment below documents this fail-open choice.
+        * NEUTRAL or UNCLEAR events do NOT invalidate — an ambiguous-polarity
+          event that merely shares a tag cannot demonstrate opposition, and
+          invalidating on bare overlap fired on unrelated events (a neutral
+          rulemaking doc nuking theses via a broad shared tag). Fail closed.
 
         If ``thesis_premise_direction`` is None or empty (e.g. legacy theses
-        from before per-tag direction was stamped), the function also falls
-        back to unsigned set-intersection so older callers keep working.
+        from before per-tag direction was stamped), the function falls back to
+        unsigned set-intersection so older callers keep working.
         """
         if not thesis_premise_tags or not self.tags:
             return False
@@ -145,14 +145,13 @@ class Event:
             return True
 
         # When the event's polarity is ambiguous (NEUTRAL/UNCLEAR), we cannot
-        # tell whether it confirms or contradicts the thesis. The conservative
-        # choice — and the choice that preserves prior alerting behaviour — is
-        # to fall back to legacy unsigned-intersection matching. Failing
-        # closed here means a tariff-ambiguity event silently fails to alert
-        # a thesis that depends on tariff policy; that's the wrong default
-        # for an invalidation surface.
+        # tell whether it CONTRADICTS the thesis — only that it shares a tag.
+        # Invalidating on bare overlap fired on unrelated events (a NEUTRAL
+        # "pesticide petition" doc nuking pharma theses via a `drug_pricing`
+        # tag), so we fail closed: an ambiguous-polarity event does not
+        # invalidate. Only a directional event that OPPOSES the thesis does.
         if self.polarity not in (EventPolarity.BULLISH, EventPolarity.BEARISH):
-            return True
+            return False
 
         # Polarised matching: only material (BULLISH/BEARISH) events that
         # oppose the thesis direction on a shared tag invalidate.
