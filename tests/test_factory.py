@@ -925,7 +925,7 @@ class TestCloseTriggers:
         # the thesis updated_at, outside the 1-day window.
         with freeze_time("2026-05-18 12:00:00"):
             engine = FactoryEngine(
-                config=_config(entry_threshold=99.0),
+                config=_config(entry_threshold=99.0, close_on_invalidation=True),
                 orchestrator=_orchestrator(),
                 price_provider=_price_provider({"T": 100.0}),
             )
@@ -951,12 +951,40 @@ class TestCloseTriggers:
         trepo.update(reloaded)
 
         engine = FactoryEngine(
-            config=_config(entry_threshold=99.0),
+            config=_config(entry_threshold=99.0, close_on_invalidation=True),
             orchestrator=_orchestrator(),
             price_provider=_price_provider({"T": 100.0}),
         )
         engine.run()
         assert ThesisRepository().get(t.id).outcome == ThesisOutcome.INVALIDATED
+
+    def test_invalidation_does_not_close_by_default(self, factory_db):
+        """v0.11 record-only: a PREMISE_INVALIDATION alert is recorded but does
+        NOT close the thesis under the default config — it runs to target / stop
+        / horizon so the forward-return outcome is observed, not censored."""
+        _seed_universe([])
+        t = self._seed_open_thesis()  # no target/stop/horizon → no price trigger
+        AlertRepository().create(Alert(
+            symbol="T",
+            alert_type=AlertType.PREMISE_INVALIDATION,
+            message="premise broken",
+            data={"thesis_id": t.id},
+            created_at=datetime.now(),
+        ))
+        trepo = ThesisRepository()
+        reloaded = trepo.get(t.id)
+        reloaded.updated_at = datetime.now()
+        trepo.update(reloaded)
+
+        engine = FactoryEngine(
+            config=_config(entry_threshold=99.0),  # default close_on_invalidation=False
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider({"T": 100.0}),
+        )
+        engine.run()
+        after = ThesisRepository().get(t.id)
+        assert after.status == ThesisStatus.OPEN
+        assert after.outcome != ThesisOutcome.INVALIDATED
 
     def test_invalidated_symbol_not_reopened_in_same_run(self, factory_db):
         """After close-as-invalidated, the same-run open phase must skip the symbol."""
@@ -975,7 +1003,7 @@ class TestCloseTriggers:
         trepo.update(reloaded)
 
         engine = FactoryEngine(
-            config=_config(entry_threshold=1.0),  # would otherwise open T trivially
+            config=_config(entry_threshold=1.0, close_on_invalidation=True),  # would otherwise open T trivially
             orchestrator=_orchestrator({"T": 9.0}),
             price_provider=_price_provider({"T": 100.0}),
         )
@@ -1014,7 +1042,7 @@ class TestCloseTriggers:
         trepo.update(reloaded)
 
         engine = FactoryEngine(
-            config=_config(entry_threshold=1.0, max_new_per_run=10),
+            config=_config(entry_threshold=1.0, max_new_per_run=10, close_on_invalidation=True),
             orchestrator=_orchestrator({"T": 9.0, "A": 9.0}),
             price_provider=_price_provider({"T": 100.0, "A": 50.0}),
         )
@@ -1056,7 +1084,7 @@ class TestCloseTriggers:
         trepo.update(reloaded)
 
         engine = FactoryEngine(
-            config=_config(entry_threshold=1.0, cohort_mode="directional_only"),
+            config=_config(entry_threshold=1.0, cohort_mode="directional_only", close_on_invalidation=True),
             orchestrator=_orchestrator({"T": 9.0, "XLK": 9.0}),
             price_provider=_price_provider({"T": 100.0, "XLK": 200.0}),
         )

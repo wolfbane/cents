@@ -75,6 +75,10 @@ class EventAgent(BaseAgent):
 
     name = "event"
 
+    # Minimum event confidence to fire a PREMISE_INVALIDATION alert. Below this
+    # the (polarity, opposition) match is too uncertain to be a useful covariate.
+    _INVALIDATION_MIN_CONFIDENCE = 0.7
+
     def __init__(self, anthropic_client=None):
         super().__init__()
         settings = get_settings()
@@ -760,6 +764,9 @@ class EventAgent(BaseAgent):
         fired = 0
         for thesis in open_theses:
             if not event.matches_premise(thesis.premise_tags, thesis.premise_direction):
+                continue
+            # Low-confidence opposition is too noisy to record as a covariate.
+            if event.confidence < self._INVALIDATION_MIN_CONFIDENCE:
                 continue
             polarity = event.polarity.value
             message = (

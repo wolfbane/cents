@@ -592,9 +592,14 @@ class FactoryEngine:
         self, thesis: Thesis, price_provider
     ) -> ThesisOutcome | None:
         """Return the first triggered outcome for a thesis, or None."""
-        # 1. Premise invalidation: EventAgent fires PREMISE_INVALIDATION alerts
-        #    keyed by thesis_id when a policy event hits a thesis's premise_tags.
-        if self._has_invalidation_alert(thesis):
+        # 1. Premise invalidation: the EventAgent records PREMISE_INVALIDATION
+        #    alerts keyed by thesis_id when a policy event opposes a thesis's
+        #    premise. By default we DO NOT close on them — the alert is a
+        #    recorded covariate and the thesis runs to target/stop/horizon so
+        #    its forward-return outcome is observed instead of censored at the
+        #    event (force-closing here killed ~86% of theses at ~3 days on
+        #    tag-overlapping events). Opt back into closing via close_on_invalidation.
+        if self.config.close_on_invalidation and self._has_invalidation_alert(thesis):
             return ThesisOutcome.INVALIDATED
 
         # 2. Price targets — direction-aware on the primary (underlying) leg.

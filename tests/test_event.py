@@ -582,15 +582,16 @@ class TestPolarityAwareInvalidation:
         assert len(alerts) == 1
         assert alerts[0].alert_type == AlertType.PREMISE_INVALIDATION
 
-    def test_neutral_polarity_falls_back_to_unsigned_intersection(
+    def test_neutral_polarity_does_not_invalidate_direction_aware_thesis(
         self, db_conn, monkeypatch,
     ):
-        """Bug A: an ambiguous (NEUTRAL) event must still alert direction-aware theses.
+        """v0.11: a NEUTRAL/UNCLEAR event must NOT invalidate a direction-aware thesis.
 
-        Previously, NEUTRAL/UNCLEAR polarity silently failed to invalidate.
-        That traded false positives for silent false negatives — exactly the
-        wrong default for an alerting surface. Now NEUTRAL falls back to
-        legacy unsigned-intersection matching so the user still sees the event.
+        An ambiguous-polarity event that merely shares a tag cannot demonstrate
+        opposition. The old fail-open fired on unrelated events (a neutral
+        rulemaking doc nuking pharma theses via a broad tag) — 73% of pilot
+        invalidations took this path. Now it fails closed. Confidence is high
+        (0.9) here to prove it's the polarity, not the confidence gate, filtering.
         """
         self._setup(db_conn, monkeypatch)
         thesis_repo = ThesisRepository(db_conn)
@@ -601,7 +602,7 @@ class TestPolarityAwareInvalidation:
         ))
 
         client = _FakeAnthropic(
-            '{"tags": ["ai_capex"], "polarity": "neutral", "confidence": 0.5}'
+            '{"tags": ["ai_capex"], "polarity": "neutral", "confidence": 0.9}'
         )
         agent = EventAgent(anthropic_client=client)
         monkeypatch.setattr(
@@ -609,7 +610,32 @@ class TestPolarityAwareInvalidation:
         )
 
         summary = agent.refresh(lookback_days=30)
-        assert summary["alerts_fired"] == 1
+        assert summary["alerts_fired"] == 0
+
+    def test_low_confidence_opposing_event_does_not_fire(
+        self, db_conn, monkeypatch,
+    ):
+        """v0.11: a genuinely-opposing event below the confidence gate is too
+        uncertain to record as an invalidation covariate."""
+        self._setup(db_conn, monkeypatch)
+        thesis_repo = ThesisRepository(db_conn)
+        thesis_repo.create(Thesis(
+            title="Long-on-AI", symbol="NVDA",
+            premise_tags=["ai_capex"],
+            premise_direction={"ai_capex": "positive"},
+        ))
+
+        # bearish vs positive = real opposition, but confidence 0.5 < 0.7 gate.
+        client = _FakeAnthropic(
+            '{"tags": ["ai_capex"], "polarity": "bearish", "confidence": 0.5}'
+        )
+        agent = EventAgent(anthropic_client=client)
+        monkeypatch.setattr(
+            agent, "_fetch_federal_register", lambda since: [_stub_fed_register_doc()]
+        )
+
+        summary = agent.refresh(lookback_days=30)
+        assert summary["alerts_fired"] == 0
 
     def test_empty_direction_falls_back_to_legacy_intersection(
         self, db_conn, monkeypatch,
