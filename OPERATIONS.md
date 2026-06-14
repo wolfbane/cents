@@ -164,7 +164,7 @@ intentional model snapshot bump.
 ### 7. Scheduling (launchd, macOS 26)
 
 Two artifacts in the repo: a wrapper script (`scripts/cents-wrap`) and
-eight plist templates (`scripts/launchd/*.plist`).
+nine plist templates (`scripts/launchd/*.plist`).
 
 Copy and adjust the wrapper:
 ```bash
@@ -183,7 +183,7 @@ launchctl enable gui/$(id -u)/<job-label>
 `launchctl load -w` still works on macOS 26 but is deprecated; `bootstrap`
 + `enable` is the supported path.
 
-**Eight jobs** (matching `website/src/content/docs/scheduling.mdx`):
+**Nine jobs** (matching `website/src/content/docs/scheduling.mdx`):
 
 | Time (ET) | Job | Plist | Command |
 |---|---|---|---|
@@ -194,7 +194,14 @@ launchctl enable gui/$(id -u)/<job-label>
 | 04:00 Sun | delistings | `delistings.plist` | `universe ingest-delistings` |
 | 18:00 Mon-Fri | status | `status.plist` | `experiment status --output json` |
 | 18:30 Mon-Fri | eval-run | `eval-run.plist` | `eval run --persist-history` |
-| 18:35 Mon-Fri | eval-drift | `eval-drift.plist` | `eval drift-check` |
+| 19:00 Mon-Fri | eval-drift | `eval-drift.plist` | `eval drift-check` |
+| 19:15 Mon-Fri | alert-digest | `alert-digest.plist` | `alert digest --since 24h` |
+
+The alert-digest job is how PREMISE_INVALIDATION / MODEL_DRIFT alerts
+reach an operator — without it they land silently in the alerts table.
+It runs after eval-drift so a drift alert fired today appears in the
+same day's digest. Read it in the per-day wrapper log
+(`~/.cents/logs/<date>/alert-digest.log`).
 
 `__DATE_SECONDS__` is a sentinel the wrapper substitutes with
 `$(date +%s)` at exec time. Launchd's `ProgramArguments` array doesn't
@@ -325,7 +332,7 @@ spec minimum AND elapsed days ≥ spec floor):
 4. **Disable launchd jobs** (don't delete; the next experiment will reuse
    them):
    ```bash
-   for label in factory-llm factory-random event-refresh shadow delistings status eval-run eval-drift; do
+   for label in factory-llm factory-random event-refresh shadow delistings status eval-run eval-drift alert-digest; do
      launchctl disable gui/$(id -u)/ai.dollars-and-cents.$label
    done
    ```

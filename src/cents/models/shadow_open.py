@@ -22,6 +22,11 @@ class ShadowOpen:
       - "concentration_cap": premise tag already at max_per_premise_tag
       - "budget_locked": notional + new position > budget and no preemption qualified
       - "no_price": no live price available, candidate dropped
+      - "no_hedge_price": paired mode, hedge ETF price unavailable; skipped
+        rather than opening a one-legged "neutral" thesis
+      - "hedge_beta_rejected": beta_match_hedge on, R² gate rejected the fit
+        while history was available; skipped rather than dollar-matching a
+        leg that was supposed to be beta-neutral
       - "sector_lookup_transient": FMP fundamentals unreachable, hedge ETF
         unresolvable; skipped rather than silently degraded to SPY
     """
