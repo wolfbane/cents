@@ -675,6 +675,51 @@ class TestResearchCLI:
 class TestRecommendOutput:
     """Tests for the recommend command's output formatting."""
 
+    def test_recommend_uses_primary_leg_not_hedge_for_paired_thesis(self, mock_db):
+        """Regression: a paired/neutral thesis owns two legs on one thesis_id.
+
+        get_recommendations must evaluate the PRIMARY (underlying) leg, not the
+        hedge leg — the direction-aware stop/target rules read position.side, so
+        the hedge's opposite side would invert the signal. Previously the
+        thesis_id->position dict kept the last-inserted (hedge) leg.
+        """
+        from cents.cli.recommend import Action, get_recommendations
+        from cents.db import PositionRepository, ThesisRepository
+        from cents.models import Position, PositionSide, Thesis, ThesisCohort
+
+        trepo = ThesisRepository()
+        prepo = PositionRepository()
+        # Bullish paired thesis: LONG underlying UND @100 (stop 95), SHORT hedge HDG.
+        t = Thesis(
+            title="paired",
+            symbol="UND",
+            conviction=80.0,
+            stop_price=95.0,
+            target_price=130.0,
+            cohort=ThesisCohort.NEUTRAL,
+            hedge_symbol="HDG",
+        )
+        trepo.create(t)
+        und = Position(
+            symbol="UND", side=PositionSide.LONG, entry_price=100.0, size=1.0, thesis_id=t.id
+        )
+        hdg = Position(
+            symbol="HDG", side=PositionSide.SHORT, entry_price=50.0, size=2.0, thesis_id=t.id
+        )
+        prepo.create(und)
+        prepo.create(hdg)
+
+        # Underlying at 96 — ABOVE the 95 stop, so a LONG is NOT stopped. A SHORT
+        # (the hedge leg's side) would read 96 >= 95 as a stop hit and emit CLOSE.
+        fake = MagicMock()
+        fake.get_latest_prices.return_value = {"UND": 96.0}
+        with patch("cents.data.alpaca.get_price_provider", return_value=fake):
+            recs = get_recommendations()
+
+        rec = next(r for r in recs if r.thesis_id == t.id)
+        assert rec.position_id == und.id  # primary leg, not the hedge
+        assert rec.action != Action.CLOSE  # 96 does not stop a LONG at 95
+
     def test_priority_1_uses_action_review_header(self, capsys):
         """Priority-1 recommendations render under the 'ACTION (review)' header.
 

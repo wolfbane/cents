@@ -211,13 +211,24 @@ def get_recommendations(
         except Exception as e:
             logger.debug("Could not fetch prices: %s", e)
 
-    # Get open positions indexed by thesis_id
+    # Get open positions indexed by thesis_id. A paired/neutral thesis owns
+    # BOTH legs on one thesis_id; the direction-aware stop/target rules read
+    # position.side, so evaluate_thesis must get the PRIMARY (underlying) leg —
+    # the one whose symbol matches thesis.symbol — never the hedge leg, whose
+    # opposite side would invert the stop/target comparison.
     positions = position_repo.list(status=PositionStatus.OPEN)
-    positions_by_thesis = {p.thesis_id: p for p in positions if p.thesis_id}
+    positions_by_thesis: dict[str, list] = {}
+    for p in positions:
+        if p.thesis_id:
+            positions_by_thesis.setdefault(p.thesis_id, []).append(p)
 
     recommendations = []
     for thesis in theses:
-        position = positions_by_thesis.get(thesis.id)
+        legs = positions_by_thesis.get(thesis.id, [])
+        position = next(
+            (p for p in legs if p.symbol == thesis.symbol),
+            legs[0] if legs else None,
+        )
         price = prices.get(thesis.symbol) if thesis.symbol else None
 
         rec = evaluate_thesis(
