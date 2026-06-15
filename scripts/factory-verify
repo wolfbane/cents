@@ -58,19 +58,34 @@ grep -qi "SHA has drifted" <<<"$ST" && bump FAIL "pilot_v2: factory.toml SHA dri
 grep -qi "status=active"   <<<"$ST" || bump WARN "pilot_v2: experiment not active"
 
 # 3. Today's opens by arm (robust, straight from the DB)
+opens_total=0
 if [[ -f "$DB" ]]; then
     opens="$($SQLITE "$DB" \
         "SELECT orchestrator_label||'='||COUNT(*) FROM theses \
          WHERE experiment_id='$EXP_ID' AND date(created_at)=date('now','localtime') \
          GROUP BY orchestrator_label;" 2>/dev/null | paste -sd' ' -)"
     info "opens today: ${opens:-none}"
+    opens_total="$($SQLITE "$DB" \
+        "SELECT COUNT(*) FROM theses \
+         WHERE experiment_id='$EXP_ID' AND date(created_at)=date('now','localtime');" \
+        2>/dev/null)"; : "${opens_total:=0}"
 fi
 
-# 4. Beta-match starvation (new in pilot_v2) — best-effort log scan of the LLM arm
-llmlog="$LOGDIR/factory-llm.log"
-if [[ -f "$llmlog" ]]; then
-    rej=$(grep -cE "hedge_beta_rejected|no_hedge_price" "$llmlog" 2>/dev/null); : "${rej:=0}"
-    info "llm hedge/beta refusals today: $rej"
+# 4. Beta-match starvation (new in pilot_v2). Count refusals from shadow_opens
+#    (the DB reason is authoritative — the arm logs phrase it as "beta fit
+#    rejected", which an earlier log-grep for "hedge_beta_rejected" missed,
+#    silently reporting 0 on a fully-starved run). Escalate when candidates
+#    passed the entry threshold (reached the beta gate) but nothing opened.
+refusals=0
+if [[ -f "$DB" ]]; then
+    refusals="$($SQLITE "$DB" \
+        "SELECT COUNT(*) FROM shadow_opens \
+         WHERE reason IN ('hedge_beta_rejected','no_hedge_price') \
+         AND date(created_at)=date('now','localtime');" 2>/dev/null)"; : "${refusals:=0}"
+fi
+info "beta/hedge refusals today: $refusals"
+if [[ "$opens_total" -eq 0 && "$refusals" -gt 0 ]]; then
+    bump FAIL "beta-match starvation: 0 opens with $refusals candidate(s) refused at the beta gate — experiment accrued no N"
 fi
 
 # 5. Spend within cap
