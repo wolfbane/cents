@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# factory-verify — post-run health check for the daily factory arms.
+#
+# Runs Mon-Fri ~08:30 ET (after factory-llm 06:30 + factory-random 06:35) and
+# writes a PASS/WARN/FAIL report to ~/.cents/logs/<ET-date>/factory-verify.log.
+# Confirms both arms fired cleanly into the active experiment and flags the
+# common failure modes (network-skip, factory.toml SHA drift, beta-match
+# starvation of the LLM arm, spend pressure, zombie/SPY-fallback contamination).
+#
+# Scoped to pilot_v2 (experiment_id b14be90a). Update EXP_ID when re-registering.
+# Deployed to ~/.cents/bin/factory-verify; scheduled by
+# ~/Library/LaunchAgents/factory-verify.plist (see scripts/launchd/ template).
+
+set -uo pipefail
+export TZ="America/New_York"   # match the ET date the arms log under
+
+CB="${CENTS_BIN:-$HOME/.venvs/cents/bin/cents}"
+SQLITE=/usr/bin/sqlite3
+DB="$HOME/.cents/data/pilot.db"
+EXP_ID="b14be90a"   # pilot_v2
+
+DATE="$(date +%Y-%m-%d)"
+LOGDIR="$HOME/.cents/logs/$DATE"
+mkdir -p "$LOGDIR"
+REPORT="$LOGDIR/factory-verify.log"
+
+VERDICT="PASS"
+set_verdict() {
+    case "$1" in
+        FAIL) VERDICT="FAIL" ;;
+        WARN) [[ "$VERDICT" != "FAIL" ]] && VERDICT="WARN" ;;
+    esac
+}
+bump() { set_verdict "$1"; echo "  [$1] $2" >>"$REPORT"; }
+ok()   { echo "  [ok] $1" >>"$REPORT"; }
+info() { echo "  [info] $1" >>"$REPORT"; }
+
+: >"$REPORT"
+echo "=== factory-verify $DATE ET — $(date -Iseconds) ===" >>"$REPORT"
+
+# 1. Did both arms fire cleanly today?
+for arm in factory-llm factory-random; do
+    log="$LOGDIR/$arm.log"
+    if [[ ! -f "$log" ]]; then
+        bump FAIL "$arm: no log today — job did not fire"
+    elif grep -q "SKIP $arm" "$log"; then
+        bump WARN "$arm: skipped (network preflight failed)"
+    elif grep -q "end $arm exit=0" "$log"; then
+        ok "$arm completed exit=0"
+    else
+        bump FAIL "$arm: no clean exit marker ($(grep 'exit=' "$log" | tail -1))"
+    fi
+done
+
+# 2. Experiment integrity — active + frozen-SHA not drifted
+ST="$($CB experiment status pilot_v2 2>&1)"
+grep -qi "SHA has drifted" <<<"$ST" && bump FAIL "pilot_v2: factory.toml SHA drift — config changed mid-experiment"
+grep -qi "status=active"   <<<"$ST" || bump WARN "pilot_v2: experiment not active"
+
+# 3. Today's opens by arm (robust, straight from the DB)
+if [[ -f "$DB" ]]; then
+    opens="$($SQLITE "$DB" \
+        "SELECT orchestrator_label||'='||COUNT(*) FROM theses \
+         WHERE experiment_id='$EXP_ID' AND date(created_at)=date('now','localtime') \
+         GROUP BY orchestrator_label;" 2>/dev/null | paste -sd' ' -)"
+    info "opens today: ${opens:-none}"
+fi
+
+# 4. Beta-match starvation (new in pilot_v2) — best-effort log scan of the LLM arm
+llmlog="$LOGDIR/factory-llm.log"
+if [[ -f "$llmlog" ]]; then
+    rej=$(grep -cE "hedge_beta_rejected|no_hedge_price" "$llmlog" 2>/dev/null); : "${rej:=0}"
+    info "llm hedge/beta refusals today: $rej"
+fi
+
+# 5. Spend within cap
+HEAD="$($CB usage headroom 2>&1)"
+info "$(head -1 <<<"$HEAD")"
+grep -qiE "Status:[[:space:]]*ok" <<<"$HEAD" || bump WARN "usage headroom status not ok"
+
+# 6. Contamination markers
+for arm in factory-llm factory-random; do
+    log="$LOGDIR/$arm.log"; [[ -f "$log" ]] || continue
+    grep -qiE "zombie|SPY[- ]?fallback" "$log" && bump WARN "$arm: zombie/SPY-fallback marker in log"
+done
+
+echo "=== VERDICT: $VERDICT ===" >>"$REPORT"
+
+# Drop a greppable marker file on non-PASS for at-a-glance scanning
+rm -f "$LOGDIR"/FACTORY_VERIFY_* 2>/dev/null
+[[ "$VERDICT" != "PASS" ]] && : >"$LOGDIR/FACTORY_VERIFY_$VERDICT"
+
+echo "factory-verify $DATE: $VERDICT  (detail: $REPORT)"
+exit 0
