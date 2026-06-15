@@ -1005,8 +1005,21 @@ class FactoryEngine:
             primary_side = PositionSide.SHORT if result.conviction_delta < 0 else PositionSide.LONG
             history_supported = self._history_supported()
 
+            # Window must cover every downstream use of primary_closes.
+            # realized-vol needs vol_lookback_days bars, but the beta-match
+            # path reuses this same array for the beta estimate, which needs
+            # beta_lookback_days+1 bars. Sizing for vol alone
+            # (vol_lookback_days*2 ≈ 28 trading bars) starved estimate_beta,
+            # which returned None for every candidate so the beta gate refused
+            # all paired opens (pilot_v2 day-1 zero-open bug, cents-soum).
+            # Mirror the hedge fetch (beta_lookback_days*2) when beta-matching.
+            primary_history_days = cfg.vol_lookback_days * 2
+            if cfg.beta_match_hedge:
+                primary_history_days = max(
+                    primary_history_days, cfg.beta_lookback_days * 2
+                )
             primary_closes, primary_volumes = (
-                self._get_history(symbol, cfg.vol_lookback_days * 2)
+                self._get_history(symbol, primary_history_days)
                 if history_supported else (None, None)
             )
 
