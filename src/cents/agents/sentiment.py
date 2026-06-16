@@ -149,6 +149,33 @@ SENTIMENT_CONFIG = {
 }
 
 
+# Trailing legal/corporate suffixes stripped before a phrase news query so it
+# matches how articles name the issuer ("Citigroup Inc." -> "Citigroup").
+_CORP_SUFFIX_RE = re.compile(
+    r"[\s,]+(?:incorporated|inc|corporation|corp|company|co|limited|ltd|llc|plc|"
+    r"s\.?a|n\.?v|ag|&)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _clean_company_name(name: str) -> str:
+    """Strip stacked trailing corporate suffixes from a company name.
+
+    'Citigroup Inc.' -> 'Citigroup'; 'JPMorgan Chase & Co.' -> 'JPMorgan Chase'.
+    Returns the input (whitespace-stripped) when nothing matches.
+    """
+    out = (name or "").strip()
+    for _ in range(3):  # handle stacked suffixes e.g. 'X Co., Ltd.'
+        stripped = _CORP_SUFFIX_RE.sub("", out).strip()
+        if stripped == out or not stripped:
+            break
+        out = stripped
+    # Leading article over-constrains a phrase match ('The Coca-Cola' misses
+    # 'Coca-Cola reported …'). Drop it unless that empties the name.
+    dearticled = re.sub(r"^the\s+", "", out, flags=re.IGNORECASE).strip()
+    return dearticled or out
+
+
 def _apply_news_cutoff(articles: list[dict]) -> list[dict]:
     """Drop articles whose ``publishedAt`` is on/after today's market open.
 
@@ -462,11 +489,35 @@ class SentimentAgent(BaseAgent):
         except RECOVERABLE_EXCEPTIONS as e:
             return self._error_result(symbol, e)
 
+    def _news_query(self, symbol: str) -> str:
+        """Build the NewsAPI query for a symbol.
+
+        Prefer the issuer's company name (phrase-quoted) over the bare ticker.
+        Single-letter / common-word tickers (C, F, T, V, GM, KO, …) return
+        off-entity noise when queried as just the symbol — NewsAPI treats
+        ``q=C`` as a near-stopword and returns random recent articles. The
+        company name comes from the FMP profile (cached daily; already warm
+        from the fundamentals agent this run). Falls back to the ticker on any
+        lookup failure so news fetch never breaks on a missing name.
+        """
+        try:
+            from cents.data.fmp import get_fundamentals_provider
+
+            raw = getattr(
+                get_fundamentals_provider().get_fundamentals(symbol), "name", None
+            )
+            name = _clean_company_name(raw) if raw else ""
+            if name:
+                return f'"{name}"'
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("company-name lookup failed for %s: %s", symbol, exc)
+        return symbol
+
     def _fetch_news(self, symbol: str) -> list[dict]:
         """Fetch news from NewsAPI."""
         url = (
             f"https://newsapi.org/v2/everything"
-            f"?q={quote(symbol)}&language=en&sortBy=publishedAt&pageSize=10"
+            f"?q={quote(self._news_query(symbol))}&language=en&sortBy=publishedAt&pageSize=10"
             f"&apiKey={self.news_api_key}"
         )
         req = Request(url, headers={"User-Agent": "cents/0.1"})
