@@ -482,3 +482,48 @@ class TestScreenerCli:
         import json
         payload = json.loads(result.output)
         assert payload["symbols"] == ["AAA", "BBB"]
+
+
+class TestDelistedFilter:
+    """v0.13: live resolution drops symbols with a tracked delisting."""
+
+    def _delistings_repo(self, db_conn, symbols: list[str]):
+        from datetime import date
+
+        from cents.db import DelistingsRepository
+        from cents.models import Delisting
+
+        repo = DelistingsRepository(db_conn)
+        for s in symbols:
+            repo.upsert(Delisting(symbol=s, delisted_on=date(2026, 5, 21)))
+        return repo
+
+    def test_live_static_resolution_drops_delisted(self, db_conn):
+        repo = self._delistings_repo(db_conn, ["BK"])
+        uni = Universe(name="t", source=UniverseSource.STATIC, symbols=["AAPL", "BK"])
+        with patch(
+            "cents.factory.universe_resolver.DelistingsRepository"
+        ) as MockRepo:
+            MockRepo.return_value = repo
+            assert resolve_symbols(uni) == ["AAPL"]
+
+    def test_asof_resolution_keeps_delisted(self, db_conn):
+        """Point-in-time membership must keep delisted members — dropping
+        them would re-introduce survivorship bias in backtests."""
+        from datetime import date
+
+        repo = self._delistings_repo(db_conn, ["BK"])
+        uni = Universe(name="t", source=UniverseSource.STATIC, symbols=["AAPL", "BK"])
+        with patch(
+            "cents.factory.universe_resolver.DelistingsRepository"
+        ) as MockRepo:
+            MockRepo.return_value = repo
+            assert resolve_symbols(uni, asof_date=date(2026, 1, 1)) == ["AAPL", "BK"]
+
+    def test_delistings_read_failure_is_nonfatal(self):
+        uni = Universe(name="t", source=UniverseSource.STATIC, symbols=["AAPL"])
+        with patch(
+            "cents.factory.universe_resolver.DelistingsRepository",
+            side_effect=RuntimeError("db unavailable"),
+        ):
+            assert resolve_symbols(uni) == ["AAPL"]

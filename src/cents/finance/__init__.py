@@ -14,6 +14,7 @@ from cents.finance.costs import (
 from cents.finance.hedging import (
     beta_match_ratio,
     estimate_beta,
+    estimate_beta_fit,
 )
 from cents.finance.liquidity import (
     average_daily_volume,
@@ -40,6 +41,7 @@ __all__ = [
     "apply_close_cost",
     "beta_match_ratio",
     "estimate_beta",
+    "estimate_beta_fit",
     "average_daily_volume",
     "passes_borrow_gate",
     "passes_liquidity_gate",

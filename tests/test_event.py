@@ -744,3 +744,44 @@ class TestEventAgentLookahead:
         )
         assert len(scoped) == 1
         assert scoped[0].source_id == "e1"
+
+
+class TestInvalidationConfidenceGate:
+    """v0.13: gate raised 0.70 → 0.75 — the classifier's modal output is
+    exactly 0.7, so a 0.7 gate admitted its least-certain bucket wholesale
+    (pilot_v2: 47 of 54 fired alerts sat at exactly 0.70, mostly routine
+    EPA filings repeatedly hitting the same few energy theses)."""
+
+    def _run_refresh(self, db_conn, monkeypatch, confidence: float) -> dict:
+        monkeypatch.setattr(
+            "cents.agents.event.EventRepository", lambda: EventRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.agents.event.ThesisRepository", lambda: ThesisRepository(db_conn)
+        )
+        monkeypatch.setattr(
+            "cents.agents.event.AlertRepository", lambda: AlertRepository(db_conn)
+        )
+        thesis_repo = ThesisRepository(db_conn)
+        thesis_repo.create(Thesis(
+            title="Long-on-AI", symbol="NVDA",
+            premise_tags=["ai_capex"],
+            premise_direction={"ai_capex": "positive"},
+        ))
+        client = _FakeAnthropic(
+            '{"tags": ["ai_capex"], "polarity": "bearish", '
+            f'"confidence": {confidence}}}'
+        )
+        agent = EventAgent(anthropic_client=client)
+        monkeypatch.setattr(
+            agent, "_fetch_federal_register", lambda since: [_stub_fed_register_doc()]
+        )
+        return agent.refresh(lookback_days=30)
+
+    def test_modal_070_confidence_no_longer_fires(self, db_conn, monkeypatch):
+        summary = self._run_refresh(db_conn, monkeypatch, confidence=0.72)
+        assert summary["alerts_fired"] == 0
+
+    def test_above_gate_still_fires(self, db_conn, monkeypatch):
+        summary = self._run_refresh(db_conn, monkeypatch, confidence=0.8)
+        assert summary["alerts_fired"] == 1

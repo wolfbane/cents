@@ -17,6 +17,8 @@ Two responsibilities:
 from __future__ import annotations
 
 import logging
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 
 from cents.agents.base import extract_json_object, safe_delimit
@@ -83,6 +85,81 @@ _SYSTEM_PROMPT = (
 )
 
 
+def compute_ambient_tags(
+    candidate_tag_lists: Iterable[Sequence[str]],
+    *,
+    threshold: float,
+    min_sample: int,
+) -> frozenset[str]:
+    """Identify *ambient* premise tags from a population of classified candidates.
+
+    A tag carried by at least ``threshold`` of the classified candidates is
+    systematic ("the macro weather" — e.g. fed_policy / tariffs.universal that
+    the classifier attaches to nearly every thesis) rather than an idiosyncratic
+    position. Ambient tags must not gate the per-tag concentration cap: their
+    exposure is already managed by the neutral-cohort hedge and the
+    gross/position caps, and gating on them degenerates the book (a handful of
+    positions saturate the tag and then nothing can open).
+
+    Returns an empty set when the exemption is disabled (``threshold <= 0``) or
+    the sample is too thin to estimate prevalence (fewer than ``min_sample``
+    candidates) — a conservative cold-start that leaves the plain per-tag cap in
+    force until the arm has classified enough candidates to tell ambient from
+    idiosyncratic.
+    """
+    if threshold <= 0:
+        return frozenset()
+    lists = [{t for t in tags if t} for tags in candidate_tag_lists]
+    n = len(lists)
+    if n < min_sample:
+        return frozenset()
+    counts: Counter[str] = Counter()
+    for tag_set in lists:
+        counts.update(tag_set)
+    return frozenset(tag for tag, c in counts.items() if c / n >= threshold)
+
+
+def premise_concentration_exceeded(
+    candidate_tags: Sequence[str],
+    candidate_direction: Mapping[str, str] | None,
+    open_books: Iterable[tuple[Sequence[str], Mapping[str, str] | None]],
+    cap: int,
+    *,
+    ambient_tags: frozenset[str] = frozenset(),
+) -> bool:
+    """True if opening this candidate would breach the per-(tag, direction) cap.
+
+    ``open_books`` is the set of open theses the cap is scoped to — already
+    filtered to the deciding arm when per-arm scoping is on — supplied as
+    ``(tags, direction)`` pairs. Buckets on ``(tag, direction)`` so a bullish
+    and a bearish thesis on the same tag don't count against each other (a
+    spread, not concentration); a thesis with no recorded direction for a tag
+    falls into the ``(tag, "*")`` bucket.
+
+    ``ambient_tags`` are systematic and never gate — skipped both when counting
+    the book and when checking the candidate — so a thesis is judged on its
+    *idiosyncratic* premises, not on the macro weather it also happens to carry.
+    """
+    if not candidate_tags or cap <= 0:
+        return False
+    counts: dict[tuple[str, str], int] = {}
+    for tags, direction in open_books:
+        direction = direction or {}
+        for tag in tags:
+            if tag in ambient_tags:
+                continue
+            key = (tag, direction.get(tag, "*"))
+            counts[key] = counts.get(key, 0) + 1
+    candidate_direction = candidate_direction or {}
+    for tag in candidate_tags:
+        if tag in ambient_tags:
+            continue
+        key = (tag, candidate_direction.get(tag, "*"))
+        if counts.get(key, 0) >= cap:
+            return True
+    return False
+
+
 def _record_source(sink: list[str] | None, source: PremiseSource) -> None:
     """Append the classifier-path label to the engine-provided sink (if any).
 
@@ -147,6 +224,7 @@ def classify_premise_tags(
     anthropic_client=None,
     side: str | None = None,
     source_sink: list[str] | None = None,
+    deterministic_only: bool = False,
 ) -> tuple[list[str], dict[str, str]]:
     """Return ``(tags, direction)`` capturing regime dependencies of the thesis.
 
@@ -158,12 +236,24 @@ def classify_premise_tags(
 
     Returns ``([], {})`` when no anthropic client is configured or the call fails.
 
+    ``deterministic_only=True`` skips the LLM entirely and returns the
+    sector-derived tag set (v0.13). The factory engine sets this for the
+    random control arm: its thesis text is a synthetic template, and arm
+    membership — not a text-length heuristic — is the honest discriminator.
+    (pilot_v2 defect: the 72-char factory hypothesis cleared the
+    ``_SPARSE_SUMMARY_THRESHOLD`` sparse check, so the classifier ran on
+    random-arm theses and occasionally hallucinated tags from the ticker
+    alone, breaking the control arm's tag determinism.)
+
     When ``side`` is supplied ("long" or "short") AND the summary is too thin
     for the LLM to anchor on (or no LLM client is available) AND the LLM
     returns no tags, falls back to a sector-derived tag set so synthetic
-    theses (e.g. random-arm control) remain invalidatable by policy events.
+    theses remain invalidatable by policy events.
     See ``_sector_fallback_tags`` and ``SECTOR_FALLBACK_TAGS``.
     """
+    if deterministic_only:
+        return _sector_fallback_tags(symbol, side, source_sink)
+
     sparse = len((summary or "").strip()) < _SPARSE_SUMMARY_THRESHOLD
 
     client = anthropic_client or _build_anthropic_client()

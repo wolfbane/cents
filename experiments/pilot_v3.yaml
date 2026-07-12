@@ -1,0 +1,168 @@
+# Pilot v3 — restart after pilot_v2 was discarded (starved + arm-coupled).
+#
+# pilot_v2's DATA WAS CLEAN — the drift gate failed closed, so nothing opened
+# under modified code — but the experiment was unrecoverable for two reasons:
+# a 15-run-day outage (uncommitted engine work changed the behavioural-payload
+# SHA on 2026-06-19; every run 2026-06-22 → 2026-07-10 aborted), and a frozen
+# design whose gates both starved N and coupled the two arms. Accrued in 27
+# days: 4 LLM / 10 random opens, 1 close (a cross-arm preemption — itself one
+# of the defects). See pilot_v2's verdict_json for the full forensics.
+#
+# What changed since pilot_v2 (v0.12 + v0.13; each backed by pilot_v2's data):
+#   1. ARM-INDEPENDENT BOOKS (budget_per_arm=true). One shared book let the
+#      random arm preempt (censor) LLM-arm theses — thesis C was evicted the
+#      minute the random arm opened MET (2026-06-19T06:35) — and either arm's
+#      holdings blocked the other from evaluating those symbols. Budget,
+#      preemption, and held-symbol skips are now scoped to the deciding arm.
+#      This removes pilot_v2's core validity defect: the control arm could
+#      perturb the treatment arm.
+#   2. PER-ARM CONCENTRATION LEDGER + PINNED AMBIENT TAGS. The per-tag cap
+#      (max_per_premise_tag=2) now counts only the deciding arm's book, and
+#      fed_policy / rates / tariffs.universal — carried by 40-80% of LLM-arm
+#      candidates — are statically exempt (ambient_tags, frozen into the SHA).
+#      In pilot_v2 these tags saturated the cap within a day and froze both
+#      books (181 llm / 168 random cap rejections in 5 run-days). The list is
+#      pinned rather than estimated so the effective gating rule cannot drift
+#      mid-experiment.
+#   3. BETA GATE RE-TUNED 0.5/60d → 0.3/90d, FIT RECORDED. The old gate passed
+#      only ~21% of the universe (median stock-vs-sector-ETF R² = 0.317) and
+#      refused 88-92% of gate-reaching candidates — the single biggest
+#      N-starver. hedge_fit_r2 + hedge_beta now persist per thesis, so the
+#      neutral cohort is stratifiable by hedge quality (the honesty the strict
+#      gate was buying, at ~4x the throughput).
+#   4. RANDOM ARM NEVER CALLS THE CLASSIFIER (deterministic_only). pilot_v2's
+#      sparse-text heuristic was defeated by the 72-char factory hypothesis;
+#      the classifier hallucinated energy tags for COP/NEE from the ticker
+#      alone and those two theses drew 40 of 54 invalidation alerts. Arm
+#      membership now decides the sector-tag path — control-arm tags are
+#      deterministic again.
+#   5. INVALIDATION CONFIDENCE GATE 0.70 → 0.75. 47 of 54 pilot_v2 alerts sat
+#      at exactly 0.70 (the classifier's modal output = the old gate), mostly
+#      routine EPA filings. The invalidation covariate now records opposition
+#      the classifier is actually confident about.
+#   6. UNIVERSE HYGIENE. Live resolution drops tracked delistings (pilot_v2
+#      froze the dead ticker BK into its universe); a frozen universe that
+#      delists mid-run shadow-logs 'delisted' pre-evaluation.
+#   7. target_positions 30 → 60 (per arm). Stopping-rule arithmetic: 75 closed
+#      per arm inside ~75 days at a 30-day horizon needs ~30 theses per arm in
+#      flight (60 legs).
+#
+# Pre-flight checklist before `cents experiment register experiments/pilot_v3.yaml`:
+#   1. Running binary is v0.13 (pilot-v3 branch): `cents experiment status`
+#      must emit config_drift_detail on any drift, and factory.toml must parse
+#      ambient_tags + budget_per_arm.
+#   2. ~/.cents/factory.toml has, for this run:
+#         cohort_mode           = "paired"
+#         sizing_mode           = "equal_dollar"
+#         beta_match_hedge      = true
+#         beta_lookback_days    = 90            # << changed for v3
+#         beta_min_r_squared    = 0.3           # << changed for v3
+#         budget_per_arm        = true          # << new for v3
+#         concentration_per_arm = true          # << new for v3
+#         ambient_tags          = ["fed_policy", "rates", "tariffs.universal"]
+#         target_positions      = 60            # << changed for v3
+#         news_cutoff_time      = "09:30"
+#         close_on_invalidation = false
+#   3. BOTH cost caps configured (daily floor in ~/.cents/config.toml:
+#      max_llm_spend_usd_per_day = 10.0; AND --max-cost-usd 10.0 on each run).
+#   4. 0 open factory-tag theses (pilot_v2's 13 open theses closed
+#      administratively at discard — verify with `cents factory status`).
+#   5. Delistings ingested within 7 days (BK must NOT appear in the frozen
+#      universe this time).
+#   6. `cents usage headroom` returns status=ok.
+#   7. `cents eval run --gate ... --tolerance-pp 3` passes (model not drifted).
+#   8. Random arm launchd job hard-codes a fixed/derived `--orchestrator-seed`.
+#   9. factory-verify redeployed with EXP_ID = pilot_v3's id AND a webhook
+#      configured — pilot_v2's outage ran 16 consecutive FAILs with no
+#      notification path; that hole must be closed before v3 starts.
+
+name: pilot_v3
+hypothesis: >
+  On S&P 100 paired-neutral, BETA-MATCHED theses, with ARM-INDEPENDENT
+  books (each arm owns its own budget, preemption, and concentration
+  ledger), the LLM orchestrator's conviction produces a higher mean net
+  SPREAD P&L per thesis than the matched-cadence random control.
+  Primary go/no-go: the LLM arm's mean per-thesis spread P&L is
+  directionally ahead of the random arm's at N per arm. A delta of zero
+  or negative triggers ABORT before committing to the full experiment.
+
+# PRIMARY METRIC: unchanged from pilot_v2 — mean net spread P&L per closed
+# thesis, LLM arm minus random arm. "Spread P&L" = sum of `Position.pnl` (NET
+# of costs) across BOTH legs of a thesis. Group closed neutral-cohort theses
+# by `orchestrator_label`, take the mean of (Σ leg pnl) per thesis, subtract.
+# Do NOT use the outcome-label hit-rate from `factory analyze` as the primary
+# read — it is labeled on the underlying leg (beta-contaminated); report it
+# only as a diagnostic secondary.
+primary_metric: mean_net_spread_pnl_per_thesis__llm_minus_random
+
+# Pilot N unchanged (go/no-go, not falsification). With the v3 gates the LLM
+# arm should open near max_new_per_run while its book fills (~3 weeks), then
+# rate-limit on closes: a ~30-thesis book at a 30-day horizon turns over ~1
+# close/day → ~75 closed/arm lands near the 75-day calendar floor. If the LLM
+# arm still starves (< ~1.5 opens/run over the first 2 weeks), that is itself
+# a red flag to investigate BEFORE the stopping rule — check `cents factory
+# funnel` for which gate is binding, and abort/re-register rather than tune
+# mid-run.
+minimum_n_per_arm: 75
+
+minimum_calendar_days: 75
+
+stopping_rule: "later of 75 calendar days AND N=75 per arm (slower arm binds)"
+
+# Secondary metrics (reported, not the go/no-go):
+#   - spread_sign_hit_rate per arm (cents cohort win_rate).
+#   - mean_pnl_per_thesis stratified by hedge_fit_r2 bucket (new in v3: the
+#     0.3 gate admits weaker fits by design; the stratification is the
+#     disclosure) and by hedge_basis.
+#   - calibration_brier_score; arm-by-arm INVALIDATED + rejection-funnel rates
+#     (cents factory funnel) to confirm the arms' cadences stay comparable.
+#   - per-arm invalidation alert counts (the 0.75 gate + deterministic random
+#     tags should collapse pilot_v2's 49-vs-5 random/llm alert asymmetry).
+#
+# Abort criteria (independent of the spread-P&L delta):
+#   - cost overrun: actual/estimated daily LLM spend > 2.0
+#   - LLM-arm open cadence < ~1.5/run averaged over the first 2 weeks
+#     (gate starvation recurring — the design failed, do not tune mid-run)
+#   - any behavioural-payload SHA drift (the run aborts by design; fix the
+#     environment, never --force-frozen-drift a registered pilot)
+#
+# Decision tree — PRE-COMMIT BEFORE SEEING DATA. Evaluate at the stopping rule
+# (N >= 75 per arm AND calendar >= 75 days). Metric is the mean net spread P&L
+# per thesis, LLM minus random (USD/thesis), net of modeled costs.
+#
+#   spread_pnl_delta (USD/thesis)   verdict    next action
+#   -----------------------------   -------    --------------------------------
+#   < 0                             ABORT      do not run the full experiment;
+#                                              publish the negative result;
+#                                              propose a different design.
+#   0 to < +0.25% of position size  EXTEND     run to N=150/arm for a finer read
+#                                              (~4-5 more weeks); re-evaluate.
+#   >= +0.25% of position size      PROCEED    register the full hit_rate_delta
+#                                              run (amended to spread-P&L primary
+#                                              + v3 arm-independence design).
+#
+# (0.25% of the ~$1,667 per-leg position ≈ $4/thesis — modest bar for a
+#  coarse, low-N pilot; tighten for the full run.)
+#
+# Early-stop guards (pre-registration discipline):
+#   - Do NOT change pilot config mid-run. Code changes count: the behavioural
+#     payload hashes the effective FactoryConfig, prompts, model snapshot, and
+#     EVENT_TAGS — develop on a laptop scratch portfolio, never on the mini's
+#     checkout while a pilot is live (how pilot_v2 died).
+#   - Do NOT add universe symbols mid-run.
+#   - Do NOT raise --max-cost-usd mid-run except for documented LLM rate spikes.
+#
+# Known limitations carried into v3 (disclose in the writeup, do not "fix" mid-run):
+#   - ARM CADENCE is only approximately matched: the random arm saturates
+#     max_new_per_run=5 while the LLM arm is threshold-limited. This is an
+#     N-timeline asymmetry, not a per-thesis bias; the stopping rule binds on
+#     the slower (LLM) arm.
+#   - target/stop still trigger on the UNDERLYING leg (risk exits), so holding
+#     periods vary and are mildly correlated with the underlying's move.
+#   - The random arm's sector-fallback tags cap at 2 vs the LLM arm's 0-5, so
+#     the LLM arm retains more event-intersection surface area; compare
+#     invalidation rates against the ~2.5x tag-count ratio, not 1:1.
+#   - Ambient-tag exemption means fed_policy/rates/tariffs.universal premise
+#     clustering is intentionally NOT capped; that exposure is managed by the
+#     paired hedge + gross caps and is visible in premise_tags for post-hoc
+#     stratification.

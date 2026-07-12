@@ -6,7 +6,7 @@ import logging
 import os
 import tomllib
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,47 @@ default_stop_pct = -5.0        # close-position trigger as % off entry (negative
 default_target_pct = 10.0      # close-position trigger as % off entry (positive)
 max_new_per_run = 5            # rate-limit on new theses opened per run
 max_per_premise_tag = 2        # max open theses sharing any single premise tag (0 disables)
+
+# Premise-concentration scoping (v0.12). The per-tag cap above is meant to
+# police *idiosyncratic* premise clustering within one book (e.g. 5 secret
+# drug_pricing bets), not systematic macro exposure. Two corrections make it
+# measure that instead of degenerating the book:
+#   concentration_per_arm — count only the deciding arm's own open theses.
+#     Concentration is a property of a single book; in production one
+#     orchestrator runs one book. False restores the legacy shared ledger that
+#     let the two experiment arms crowd each other through one tag count.
+#   ambient_tag_prevalence — a tag carried by >= this fraction of the arm's
+#     recently-classified candidates is systematic ("the macro weather", e.g.
+#     fed_policy / tariffs.universal stapled onto every thesis), not a position.
+#     It is exempt from the cap — its exposure is already handled by the
+#     neutral-cohort hedge + gross/position caps. 0 disables the exemption.
+#   ambient_lookback_days / ambient_min_sample — window and minimum sample for
+#     the prevalence estimate. Below the minimum, no tag is treated as ambient
+#     (conservative cold-start: a fresh book gates on the plain per-tag cap).
+#   ambient_tags — static pre-registered ambient list (v0.13). When non-empty
+#     it REPLACES the prevalence estimator: exactly these tags are exempt from
+#     the cap, for both arms, every run. Pin this for registered experiments —
+#     an estimated exemption drifts with prevalence mid-experiment, making the
+#     effective gating rule time-varying (and it never triggers on the random
+#     arm, whose 2-tag sector sets keep every tag under typical thresholds).
+#     pilot_v2 measured prevalence (LLM arm): fed_policy 79.5%, rates 69.5%,
+#     tariffs.universal 41.1% — the three tags that produced nearly all
+#     concentration_cap rejections on both arms.
+concentration_per_arm = true
+ambient_tag_prevalence = 0.6
+ambient_lookback_days = 14
+ambient_min_sample = 20
+ambient_tags = []
+
+# Book scoping (v0.13). When true, each orchestrator arm owns an independent
+# book: budget accounting, conviction-weighted preemption, and held-symbol
+# skips consider only the deciding arm's open theses (budget_usd is per-arm).
+# False restores the legacy shared book, where the control arm competes with
+# the LLM arm for capital and can preempt — i.e. censor — its theses before
+# their outcomes are observed (pilot_v2: the random arm's MET open evicted
+# the LLM arm's C thesis at day 3), and where one arm's holdings block the
+# other arm from even evaluating those symbols.
+budget_per_arm = true
 
 # Premise-invalidation behaviour (v0.11). When a policy event opposes an open
 # thesis's premise the EventAgent records a PREMISE_INVALIDATION alert (a
@@ -50,13 +91,19 @@ gap_slippage_bps = 25.0             # extra bps applied when a stop is breached 
 borrow_rate_pa_pct = 3.0            # synthetic annual borrow rate applied to shorts
 
 # Paired-hedge beta matching (v0.10). When enabled, hedge leg notional is
-# scaled by a 60-day historical beta vs the hedge ETF rather than dollar-matched.
+# scaled by historical beta vs the hedge ETF rather than dollar-matched.
+# Defaults re-tuned for v0.13: a 2026-07 survey of the pilot universe found
+# median stock-vs-sector-ETF R² of ~0.32 at 60d — the old 0.5 gate passed only
+# 21% of the universe and starved paired opens (88-92% of gate-reaching
+# candidates refused). 0.3 over 90d passes ~62% while still refusing the
+# genuinely uncorrelated fits. The fitted R² is recorded per-thesis
+# (hedge_fit_r2) so analytics can stratify neutral cohorts by hedge quality.
 beta_match_hedge = false       # equal-dollar hedge by default (research mode)
 default_beta = 1.0
-beta_lookback_days = 60
+beta_lookback_days = 90
 beta_min = 0.10
 beta_max = 5.0
-beta_min_r_squared = 0.5   # reject beta estimate when fit R² falls below this
+beta_min_r_squared = 0.3   # reject beta estimate when fit R² falls below this
 
 # Liquidity + borrow gates (v0.10).
 min_adv_multiple = 50.0        # require median daily $-volume >= this x position size
@@ -89,6 +136,23 @@ class FactoryConfig:
     default_target_pct: float = 10.0
     max_new_per_run: int = 5
     max_per_premise_tag: int = 2
+    # Premise-concentration scoping (v0.12). See DEFAULT_TOML for rationale.
+    # Per-arm ledger + ambient-tag exemption so the per-tag cap polices
+    # idiosyncratic premise clustering within one book, not systematic macro
+    # factors the cohort hedge + gross caps already manage.
+    concentration_per_arm: bool = True
+    ambient_tag_prevalence: float = 0.6
+    ambient_lookback_days: int = 14
+    ambient_min_sample: int = 20
+    # Static ambient list (v0.13). Non-empty REPLACES the prevalence estimator
+    # (both arms, every run) — pin for registered experiments so the effective
+    # gating rule can't drift mid-experiment. See DEFAULT_TOML for rationale.
+    ambient_tags: list[str] = field(default_factory=list)
+    # Book scoping (v0.13). True = each arm owns an independent book (budget,
+    # preemption, held-symbol skips are per-arm; budget_usd is per-arm). False
+    # = legacy shared book where arms compete for capital and the control arm
+    # can preempt/censor LLM-arm theses. See DEFAULT_TOML for rationale.
+    budget_per_arm: bool = True
     # Premise-invalidation (v0.11). False = record the alert but let the thesis
     # run to target/stop/horizon (research default); True = force-close on
     # invalidation (pre-v0.11 trading-style behaviour).
@@ -106,10 +170,10 @@ class FactoryConfig:
     # Hedging (v0.10).
     beta_match_hedge: bool = False
     default_beta: float = 1.0
-    beta_lookback_days: int = 60
+    beta_lookback_days: int = 90
     beta_min: float = 0.10
     beta_max: float = 5.0
-    beta_min_r_squared: float = 0.5
+    beta_min_r_squared: float = 0.3
     # Liquidity (v0.10).
     min_adv_multiple: float = 50.0
     liquidity_lookback_days: int = 20
@@ -202,6 +266,12 @@ def load_factory_config(path: Path | None = None) -> FactoryConfig:
     fields: dict[str, object] = {}
     for name, anno in typing.get_type_hints(FactoryConfig).items():
         if name not in data:
+            continue
+        if anno == list[str]:
+            value = data[name]
+            if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+                raise TypeError(f"FactoryConfig field {name!r} must be a list of strings")
+            fields[name] = list(value)
             continue
         cast = _CASTERS.get(anno)
         if cast is None:

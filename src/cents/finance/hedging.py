@@ -20,18 +20,23 @@ from statistics import mean
 logger = logging.getLogger(__name__)
 
 
-def estimate_beta(
+def estimate_beta_fit(
     underlying_closes: list[float],
     hedge_closes: list[float],
     *,
     lookback: int = 60,
-    min_r_squared: float | None = None,
-) -> float | None:
-    """OLS beta of log returns: underlying ~ hedge over the last ``lookback`` bars.
+) -> tuple[float, float | None] | None:
+    """OLS ``(beta, r_squared)`` of log returns: underlying ~ hedge over the
+    last ``lookback`` bars.
 
-    Returns None when fewer than lookback+1 paired bars are available, when
-    the regression is degenerate, or when ``min_r_squared`` is supplied and
-    the fit R² falls below it (the relationship is too weak to hedge with).
+    Returns None when fewer than lookback+1 paired bars are available or the
+    regression is degenerate (non-positive closes, flat hedge). ``r_squared``
+    is None when the underlying itself is flat (corr² is undefined) — gate
+    callers should treat that as a failing fit.
+
+    Exposing the fit quality (not just the beta) lets the factory engine
+    persist ``hedge_fit_r2`` per thesis, so "neutral"-cohort analytics can
+    stratify by how genuinely beta-neutral each hedge actually was (v0.13).
     """
     n = min(len(underlying_closes), len(hedge_closes))
     if n < lookback + 1:
@@ -54,14 +59,34 @@ def estimate_beta(
     if var_h <= 0:
         return None
     beta = cov / var_h
+    # R² of underlying-on-hedge regression = corr² = cov² / (var_h * var_u).
+    r_squared = (cov * cov) / (var_h * var_u) if var_u > 0 else None
+    return beta, r_squared
+
+
+def estimate_beta(
+    underlying_closes: list[float],
+    hedge_closes: list[float],
+    *,
+    lookback: int = 60,
+    min_r_squared: float | None = None,
+) -> float | None:
+    """OLS beta of log returns: underlying ~ hedge over the last ``lookback`` bars.
+
+    Returns None when fewer than lookback+1 paired bars are available, when
+    the regression is degenerate, or when ``min_r_squared`` is supplied and
+    the fit R² falls below it (the relationship is too weak to hedge with).
+    Thin wrapper over ``estimate_beta_fit`` for callers that don't need the
+    fit quality.
+    """
+    fit = estimate_beta_fit(underlying_closes, hedge_closes, lookback=lookback)
+    if fit is None:
+        return None
+    beta, r_squared = fit
     if min_r_squared is not None:
-        # R² of underlying-on-hedge regression = corr² = cov² / (var_h * var_u).
-        # When the underlying is itself flat (var_u == 0), the regression
-        # carries no information — treat as failing the gate.
-        if var_u <= 0:
-            return None
-        r_squared = (cov * cov) / (var_h * var_u)
-        if r_squared < min_r_squared:
+        # When the underlying is itself flat (r_squared is None), the
+        # regression carries no information — treat as failing the gate.
+        if r_squared is None or r_squared < min_r_squared:
             return None
     return beta
 
