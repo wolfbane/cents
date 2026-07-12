@@ -77,7 +77,12 @@ class EventAgent(BaseAgent):
 
     # Minimum event confidence to fire a PREMISE_INVALIDATION alert. Below this
     # the (polarity, opposition) match is too uncertain to be a useful covariate.
-    _INVALIDATION_MIN_CONFIDENCE = 0.7
+    # Raised 0.7 → 0.75 (v0.13): the classifier's modal confidence output is
+    # exactly 0.7, so a 0.7 gate admits its least-certain bucket wholesale —
+    # in pilot_v2, 47 of 54 fired alerts sat at exactly 0.70, mostly routine
+    # EPA state-implementation-plan filings repeatedly "invalidating" the
+    # same few energy theses.
+    _INVALIDATION_MIN_CONFIDENCE = 0.75
 
     def __init__(self, anthropic_client=None):
         super().__init__()

@@ -832,3 +832,94 @@ class TestCalibrationFreshnessRecording:
 
         # No model → no calibration_age_days surfaced
         assert "calibration_age_days" not in run.summary_json
+
+
+class TestFrozenPayload:
+    """v0.13: the canonical behavioural payload is persisted at registration
+    so drift reporting can name the keys that moved."""
+
+    def test_register_stores_canonical_payload(self, db_conn, tmp_path: Path, monkeypatch):
+        from cents.experiments import compute_factory_config_payload
+
+        cfg = tmp_path / "factory.toml"
+        cfg.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg))
+
+        path = tmp_path / "exp.yaml"
+        path.write_text(_yaml_spec("payload1"))
+        exp = register_experiment(spec_path=path)
+
+        sha, _, canonical = compute_factory_config_payload(cfg)
+        assert exp.frozen_config_sha == sha
+        assert exp.frozen_payload_json == canonical
+        assert '"factory_config"' in exp.frozen_payload_json
+
+    def test_status_names_drifted_keys(self, db_conn, tmp_path: Path, monkeypatch):
+        from cents.experiments import status_snapshot
+
+        cfg = tmp_path / "factory.toml"
+        cfg.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg))
+
+        path = tmp_path / "exp.yaml"
+        path.write_text(_yaml_spec("payload2"))
+        exp = register_experiment(spec_path=path)
+
+        cfg.write_text("budget_usd = 20000\n")
+        snap = status_snapshot(exp)
+        assert snap["config_sha_drift"] is True
+        assert any(
+            "factory_config.budget_usd" in line and "10000" in line and "20000" in line
+            for line in snap["config_drift_detail"]
+        )
+
+    def test_status_no_drift_no_detail(self, db_conn, tmp_path: Path, monkeypatch):
+        from cents.experiments import status_snapshot
+
+        cfg = tmp_path / "factory.toml"
+        cfg.write_text("budget_usd = 10000\n")
+        monkeypatch.setenv("CENTS_FACTORY_CONFIG", str(cfg))
+
+        path = tmp_path / "exp.yaml"
+        path.write_text(_yaml_spec("payload3"))
+        exp = register_experiment(spec_path=path)
+
+        snap = status_snapshot(exp)
+        assert snap["config_sha_drift"] is False
+        assert snap["config_drift_detail"] == []
+
+
+class TestPayloadDriftDetail:
+    def test_scalar_change_named(self):
+        from cents.experiments import payload_drift_detail
+
+        detail = payload_drift_detail(
+            '{"factory_config": {"beta_lookback_days": 60}}',
+            '{"factory_config": {"beta_lookback_days": 90}}',
+        )
+        assert detail == ["factory_config.beta_lookback_days: 60 -> 90"]
+
+    def test_added_key_named(self):
+        from cents.experiments import payload_drift_detail
+
+        detail = payload_drift_detail(
+            '{"factory_config": {}}',
+            '{"factory_config": {"budget_per_arm": true}}',
+        )
+        assert detail == ["factory_config.budget_per_arm: added (True)"]
+
+    def test_list_leaf_diffed_by_element(self):
+        from cents.experiments import payload_drift_detail
+
+        detail = payload_drift_detail(
+            '{"event_tags": ["rates"]}',
+            '{"event_tags": ["rates", "ai_capex"]}',
+        )
+        assert detail == ["event_tags: added ['ai_capex']"]
+
+    def test_missing_frozen_payload_explains(self):
+        from cents.experiments import payload_drift_detail
+
+        detail = payload_drift_detail("", '{"a": 1}')
+        assert len(detail) == 1
+        assert "registered before" in detail[0]

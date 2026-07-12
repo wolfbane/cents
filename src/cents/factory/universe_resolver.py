@@ -46,21 +46,50 @@ def resolve_symbols(
     universe as of that date even though they have since fallen out).
     Other sources are unaffected — STATIC/WATCHLIST/FMP_INDEX members are
     already specified explicitly and don't need reconstruction.
+
+    Live resolution (``asof_date`` is None) drops symbols with a tracked
+    delisting (v0.13). A STATIC universe (or an experiment freezing one)
+    can otherwise carry a dead ticker indefinitely — pilot_v2's frozen
+    universe contained BK, which no-priced on every run. As-of resolution
+    is untouched: point-in-time membership must keep delisted members or
+    every backtest is biased toward survivors.
     """
     if universe.source == UniverseSource.STATIC:
-        return list(universe.symbols)
-
-    if universe.source == UniverseSource.WATCHLIST:
+        symbols = list(universe.symbols)
+    elif universe.source == UniverseSource.WATCHLIST:
         items = WatchlistRepository().list()
-        return [item.symbol for item in items]
+        symbols = [item.symbol for item in items]
+    elif universe.source == UniverseSource.FMP_INDEX:
+        symbols = _resolve_fmp_index(universe)
+    elif universe.source == UniverseSource.SCREENER:
+        symbols = _resolve_screener(universe, _visited, asof_date=asof_date)
+    else:
+        raise ValueError(f"Unsupported universe source: {universe.source}")
 
-    if universe.source == UniverseSource.FMP_INDEX:
-        return _resolve_fmp_index(universe)
+    if asof_date is None:
+        symbols = _drop_delisted(symbols)
+    return symbols
 
-    if universe.source == UniverseSource.SCREENER:
-        return _resolve_screener(universe, _visited, asof_date=asof_date)
 
-    raise ValueError(f"Unsupported universe source: {universe.source}")
+def _drop_delisted(symbols: list[str]) -> list[str]:
+    """Drop symbols that carry a tracked delisting record.
+
+    Best-effort: a delistings-table read failure returns the list unchanged
+    rather than blocking resolution.
+    """
+    try:
+        delisted = {d.symbol for d in DelistingsRepository().list_all()}
+    except Exception:  # noqa: BLE001 — filter must never block resolution
+        return symbols
+    if not delisted:
+        return symbols
+    dropped = sorted({s for s in symbols if s.upper() in delisted})
+    if dropped:
+        logger.info(
+            "Dropped %d delisted symbol(s) from universe resolution: %s",
+            len(dropped), ", ".join(dropped),
+        )
+    return [s for s in symbols if s.upper() not in delisted]
 
 
 def _resolve_screener(

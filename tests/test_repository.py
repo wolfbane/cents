@@ -457,3 +457,32 @@ class TestBacktestRepository:
         # Signal should be gone too
         signals = repo.get_signals(backtest.id)
         assert len(signals) == 0
+
+
+class TestHedgeFitRoundTrip:
+    """v0.13: hedge_beta / hedge_fit_r2 persist and read back as floats."""
+
+    def test_hedge_fit_fields_round_trip(self, db_conn):
+        from cents.db import ThesisRepository
+        from cents.models import Thesis
+
+        repo = ThesisRepository(db_conn)
+        thesis = Thesis(
+            title="paired", symbol="NVDA",
+            hedge_beta=1.42, hedge_fit_r2=0.371,
+        )
+        repo.create(thesis)
+        loaded = repo.get(thesis.id)
+        assert loaded.hedge_beta == pytest.approx(1.42)
+        assert loaded.hedge_fit_r2 == pytest.approx(0.371)
+
+    def test_hedge_fit_fields_default_none(self, db_conn):
+        from cents.db import ThesisRepository
+        from cents.models import Thesis
+
+        repo = ThesisRepository(db_conn)
+        thesis = Thesis(title="directional", symbol="AAPL")
+        repo.create(thesis)
+        loaded = repo.get(thesis.id)
+        assert loaded.hedge_beta is None
+        assert loaded.hedge_fit_r2 is None

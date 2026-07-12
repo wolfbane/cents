@@ -41,6 +41,12 @@ class Experiment:
     # the engine uses this list verbatim for the experiment's duration. Empty
     # string means "no freeze; resolve live" (legacy + non-screener universes).
     frozen_universe_json: str = ""
+    # Canonical behavioural-payload JSON the frozen_config_sha was computed
+    # over (v0.13). Kept so drift reporting can diff the current payload
+    # against the frozen one and name exactly which keys moved, instead of
+    # showing two opaque hashes. Empty string = registered before this field
+    # existed (SHA-only drift reporting).
+    frozen_payload_json: str = ""
     stopping_rule: str = ""
     # Minimum calendar days before verdict_ready can fire. Set per-experiment
     # so pilots can use a shorter floor (e.g. 30) than full runs (e.g. 90).

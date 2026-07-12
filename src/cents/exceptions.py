@@ -76,26 +76,42 @@ class ValidationError(CentsError):
 
 
 class ExperimentConfigDrift(CentsError):
-    """Raised when factory.toml SHA differs from the active experiment's frozen SHA.
+    """Raised when the behavioural-payload SHA differs from the active
+    experiment's frozen SHA.
 
-    Pre-registration discipline: changing factory config mid-experiment invalidates
+    The SHA covers the *effective* factory config plus adjacent behaviour-
+    shifters (prompt templates, model snapshot, EVENT_TAGS) — so a code
+    change that adds a FactoryConfig field trips it even when factory.toml
+    is byte-identical (that is how pilot_v2 stalled for three weeks).
+
+    Pre-registration discipline: changing behaviour mid-experiment invalidates
     the pre-registered hypothesis. The engine refuses to run unless the operator
     passes --force-frozen-drift to acknowledge the discipline violation. See
     cents-eat0.
     """
 
-    def __init__(self, experiment_name: str, frozen_sha: str, current_sha: str):
+    def __init__(
+        self,
+        experiment_name: str,
+        frozen_sha: str,
+        current_sha: str,
+        drift_detail: list[str] | None = None,
+    ):
         self.experiment_name = experiment_name
         self.frozen_sha = frozen_sha
         self.current_sha = current_sha
+        self.drift_detail = drift_detail or []
+        detail = ""
+        if self.drift_detail:
+            detail = " Changed: " + "; ".join(self.drift_detail) + "."
         super().__init__(
-            f"factory.toml SHA drift detected for active experiment {experiment_name!r}: "
-            f"frozen={frozen_sha[:12]} current={current_sha[:12]}. "
-            f"Mid-experiment config changes invalidate pre-registration. "
+            f"Behavioural-payload SHA drift detected for active experiment "
+            f"{experiment_name!r}: frozen={frozen_sha[:12]} current={current_sha[:12]}. "
+            f"The SHA covers the effective factory config + prompts + model "
+            f"snapshot + EVENT_TAGS — code changes count, not just factory.toml "
+            f"edits.{detail} Mid-experiment changes invalidate pre-registration. "
             f"Pass --force-frozen-drift to override (logs the violation)."
         )
-
-    pass
 
 
 # CostCapExceeded is defined above CentsError-derived subclasses to keep the

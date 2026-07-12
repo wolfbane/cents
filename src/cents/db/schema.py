@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS theses (
     hedge_symbol TEXT,
     paired_thesis_id TEXT,
     hedge_basis TEXT,
+    hedge_beta REAL,
+    hedge_fit_r2 REAL,
     premise_tags TEXT DEFAULT '[]',
     premise_tags_count INTEGER DEFAULT 0,
     premise_direction TEXT DEFAULT '{}',
@@ -251,6 +253,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     frozen_config_sha TEXT NOT NULL,
     frozen_config_json TEXT NOT NULL,
     frozen_universe_json TEXT NOT NULL DEFAULT '',
+    frozen_payload_json TEXT NOT NULL DEFAULT '',
     started_at TEXT NOT NULL,
     finalized_at TEXT,
     verdict_json TEXT,
@@ -375,12 +378,21 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         # that LLM and random arms have comparable tag-set distributions
         # after the sector-fallback cap.
         ("theses", "premise_tags_count", "ALTER TABLE theses ADD COLUMN premise_tags_count INTEGER DEFAULT 0"),
+        # Beta-fit provenance (v0.13) — raw open-time OLS beta vs the hedge
+        # ETF and its fit R². Stratifies the NEUTRAL cohort by hedge quality.
+        ("theses", "hedge_beta", "ALTER TABLE theses ADD COLUMN hedge_beta REAL"),
+        ("theses", "hedge_fit_r2", "ALTER TABLE theses ADD COLUMN hedge_fit_r2 REAL"),
         # Per-experiment calendar-day floor on verdict_ready (pilot uses 30, full uses 90).
         # Default 14 preserves back-compat with experiments registered before this column existed.
         ("experiments", "minimum_calendar_days", "ALTER TABLE experiments ADD COLUMN minimum_calendar_days INTEGER NOT NULL DEFAULT 14"),
         # Frozen universe member list at experiment registration. Empty string
         # = no freeze (legacy or non-screener universe).
         ("experiments", "frozen_universe_json", "ALTER TABLE experiments ADD COLUMN frozen_universe_json TEXT NOT NULL DEFAULT ''"),
+        # Frozen behavioural payload (v0.13) — the canonical JSON the SHA is
+        # computed over. Lets drift reporting name exactly which keys moved
+        # instead of only showing two opaque hashes. Empty = registered
+        # before this column existed (SHA-only drift reporting).
+        ("experiments", "frozen_payload_json", "ALTER TABLE experiments ADD COLUMN frozen_payload_json TEXT NOT NULL DEFAULT ''"),
         # Evidence provenance columns linking to the LLM call (added in v0.10).
         # Run BEFORE and AFTER the FK migration since that migration may recreate
         # the evidence table with the legacy column set.

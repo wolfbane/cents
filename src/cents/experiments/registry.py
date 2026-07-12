@@ -71,19 +71,27 @@ def _gather_behavioural_inputs(cfg) -> dict:
     return payload
 
 
-def compute_factory_config_sha(config_path: Path | None = None) -> tuple[str, str]:
-    """Return ``(sha256, raw_text)`` capturing the *effective* factory config
-    AND adjacent behaviour-shifters (model snapshot, prompt templates,
-    screener config, EVENT_TAGS vocabulary).
+def compute_factory_config_payload(
+    config_path: Path | None = None,
+) -> tuple[str, str, str]:
+    """Return ``(sha256, raw_text, canonical_payload_json)`` capturing the
+    *effective* factory config AND adjacent behaviour-shifters (model
+    snapshot, prompt templates, screener config, EVENT_TAGS vocabulary).
 
     The audit field is the SHA of the whole behavioural payload, not just
     the toml file text. Hand-editing the toml, rolling a model snapshot,
-    edting a prompt, or adding a vocabulary tag all bump the SHA — keeping
-    the experiment-registry "frozen" claim honest.
+    editing a prompt, adding a vocabulary tag — or a code change that adds
+    a FactoryConfig field — all bump the SHA, keeping the experiment
+    registry's "frozen" claim honest. (That last case is exactly how
+    pilot_v2 stalled: uncommitted engine work added four config fields, the
+    payload moved while factory.toml stayed byte-identical, and the runs
+    aborted on drift for three weeks.)
 
     ``raw_text`` is kept (toml when present, JSON snapshot otherwise) so
     the experiments table can show a human-readable view of what was
-    registered.
+    registered. ``canonical_payload_json`` is the exact string the SHA is
+    computed over — persisted at registration so drift reporting can name
+    the keys that moved (see ``payload_drift_detail``).
     """
     path = config_path or get_factory_config_path()
     cfg = load_factory_config(path) if path.exists() else load_factory_config()
@@ -97,7 +105,75 @@ def compute_factory_config_sha(config_path: Path | None = None) -> tuple[str, st
             "# (no factory.toml present — defaults in effect)\n"
             f"# behavioural_payload_sha256 = {sha}\n"
         )
+    return sha, raw, canonical
+
+
+def compute_factory_config_sha(config_path: Path | None = None) -> tuple[str, str]:
+    """Back-compat wrapper over ``compute_factory_config_payload`` for callers
+    that only need ``(sha256, raw_text)``."""
+    sha, raw, _ = compute_factory_config_payload(config_path=config_path)
     return sha, raw
+
+
+def _flatten_payload(obj, prefix: str = "") -> dict[str, object]:
+    """Flatten nested dicts into dotted-path leaves. Lists stay as leaves."""
+    out: dict[str, object] = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key = f"{prefix}.{k}" if prefix else str(k)
+            if isinstance(v, dict):
+                out.update(_flatten_payload(v, key))
+            else:
+                out[key] = v
+    else:
+        out[prefix or "(root)"] = obj
+    return out
+
+
+def payload_drift_detail(
+    frozen_payload_json: str, current_payload_json: str
+) -> list[str]:
+    """Human-readable list of behavioural-payload keys that differ.
+
+    Diffs the canonical payload frozen at registration against the current
+    one so a drift abort can say *what* moved (e.g. ``factory_config.
+    beta_lookback_days: 60 -> 90``) instead of showing two opaque hashes.
+    Scalar-list leaves (e.g. ``event_tags``) are diffed as added/removed
+    elements. Falls back to a single explanatory line when the frozen
+    payload was never recorded (pre-v0.13 registration) or is unreadable.
+    """
+    if not frozen_payload_json:
+        return [
+            "(frozen payload not recorded — experiment registered before "
+            "v0.13; only the SHA comparison is available)"
+        ]
+    try:
+        frozen = json.loads(frozen_payload_json)
+        current = json.loads(current_payload_json)
+    except (json.JSONDecodeError, TypeError):
+        return ["(payload JSON unreadable — SHA-only comparison)"]
+    flat_frozen = _flatten_payload(frozen)
+    flat_current = _flatten_payload(current)
+    detail: list[str] = []
+    for key in sorted(set(flat_frozen) | set(flat_current)):
+        if key not in flat_frozen:
+            detail.append(f"{key}: added ({flat_current[key]!r})")
+        elif key not in flat_current:
+            detail.append(f"{key}: removed (was {flat_frozen[key]!r})")
+        elif flat_frozen[key] != flat_current[key]:
+            f_val, c_val = flat_frozen[key], flat_current[key]
+            if isinstance(f_val, list) and isinstance(c_val, list):
+                added = sorted(set(map(str, c_val)) - set(map(str, f_val)))
+                removed = sorted(set(map(str, f_val)) - set(map(str, c_val)))
+                parts = []
+                if added:
+                    parts.append(f"added {added}")
+                if removed:
+                    parts.append(f"removed {removed}")
+                detail.append(f"{key}: {'; '.join(parts) or 'reordered'}")
+            else:
+                detail.append(f"{key}: {f_val!r} -> {c_val!r}")
+    return detail or ["(no leaf-level differences — serialisation change only)"]
 
 
 def load_experiment_spec(spec_path: Path) -> dict:
@@ -199,7 +275,7 @@ def register_experiment(
             f"finalize or abandon it first)."
         )
 
-    sha, raw = compute_factory_config_sha(config_path=config_path)
+    sha, raw, canonical_payload = compute_factory_config_payload(config_path=config_path)
     # Resolve and stamp the universe member list. Without this, SCREENER
     # universes drift daily (FMP TTM is daily_key-cached) and cohorts at
     # week 4 are over a different population than cohorts at week 1, which
@@ -217,6 +293,7 @@ def register_experiment(
         frozen_config_sha=sha,
         frozen_config_json=raw,
         frozen_universe_json=frozen_universe_json,
+        frozen_payload_json=canonical_payload,
     )
     return repo.create(exp)
 
@@ -306,10 +383,18 @@ def status_snapshot(
         for arm in (by_arm.keys() or ["llm"])
     )
 
-    # SHA drift: compute the SHA of the current factory.toml and compare
-    # to the SHA frozen at registration time.
-    current_sha, _ = compute_factory_config_sha(config_path=config_path)
+    # SHA drift: compute the SHA of the current behavioural payload and
+    # compare to the SHA frozen at registration time. On drift, diff the
+    # payloads so the report names the keys that moved.
+    current_sha, _, current_payload = compute_factory_config_payload(
+        config_path=config_path
+    )
     config_sha_drift = current_sha != exp.frozen_config_sha
+    config_drift_detail = (
+        payload_drift_detail(exp.frozen_payload_json, current_payload)
+        if config_sha_drift
+        else []
+    )
 
     verdict_ready, verdict_ready_reason = _evaluate_verdict_ready(
         target_reached=target_reached,
@@ -342,6 +427,7 @@ def status_snapshot(
         "frozen_config_sha": exp.frozen_config_sha,
         "current_config_sha": current_sha,
         "config_sha_drift": config_sha_drift,
+        "config_drift_detail": config_drift_detail,
         "verdict_ready": verdict_ready,
         "verdict_ready_reason": verdict_ready_reason,
     }
@@ -388,8 +474,10 @@ def _evaluate_verdict_ready(
     if config_sha_drift:
         return (
             False,
-            "factory.toml SHA has drifted since registration — "
-            "this is a discipline violation and invalidates the verdict.",
+            "behavioural-payload SHA has drifted since registration "
+            "(effective factory config + prompts + model snapshot + "
+            "EVENT_TAGS) — this is a discipline violation and invalidates "
+            "the verdict. See config_drift_detail for the keys that moved.",
         )
     return True, "minimum N reached, elapsed-day floor cleared, no SHA drift."
 

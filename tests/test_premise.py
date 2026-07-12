@@ -13,6 +13,7 @@ from cents.factory.premise import (
     classify_premise_tags,
 )
 from cents.models import EVENT_TAGS, Event, EventPolarity
+from cents.models.thesis import PremiseSource
 
 
 class _FakeAnthropic:
@@ -438,3 +439,33 @@ class TestCaptureRegimeSnapshot:
         snap = capture_regime_snapshot(event_repo=repo, now=now)
         assert snap["recent_event_count"] == 0
         assert snap["top_event_tags"] == {}
+
+
+class TestDeterministicOnly:
+    """v0.13: the random control arm bypasses the LLM classifier entirely."""
+
+    def test_deterministic_only_never_calls_llm(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr(
+            "cents.factory.sector_map.hedge_etf_for", lambda sym: "XLF"
+        )
+        client = MagicMock()
+        client.messages.create.side_effect = AssertionError(
+            "deterministic_only must not reach the LLM"
+        )
+        sink: list[str] = []
+        # Summary is long enough to clear the sparse check — proving the
+        # bypass is arm-driven, not text-length-driven (pilot_v2 defect:
+        # the 72-char factory hypothesis cleared the sparse gate and the
+        # classifier hallucinated tags for random-arm theses).
+        long_summary = "factory open — long conviction 76.1, delta +26.1 (paired-neutral vs XLE)"
+        tags, directions = classify_premise_tags(
+            "JPM", long_summary, [],
+            anthropic_client=client, side="long",
+            source_sink=sink, deterministic_only=True,
+        )
+        assert tags == SECTOR_FALLBACK_TAGS["XLF"][:_SECTOR_FALLBACK_TAG_CAP]
+        assert directions == {t: "positive" for t in tags}
+        assert sink == [PremiseSource.FALLBACK_SECTOR.value]
+        client.messages.create.assert_not_called()

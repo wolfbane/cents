@@ -356,3 +356,73 @@ class TestTriggers:
     def test_none_thresholds_never_hit(self):
         assert not target_hit(PositionSide.LONG, price=110.0, target=None)
         assert not stop_hit(PositionSide.SHORT, price=110.0, stop=None)
+
+
+class TestEstimateBetaFit:
+    """v0.13: estimate_beta_fit exposes (beta, r_squared) so the engine can
+    persist hedge-fit quality per thesis."""
+
+    def test_perfect_correlation_returns_beta_and_r2(self):
+        from cents.finance import estimate_beta_fit
+
+        # hedge = 2 × underlying → identical log returns → beta 1, R² 1.
+        under = [100.0 + i * 0.5 for i in range(80)]
+        hedge = [c * 2.0 for c in under]
+        fit = estimate_beta_fit(under, hedge, lookback=60)
+        assert fit is not None
+        beta, r2 = fit
+        assert beta == pytest.approx(1.0, abs=1e-9)
+        assert r2 == pytest.approx(1.0, abs=1e-9)
+
+    def test_uncorrelated_series_reports_low_r2(self):
+        import random
+
+        from cents.finance import estimate_beta_fit
+
+        rng = random.Random(7)
+        hedge = [100.0]
+        under = [100.0]
+        for _ in range(80):
+            hedge.append(hedge[-1] * (1 + rng.uniform(-0.01, 0.01)))
+            under.append(under[-1] * (1 + rng.uniform(-0.01, 0.01)))
+        fit = estimate_beta_fit(under, hedge, lookback=60)
+        assert fit is not None
+        _, r2 = fit
+        assert r2 is not None and r2 < 0.3
+
+    def test_insufficient_history_returns_none(self):
+        from cents.finance import estimate_beta_fit
+
+        assert estimate_beta_fit([100.0] * 10, [100.0] * 10, lookback=60) is None
+
+    def test_flat_underlying_reports_none_r2(self):
+        from cents.finance import estimate_beta_fit
+
+        under = [100.0] * 80
+        hedge = [100.0 * (1.01 ** (i % 3)) for i in range(80)]
+        fit = estimate_beta_fit(under, hedge, lookback=60)
+        assert fit is not None
+        beta, r2 = fit
+        assert beta == pytest.approx(0.0, abs=1e-9)
+        assert r2 is None
+
+    def test_estimate_beta_gate_parity(self):
+        """estimate_beta(min_r_squared=...) rejects exactly when the fit R²
+        from estimate_beta_fit is below the threshold."""
+        import random
+
+        from cents.finance import estimate_beta, estimate_beta_fit
+
+        rng = random.Random(11)
+        hedge = [100.0]
+        under = [100.0]
+        for _ in range(80):
+            step = rng.uniform(-0.01, 0.01)
+            hedge.append(hedge[-1] * (1 + step))
+            under.append(under[-1] * (1 + step * 1.5 + rng.uniform(-0.002, 0.002)))
+        fit = estimate_beta_fit(under, hedge, lookback=60)
+        assert fit is not None
+        beta, r2 = fit
+        gated = estimate_beta(under, hedge, lookback=60, min_r_squared=r2 - 1e-9)
+        assert gated == pytest.approx(beta)
+        assert estimate_beta(under, hedge, lookback=60, min_r_squared=r2 + 1e-6) is None

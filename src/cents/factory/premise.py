@@ -224,6 +224,7 @@ def classify_premise_tags(
     anthropic_client=None,
     side: str | None = None,
     source_sink: list[str] | None = None,
+    deterministic_only: bool = False,
 ) -> tuple[list[str], dict[str, str]]:
     """Return ``(tags, direction)`` capturing regime dependencies of the thesis.
 
@@ -235,12 +236,24 @@ def classify_premise_tags(
 
     Returns ``([], {})`` when no anthropic client is configured or the call fails.
 
+    ``deterministic_only=True`` skips the LLM entirely and returns the
+    sector-derived tag set (v0.13). The factory engine sets this for the
+    random control arm: its thesis text is a synthetic template, and arm
+    membership — not a text-length heuristic — is the honest discriminator.
+    (pilot_v2 defect: the 72-char factory hypothesis cleared the
+    ``_SPARSE_SUMMARY_THRESHOLD`` sparse check, so the classifier ran on
+    random-arm theses and occasionally hallucinated tags from the ticker
+    alone, breaking the control arm's tag determinism.)
+
     When ``side`` is supplied ("long" or "short") AND the summary is too thin
     for the LLM to anchor on (or no LLM client is available) AND the LLM
     returns no tags, falls back to a sector-derived tag set so synthetic
-    theses (e.g. random-arm control) remain invalidatable by policy events.
+    theses remain invalidatable by policy events.
     See ``_sector_fallback_tags`` and ``SECTOR_FALLBACK_TAGS``.
     """
+    if deterministic_only:
+        return _sector_fallback_tags(symbol, side, source_sink)
+
     sparse = len((summary or "").strip()) < _SPARSE_SUMMARY_THRESHOLD
 
     client = anthropic_client or _build_anthropic_client()

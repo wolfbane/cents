@@ -148,9 +148,12 @@ def _print_status(snap: dict) -> None:
     click.echo(f"  Reason:          {snap.get('verdict_ready_reason', '')}")
     if snap.get("config_sha_drift"):
         click.echo(
-            "  WARNING: factory.toml SHA has drifted from the frozen "
-            "registration-time SHA. This invalidates the experiment."
+            "  WARNING: the behavioural payload (effective factory config + "
+            "prompts + model snapshot + EVENT_TAGS) has drifted from the "
+            "frozen registration-time SHA. This invalidates the experiment."
         )
+        for line in snap.get("config_drift_detail") or []:
+            click.echo(f"    drift: {line}")
     click.echo()
     click.echo("  Opened by arm:")
     for arm, n in (snap["opened_by_arm"] or {}).items():

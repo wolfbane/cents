@@ -94,6 +94,13 @@ class Thesis:
     paired_thesis_id: str | None = None
     # How the hedge leg was sized. None on directional theses.
     hedge_basis: HedgeBasis | None = None
+    # Beta-fit provenance (v0.13). The raw OLS beta estimate and its fit R²
+    # from the open-time regression vs the hedge ETF. None when beta matching
+    # was off, history was unavailable, or the thesis is directional. Lets
+    # analytics stratify the NEUTRAL cohort by hedge quality instead of
+    # trusting the hedge_basis label alone.
+    hedge_beta: float | None = None
+    hedge_fit_r2: float | None = None
     # Regime / premise tracking
     premise_tags: list[str] = field(default_factory=list)
     # Recorded tag count at open time. Lets the analyst verify post-hoc that

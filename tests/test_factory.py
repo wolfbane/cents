@@ -2276,3 +2276,218 @@ class TestFactoryFunnel:
         runner = CliRunner()
         result = runner.invoke(cli, ["factory", "funnel"])
         assert result.exit_code == 0, result.output
+
+
+class TestBookScopingPerArm:
+    """v0.13: budget_per_arm gives each orchestrator arm an independent book."""
+
+    def _seed_random_arm_book(self):
+        """A random-arm thesis whose position saturates a $1k budget."""
+        trepo = ThesisRepository()
+        prepo = PositionRepository()
+        existing = Thesis(
+            title="factory:OLD", symbol="OLD", conviction=40.0,
+            tags=[TAG_FACTORY], orchestrator_label="random",
+        )
+        trepo.create(existing)
+        prepo.create(Position(
+            symbol="OLD", side=PositionSide.LONG, entry_price=100.0, size=10.0,
+            thesis_id=existing.id,
+        ))
+        return existing
+
+    def test_other_arm_thesis_not_preempted(self, factory_db):
+        """The other arm's thesis neither charges this arm's budget nor
+        becomes a preemption target — the LLM arm opens within its own
+        (empty) book and the random-arm thesis survives.
+
+        pilot_v2 defect: with one shared book, the random arm's MET open
+        evicted the LLM arm's C thesis at day 3, censoring its outcome.
+        """
+        existing = self._seed_random_arm_book()
+        _seed_universe(["B"])
+        engine = FactoryEngine(
+            config=_config(
+                budget_usd=1000.0, target_positions=10, entry_threshold=1.0,
+                preemption_margin=5.0, budget_per_arm=True,
+            ),
+            orchestrator=_orchestrator({"B": 10.0}),
+            price_provider=_price_provider({"OLD": 100.0, "B": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 1
+        assert run.preemptions == 0
+        assert ThesisRepository().get(existing.id).status == ThesisStatus.OPEN
+
+    def test_legacy_shared_book_preempts_cross_arm(self, factory_db):
+        """budget_per_arm=False restores the shared book: the other arm's
+        position charges the budget and its thesis is eligible for eviction."""
+        existing = self._seed_random_arm_book()
+        _seed_universe(["B"])
+        engine = FactoryEngine(
+            config=_config(
+                budget_usd=1000.0, target_positions=10, entry_threshold=1.0,
+                preemption_margin=5.0, budget_per_arm=False,
+            ),
+            orchestrator=_orchestrator({"B": 10.0}),  # new conviction 60 > 40 + 5
+            price_provider=_price_provider({"OLD": 100.0, "B": 100.0}),
+        )
+        run = engine.run()
+        assert run.preemptions == 1
+        reloaded = ThesisRepository().get(existing.id)
+        assert reloaded.status == ThesisStatus.CLOSED
+        assert reloaded.outcome == ThesisOutcome.PREEMPTED
+
+    def test_other_arm_holding_does_not_block_symbol(self, factory_db):
+        """A symbol held by the other arm's book stays evaluable by this arm
+        (per-arm held-symbol skips). Cross-arm blocking biased the LLM arm's
+        opportunity set by the random arm's picks in pilot_v2."""
+        trepo = ThesisRepository()
+        trepo.create(Thesis(
+            title="factory:B", symbol="B", conviction=50.0,
+            tags=[TAG_FACTORY], orchestrator_label="random",
+        ))
+        _seed_universe(["B"])
+        engine = FactoryEngine(
+            config=_config(
+                budget_usd=100000.0, target_positions=10, entry_threshold=1.0,
+                budget_per_arm=True,
+            ),
+            orchestrator=_orchestrator({"B": 10.0}),
+            price_provider=_price_provider({"B": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 1
+
+
+class TestStaticAmbientTags:
+    """v0.13: cfg.ambient_tags pins the exemption statically (pre-registered)."""
+
+    def test_static_ambient_list_exempts_capped_tag(self, factory_db, monkeypatch):
+        """fed_policy saturated at the cap but pinned ambient → candidate
+        still opens. The prevalence estimator is disabled (prevalence 0.0)
+        to prove the static list carries the exemption by itself."""
+        trepo = ThesisRepository()
+        for sym in ("A", "B"):
+            trepo.create(Thesis(
+                title=f"factory:{sym}", symbol=sym, tags=[TAG_FACTORY],
+                premise_tags=["fed_policy"],
+                premise_direction={"fed_policy": "positive"},
+            ))
+        _seed_universe(["C"])
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **kw: (["fed_policy"], {"fed_policy": "positive"}),
+        )
+        engine = FactoryEngine(
+            config=_config(
+                entry_threshold=1.0, max_per_premise_tag=2,
+                budget_usd=100000.0, target_positions=20,
+                ambient_tags=["fed_policy"], ambient_tag_prevalence=0.0,
+            ),
+            orchestrator=_orchestrator({"C": 6.0}),
+            price_provider=_price_provider({"C": 100.0}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 1
+
+    def test_static_ambient_unknown_tags_filtered(self, factory_db):
+        """Entries outside the EVENT_TAGS vocabulary are dropped (typo guard)."""
+        from datetime import datetime as _dt
+
+        engine = FactoryEngine(
+            config=_config(ambient_tags=["fed_policy", "not_a_real_tag"]),
+            orchestrator=_orchestrator(),
+            price_provider=_price_provider(),
+        )
+        ambient = engine._arm_ambient_tags("llm", _dt(2026, 7, 1))
+        assert ambient == frozenset({"fed_policy"})
+
+
+class TestDelistedSkip:
+    def test_delisted_symbol_skipped_before_evaluation(self, factory_db, monkeypatch):
+        """v0.13: a tracked delisting short-circuits BEFORE the orchestrator
+        runs (no agent-stack spend on a dead ticker) and shadow-logs
+        'delisted' rather than the generic 'no_price' (pilot_v2: BK).
+
+        Live resolution already drops delisted symbols, so this in-loop
+        guard matters for FROZEN experiment universes, which bypass live
+        resolution — simulated here by patching the resolver to keep the
+        dead symbol in the walk list.
+        """
+        from datetime import date as _date
+
+        from cents.db import DelistingsRepository, ShadowOpenRepository
+        from cents.models import Delisting
+
+        DelistingsRepository().upsert(
+            Delisting(symbol="DEAD", delisted_on=_date(2026, 5, 21))
+        )
+        _seed_universe(["DEAD"])
+        monkeypatch.setattr(
+            "cents.factory.engine.resolve_symbols", lambda *a, **kw: ["DEAD"]
+        )
+        orch = _orchestrator({"DEAD": 10.0})
+        engine = FactoryEngine(
+            config=_config(entry_threshold=1.0),
+            orchestrator=orch,
+            price_provider=_price_provider({"DEAD": None}),
+        )
+        run = engine.run()
+        assert run.theses_opened == 0
+        orch.research.assert_not_called()
+        shadows = ShadowOpenRepository().list(reason="delisted")
+        assert [s.symbol for s in shadows] == ["DEAD"]
+
+
+class TestHedgeFitRecorded:
+    def test_beta_and_r2_persisted_on_neutral_thesis(self, factory_db):
+        """v0.13: the open-time beta estimate and its fit R² land on the
+        thesis row so neutral-cohort analytics can stratify by hedge quality."""
+        from datetime import datetime as _dt, timedelta as _td
+
+        from cents.data.providers import PriceBar, PriceHistory
+
+        _seed_universe(["NVDA"])
+        # Perfectly-correlated history (hedge = 2 × underlying): identical
+        # log returns → beta 1.0, R² 1.0.
+        nvda_closes = [100.0 + i * 0.5 for i in range(250)]
+        xlk_closes = [c * 2.0 for c in nvda_closes]
+        hists = {"NVDA": nvda_closes, "XLK": xlk_closes}
+        prices = {"NVDA": 100.0, "XLK": 200.0}
+
+        class _PairedProvider:
+            def get_latest_price(self, symbol: str):
+                return prices.get(symbol)
+
+            def get_history(self, symbol: str, days: int = 180):
+                closes = hists.get(symbol)
+                if closes is None:
+                    return PriceHistory(symbol=symbol, bars=[])
+                now = _dt(2026, 7, 10)
+                bars = [
+                    PriceBar(
+                        timestamp=now - _td(days=len(closes) - i),
+                        open=c, high=c, low=c, close=c, volume=1000,
+                    )
+                    for i, c in enumerate(closes)
+                ]
+                return PriceHistory(symbol=symbol, bars=bars)
+
+        with patch("cents.factory.engine.hedge_etf_for", return_value="XLK"):
+            engine = FactoryEngine(
+                config=_config(
+                    cohort_mode="paired", entry_threshold=1.0,
+                    budget_usd=10000.0, target_positions=10,
+                    beta_match_hedge=True,
+                ),
+                orchestrator=_orchestrator({"NVDA": 5.0}),
+                price_provider=_PairedProvider(),
+            )
+            engine.run()
+        neutral = next(
+            t for t in ThesisRepository().list() if t.cohort == ThesisCohort.NEUTRAL
+        )
+        assert neutral.hedge_basis == "beta"
+        assert neutral.hedge_beta == pytest.approx(1.0, abs=1e-6)
+        assert neutral.hedge_fit_r2 == pytest.approx(1.0, abs=1e-6)

@@ -21,10 +21,12 @@ drift from that SHA as a discipline violation.
 from cents.experiments.registry import (
     REQUIRED_FIELDS,
     ExperimentSpecError,
+    compute_factory_config_payload,
     compute_factory_config_sha,
     finalize_experiment,
     get_active_experiment,
     load_experiment_spec,
+    payload_drift_detail,
     register_experiment,
     status_snapshot,
 )
@@ -32,10 +34,12 @@ from cents.experiments.registry import (
 __all__ = [
     "REQUIRED_FIELDS",
     "ExperimentSpecError",
+    "compute_factory_config_payload",
     "compute_factory_config_sha",
     "finalize_experiment",
     "get_active_experiment",
     "load_experiment_spec",
+    "payload_drift_detail",
     "register_experiment",
     "status_snapshot",
 ]

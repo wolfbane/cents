@@ -89,7 +89,7 @@ from cents.finance import (
     beta_match_ratio,
     check_kill_switch,
     compute_drawdown,
-    estimate_beta,
+    estimate_beta_fit,
     passes_borrow_gate,
     passes_liquidity_gate,
     realized_vol_pct,
@@ -246,18 +246,20 @@ class FactoryEngine:
         # Lazy import to avoid an engine ↔ experiments cycle at module load.
         try:
             from cents.experiments import (
-                compute_factory_config_sha,
+                compute_factory_config_payload,
                 get_active_experiment,
+                payload_drift_detail,
             )
             self._active_experiment = get_active_experiment()
         except Exception:  # pragma: no cover — defensive
             self._active_experiment = None
         self._config_drift_detected: tuple[str, str] | None = None
+        self._config_drift_detail: list[str] = []
         if self._active_experiment is not None:
             try:
-                current_sha, _ = compute_factory_config_sha()
+                current_sha, _, current_payload = compute_factory_config_payload()
             except Exception:  # pragma: no cover — defensive
-                current_sha = None
+                current_sha, current_payload = None, ""
             if (
                 current_sha is not None
                 and current_sha != self._active_experiment.frozen_config_sha
@@ -266,13 +268,24 @@ class FactoryEngine:
                     self._active_experiment.frozen_config_sha,
                     current_sha,
                 )
+                try:
+                    self._config_drift_detail = payload_drift_detail(
+                        getattr(self._active_experiment, "frozen_payload_json", ""),
+                        current_payload,
+                    )
+                except Exception:  # pragma: no cover — reporting must not block detection
+                    self._config_drift_detail = []
                 logger.warning(
-                    "factory.toml SHA has drifted from experiment %r "
-                    "(frozen %s, current %s). Treat config changes mid-experiment "
-                    "as a discipline violation.",
+                    "Behavioural-payload SHA has drifted from experiment %r "
+                    "(frozen %s, current %s). The SHA covers the effective "
+                    "factory config + prompts + model snapshot + EVENT_TAGS — "
+                    "code changes count, not just factory.toml edits. "
+                    "Changed: %s. Treat changes mid-experiment as a "
+                    "discipline violation.",
                     self._active_experiment.name,
                     self._active_experiment.frozen_config_sha[:12],
                     current_sha[:12],
+                    "; ".join(self._config_drift_detail) or "(detail unavailable)",
                 )
 
     # ---- providers (lazy) -------------------------------------------------
@@ -388,6 +401,7 @@ class FactoryEngine:
                 experiment_name=self._active_experiment.name,
                 frozen_sha=frozen,
                 current_sha=current,
+                drift_detail=self._config_drift_detail,
             )
 
         run = FactoryRun(
@@ -754,7 +768,6 @@ class FactoryEngine:
             if TAG_FACTORY in t.tags
         ]
         skip_symbols = set(skip_symbols or set())
-        held_symbols = self._held_symbols(open_theses) | skip_symbols
         opened_this_run = 0
         # Per-disposition counters for dry-run observability (cents-9yn).
         symbols_evaluated = 0
@@ -781,6 +794,21 @@ class FactoryEngine:
         # Defensive against MagicMock fixtures (which auto-create attrs).
         _olabel = getattr(orchestrator, "orchestrator_label", "llm")
         orchestrator_label = _olabel if isinstance(_olabel, str) else "llm"
+
+        # Book scoping (v0.13). With budget_per_arm on, the deciding arm's
+        # book is fully its own: budget accounting, preemption eviction, and
+        # held-symbol skips consider only theses this arm opened. Without it
+        # the arms share one book — the control arm competes with the LLM arm
+        # for capital, can preempt (censor) its theses before their outcomes
+        # are observed, and blocks it from evaluating symbols it happens to
+        # hold (pilot_v2 defect: the random arm's MET open evicted the LLM
+        # arm's C thesis at day 3, before any close trigger could fire).
+        def _arm_book(theses: list[Thesis]) -> list[Thesis]:
+            if not cfg.budget_per_arm:
+                return theses
+            return [t for t in theses if t.orchestrator_label == orchestrator_label]
+
+        held_symbols = self._held_symbols(_arm_book(open_theses)) | skip_symbols
         price_provider = self._make_price_provider()
 
         # Batch-fetch latest prices for all symbols of currently-open factory
@@ -810,7 +838,10 @@ class FactoryEngine:
         # capture_regime_snapshot per candidate — neither value changes mid-
         # phase, so doing them once removes O(candidates × positions) DB
         # round-trips and O(candidates) event-table scans.
-        factory_thesis_ids = {t.id for t in open_theses}
+        # Scoped to the deciding arm's book when budget_per_arm is on, so
+        # _current_notional charges this arm's budget with only its own
+        # positions.
+        factory_thesis_ids = {t.id for t in _arm_book(open_theses)}
         phase_regime_snapshot = capture_regime_snapshot(now=self._clock())
         # cents-a1d: stamp the calibration model's age into each thesis's regime
         # snapshot so post-experiment cohort analytics can stratify outcomes by
@@ -820,6 +851,18 @@ class FactoryEngine:
                 **phase_regime_snapshot,
                 "calibration_age_days": self._calibration_age_days,
             }
+
+        # Delisted-symbol set (v0.13), fetched once per phase. A frozen
+        # experiment universe can contain a symbol that has delisted since
+        # registration (pilot_v2: BK) — skip it BEFORE the orchestrator
+        # evaluation so the LLM arm doesn't pay agent-stack cost on a dead
+        # ticker, and shadow-log the real cause instead of a generic
+        # "no_price" at the price gate.
+        try:
+            from cents.db import DelistingsRepository
+            delisted_symbols = {d.symbol for d in DelistingsRepository().list_all()}
+        except Exception:  # noqa: BLE001 — lookup is best-effort, never blocks a run
+            delisted_symbols = set()
 
         # Ambient (systematic) premise tags for this arm, computed once per
         # open-phase. Tags carried by most of the arm's recently-classified
@@ -848,6 +891,21 @@ class FactoryEngine:
                 break
             if symbol in held_symbols:
                 symbols_skipped_held += 1
+                continue
+            if symbol in delisted_symbols:
+                self._record_shadow(
+                    dry_run=dry_run,
+                    run_id=run_id,
+                    symbol=symbol,
+                    conviction_delta=0.0,
+                    reason="delisted",
+                    price=None,
+                    premise_tags=[],
+                    premise_direction={},
+                    discovery_source=discovery_source,
+                    orchestrator_label=orchestrator_label,
+                    regime_snapshot=phase_regime_snapshot,
+                )
                 continue
 
             symbols_evaluated += 1
@@ -940,8 +998,15 @@ class FactoryEngine:
             # Classify premise tags now (one LLM call) so we can gate on
             # per-tag concentration before paying any further setup cost.
             # Pass `side` so the classifier can fall back to sector-derived
-            # tags for thin thesis text (e.g. random-arm control) — without
-            # that fallback the random arm is silently un-invalidatable.
+            # tags for thin thesis text — without that fallback a thesis is
+            # silently un-invalidatable.
+            # The random control arm never calls the classifier (v0.13):
+            # deterministic_only routes it straight to sector-fallback tags.
+            # Arm membership — not the sparse-text heuristic — is the honest
+            # discriminator; in pilot_v2 the 72-char factory hypothesis
+            # cleared the sparse check, the classifier ran on random theses,
+            # and hallucinated-from-ticker tags broke the control arm's tag
+            # determinism (COP/NEE drew 40 of 54 invalidation alerts).
             side_hint = "short" if result.conviction_delta < 0 else "long"
             source_sink: list[str] = []
             premise_tags, premise_direction, premise_classification_source = (
@@ -952,6 +1017,7 @@ class FactoryEngine:
                         [getattr(e, "content", "") for e in (result.evidence or [])],
                         side=side_hint,
                         source_sink=source_sink,
+                        deterministic_only=(orchestrator_label == "random"),
                     ),
                     source_sink=source_sink,
                 )
@@ -1100,7 +1166,7 @@ class FactoryEngine:
             preemption_target: Thesis | None = None
             if current_notional + position_cost > cfg.budget_usd:
                 preemption_target = self._select_preemption_target(
-                    open_theses,
+                    _arm_book(open_theses),
                     new_conviction,
                     needed_notional=current_notional + position_cost - cfg.budget_usd,
                     price_provider=price_provider,
@@ -1154,7 +1220,8 @@ class FactoryEngine:
                 preempted_closed += 1
                 preemptions += 1
                 open_theses = [t for t in open_theses if t.id != preemption_target.id]
-                held_symbols = self._held_symbols(open_theses) | skip_symbols
+                factory_thesis_ids = {t.id for t in _arm_book(open_theses)}
+                held_symbols = self._held_symbols(_arm_book(open_theses)) | skip_symbols
 
             new_open = self._open_new_thesis(
                 symbol=symbol,
@@ -1194,11 +1261,16 @@ class FactoryEngine:
             positions_opened += new_open["positions_opened"]
             open_theses = self.thesis_repo.list(status=ThesisStatus.OPEN)
             open_theses = [t for t in open_theses if TAG_FACTORY in t.tags]
+            # Refresh the budget view too (v0.13). Pre-v0.13 this set was
+            # computed once per phase, so theses opened earlier in the SAME
+            # run were invisible to the budget check — an under-count of up
+            # to max_new_per_run × position cost per run.
+            factory_thesis_ids = {t.id for t in _arm_book(open_theses)}
             # Reapply skip_symbols (invalidated-this-run symbols + their hedge
             # legs). Without this, a universe that contains the same symbol
             # twice (screener+watchlist overlap is common) could reopen the
             # invalidated symbol on its second appearance.
-            held_symbols = self._held_symbols(open_theses) | skip_symbols
+            held_symbols = self._held_symbols(_arm_book(open_theses)) | skip_symbols
             opened_this_run += 1
 
         return {
@@ -1358,15 +1430,34 @@ class FactoryEngine:
     def _arm_ambient_tags(self, arm: str, as_of: datetime) -> frozenset[str]:
         """Ambient (systematic) premise tags for ``arm`` over the recent window.
 
-        Pools the arm's recently-classified candidates — opened factory theses
-        plus classified-but-rejected shadow rows — and delegates to
-        ``compute_ambient_tags``. Computed once per open-phase; the result
-        exempts macro-weather tags (carried by most of the arm's candidates)
-        from the per-tag concentration cap. Returns an empty set when the
-        exemption is disabled or the sample is too thin (see
+        When ``cfg.ambient_tags`` is non-empty (v0.13), that static
+        pre-registered list wins outright — same exemption for both arms,
+        every run, frozen into the behavioural-payload SHA. Registered
+        experiments should pin the list: the estimator below re-derives the
+        exemption from trailing prevalence, which makes the effective gating
+        rule time-varying mid-experiment (and never triggers on the random
+        arm, whose deterministic 2-tag sector sets keep every tag's
+        prevalence below typical thresholds).
+
+        Otherwise pools the arm's recently-classified candidates — opened
+        factory theses plus classified-but-rejected shadow rows — and
+        delegates to ``compute_ambient_tags``. Computed once per open-phase;
+        the result exempts macro-weather tags (carried by most of the arm's
+        candidates) from the per-tag concentration cap. Returns an empty set
+        when the exemption is disabled or the sample is too thin (see
         ``compute_ambient_tags``).
         """
         cfg = self.config
+        if cfg.ambient_tags:
+            from cents.models import EVENT_TAGS
+            static = frozenset(t for t in cfg.ambient_tags if t in EVENT_TAGS)
+            unknown = sorted(set(cfg.ambient_tags) - static)
+            if unknown:
+                logger.warning(
+                    "ambient_tags entries not in EVENT_TAGS vocabulary "
+                    "(ignored): %s", unknown,
+                )
+            return static
         if cfg.ambient_tag_prevalence <= 0:
             return frozenset()
         cutoff = as_of - timedelta(days=cfg.ambient_lookback_days)
@@ -1509,6 +1600,10 @@ class FactoryEngine:
         # block below reuse the value rather than re-fetching history.
         hedge_basis: HedgeBasis | None = None
         hedge_beta: float | None = None
+        # Fit R² of the beta regression (v0.13) — persisted on the thesis so
+        # neutral-cohort analytics can stratify by hedge quality. None when
+        # beta matching is off or history was unavailable.
+        hedge_fit_r2: float | None = None
         # True iff the first-pass estimation had both primary AND hedge
         # close series available. Distinguishes "R² gate rejected" from
         # "history missing" without re-fetching.
@@ -1541,11 +1636,20 @@ class FactoryEngine:
                     primary_closes is not None and hedge_closes_for_basis is not None
                 )
                 if hedge_history_available:
-                    hedge_beta = estimate_beta(
+                    fit = estimate_beta_fit(
                         primary_closes, hedge_closes_for_basis,
                         lookback=cfg.beta_lookback_days,
-                        min_r_squared=cfg.beta_min_r_squared,
                     )
+                    if fit is not None:
+                        fitted_beta, hedge_fit_r2 = fit
+                        # Gate applied here (not inside the estimator) so the
+                        # measured R² survives for logging + persistence even
+                        # when the fit is refused.
+                        if (
+                            hedge_fit_r2 is not None
+                            and hedge_fit_r2 >= cfg.beta_min_r_squared
+                        ):
+                            hedge_beta = fitted_beta
                 if hedge_beta is not None:
                     hedge_basis = HedgeBasis.BETA
                 elif hedge_history_available:
@@ -1558,8 +1662,9 @@ class FactoryEngine:
                     # and benign: the preempted slot frees for the next run.
                     logger.warning(
                         "Refusing to open %s — %s beta fit rejected "
-                        "(R² below %.2f over %dd); skipping open entirely",
+                        "(R²=%s below %.2f over %dd); skipping open entirely",
                         symbol, hedge_symbol,
+                        f"{hedge_fit_r2:.3f}" if hedge_fit_r2 is not None else "undefined",
                         cfg.beta_min_r_squared, cfg.beta_lookback_days,
                     )
                     return {
@@ -1590,6 +1695,8 @@ class FactoryEngine:
             cohort=cohort,
             hedge_symbol=hedge_symbol,
             hedge_basis=hedge_basis,
+            hedge_beta=hedge_beta,
+            hedge_fit_r2=hedge_fit_r2,
             premise_tags=premise_tags or [],
             premise_tags_count=len(premise_tags or []),
             premise_direction=premise_direction or {},
