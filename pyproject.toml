@@ -28,6 +28,12 @@ dependencies = [
     # across agents) and retry semantics. Bumping past 1.0 should be a
     # deliberate verified change, not a transitive resolver decision.
     "anthropic>=0.50.0,<1.0",
+    # Experiment specs are YAML and use block scalars for `hypothesis`. The
+    # hand-rolled fallback in experiments/registry.py cannot parse those, and
+    # silently stored the literal ">" as the pre-registered hypothesis for
+    # pilot_v1/v2/v3. PyYAML is a hard dependency now; the fallback survives
+    # only to raise a loud error rather than mangle a spec.
+    "pyyaml>=6.0",
 ]
 
 [project.urls]

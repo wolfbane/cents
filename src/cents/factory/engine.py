@@ -534,6 +534,9 @@ class FactoryEngine:
         Neutral-cohort theses own both legs (long on `symbol`, short on
         `hedge_symbol`) via two positions tied to the same thesis_id, so
         closing the thesis closes both legs naturally.
+
+        Conviction updates are scoped to the deciding arm (v0.14); close
+        triggers deliberately are not. See the comments at each step.
         """
         theses_closed = 0
         positions_closed = 0
@@ -552,8 +555,41 @@ class FactoryEngine:
         orchestrator = self._make_orchestrator()
         price_provider = self._make_price_provider()
 
+        # The arm this run speaks for. Defensive against MagicMock fixtures,
+        # mirroring _open_phase.
+        _olabel = getattr(orchestrator, "orchestrator_label", "llm")
+        running_arm = _olabel if isinstance(_olabel, str) else "llm"
+
         for thesis in open_theses:
-            self._update_conviction(thesis, orchestrator, dry_run)
+            # v0.14: only the arm that OWNS a thesis may rewrite its conviction.
+            #
+            # `conviction` is a running field, and _select_preemption_target
+            # ranks on it to choose which thesis to evict once the book
+            # saturates. Pre-v0.14 the close phase was arm-blind, so the random
+            # arm's daily run overwrote every LLM-arm thesis's conviction with a
+            # uniform ±30 draw (and the LLM arm paid its full agent stack to
+            # re-score the control arm's book). Once the budget saturates —
+            # ~30 paired theses/arm, which the pilot reaches in ~3 weeks —
+            # preemption becomes the steady-state open path, so *which LLM
+            # thesis gets censored was being decided by the control arm's
+            # noise*. That is pilot_v2's defect re-entering through conviction
+            # rather than through the book; v0.13 scoped the book but not this.
+            #
+            # Unconditional (not gated on budget_per_arm): cross-arm conviction
+            # writes are never correct. In a single-arm deployment every thesis
+            # carries the running arm's label, so this is a no-op. Legacy
+            # factory rows predate orchestrator_label and are LLM-arm by
+            # construction (the random arm always stamps its label).
+            thesis_arm = thesis.orchestrator_label or "llm"
+            if thesis_arm == running_arm:
+                self._update_conviction(thesis, orchestrator, dry_run)
+
+            # Close triggers stay arm-blind ON PURPOSE. They are deterministic
+            # price/date comparisons (target, stop, expiry, invalidation), not
+            # signal, so either arm's job may close any thesis whose trigger has
+            # fired. Scoping them per-arm would make each arm's launchd job a
+            # single point of failure for its own book's closes — a skipped run
+            # (cents-wrap network preflight) would strand triggered theses open.
             trigger = self._evaluate_close_triggers(thesis, price_provider)
             if not trigger:
                 continue

@@ -2491,3 +2491,135 @@ class TestHedgeFitRecorded:
         assert neutral.hedge_basis == "beta"
         assert neutral.hedge_beta == pytest.approx(1.0, abs=1e-6)
         assert neutral.hedge_fit_r2 == pytest.approx(1.0, abs=1e-6)
+
+
+class TestClosePhaseArmIndependence:
+    """v0.14: only the arm that OWNS a thesis may rewrite its conviction.
+
+    Pre-v0.14 `_update_and_close_phase` listed every open factory thesis with no
+    arm filter and ran the CURRENT run's orchestrator over all of them,
+    persisting the result. So the random control arm's daily job overwrote every
+    LLM-arm thesis's conviction with a uniform +/-30 draw, and the LLM arm paid
+    its full 7-agent stack to re-score the control arm's book.
+
+    That matters because `conviction` is the field `_select_preemption_target`
+    ranks on to choose which thesis to evict once the budget saturates (~30
+    paired theses/arm, which the pilot reaches in ~3 weeks). So *which LLM-arm
+    thesis got censored was being decided by the control arm's noise* —
+    pilot_v2's exact validity defect, re-entering through conviction rather than
+    through the book. v0.13 scoped the book and left this open.
+
+    No test exercised the close phase with two arms present, which is precisely
+    why v0.13's "arm-independent books" shipped with the hole. These are that
+    test.
+    """
+
+    def _seed(self, symbol: str, arm: str | None, conviction: float, **kw) -> Thesis:
+        trepo = ThesisRepository()
+        prepo = PositionRepository()
+        t = Thesis(
+            title=f"factory:{symbol}",
+            symbol=symbol,
+            tags=[TAG_FACTORY],
+            conviction=conviction,
+            orchestrator_label=arm,
+            **kw,
+        )
+        trepo.create(t)
+        prepo.create(Position(
+            symbol=symbol, side=PositionSide.LONG, entry_price=100.0, size=1.0,
+            thesis_id=t.id,
+        ))
+        return t
+
+    def _random_arm(self, delta: float):
+        """A stand-in for RandomOrchestrator (orchestrator_label = 'random')."""
+        class _Random:
+            orchestrator_label = "random"
+
+            def research(self, symbol, thesis=None, as_of=None):
+                from cents.agents.base import AgentResult
+                return AgentResult(
+                    evidence=[], conviction_delta=delta,
+                    summary=f"random control: {symbol}",
+                    dimension_scores={}, aggregate=True,
+                )
+        return _Random()
+
+    def test_random_arm_does_not_rewrite_llm_conviction(self, factory_db):
+        """THE regression: the control arm must not touch the treatment arm."""
+        _seed_universe([])
+        llm_t = self._seed("L", "llm", conviction=70.0)
+        FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=self._random_arm(+30.0),
+            price_provider=_price_provider({"L": 100.0}),
+        ).run()
+        assert ThesisRepository().get(llm_t.id).conviction == 70.0
+
+    def test_llm_arm_neither_rewrites_nor_researches_random_theses(self, factory_db):
+        """The treatment arm must not touch the control arm — and must not pay
+        its agent stack to re-research the control's book (cost + attribution:
+        those calls landed inside the random thesis's created_at..closed_at
+        window and were billed to random-arm cells in `factory analyze`)."""
+        _seed_universe([])
+        rnd_t = self._seed("R", "random", conviction=40.0)
+        orch = _orchestrator({"R": 25.0})  # would push 40 -> 65 if it ran
+        FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=orch,             # MagicMock label -> treated as 'llm'
+            price_provider=_price_provider({"R": 100.0}),
+        ).run()
+        assert ThesisRepository().get(rnd_t.id).conviction == 40.0
+        researched = [c.args[0] for c in orch.research.call_args_list]
+        assert "R" not in researched
+
+    def test_arm_still_updates_its_own_theses(self, factory_db):
+        """Guard against over-scoping: the OWNING arm must still update."""
+        _seed_universe([])
+        llm_t = self._seed("L", "llm", conviction=50.0)
+        FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=_orchestrator({"L": 12.0}),
+            price_provider=_price_provider({"L": 100.0}),
+        ).run()
+        assert ThesisRepository().get(llm_t.id).conviction == 62.0
+
+    def test_close_triggers_stay_arm_blind(self, factory_db):
+        """Close triggers are deterministic price comparisons, not signal, so
+        either arm's job may close any thesis whose trigger fired. Scoping the
+        CLOSE per-arm would make each arm's launchd job a single point of
+        failure for its own book — a skipped run (cents-wrap network preflight)
+        would strand triggered theses open. Only the conviction WRITE is scoped.
+        """
+        _seed_universe([])
+        rnd_t = self._seed("R", "random", conviction=50.0, target_price=110.0)
+        FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=_orchestrator(),          # the LLM arm's run
+            price_provider=_price_provider({"R": 120.0}),
+        ).run()
+        reloaded = ThesisRepository().get(rnd_t.id)
+        assert reloaded.status == ThesisStatus.CLOSED
+        assert reloaded.outcome == ThesisOutcome.CORRECT
+        # ...and its conviction was still never rewritten by the other arm.
+        assert reloaded.conviction == 50.0
+
+    def test_legacy_unlabeled_thesis_belongs_to_the_llm_arm(self, factory_db):
+        """Factory rows predating orchestrator_label are LLM-arm by construction
+        (the random arm has always stamped its label). The LLM arm updates them;
+        the random arm must not."""
+        _seed_universe([])
+        legacy = self._seed("X", None, conviction=50.0)
+        FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=self._random_arm(+30.0),
+            price_provider=_price_provider({"X": 100.0}),
+        ).run()
+        assert ThesisRepository().get(legacy.id).conviction == 50.0
+        FactoryEngine(
+            config=_config(entry_threshold=99.0),
+            orchestrator=_orchestrator({"X": 10.0}),
+            price_provider=_price_provider({"X": 100.0}),
+        ).run()
+        assert ThesisRepository().get(legacy.id).conviction == 60.0

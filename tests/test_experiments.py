@@ -923,3 +923,102 @@ class TestPayloadDriftDetail:
         detail = payload_drift_detail("", '{"a": 1}')
         assert len(detail) == 1
         assert "registered before" in detail[0]
+
+
+class TestSpecParsingIntegrity:
+    """The pre-registered hypothesis must never be silently lost.
+
+    PyYAML was a soft dependency and was NOT installed on the pilot host, so
+    every registration fell through to `_parse_simple_yaml`. That parser is
+    line-based and cannot represent a YAML folded scalar, so `hypothesis: >`
+    stored the literal string ">" and dropped the indented body. pilot_v1,
+    pilot_v2 AND the live pilot_v3 all registered with hypothesis = '>'.
+
+    For a project whose central methodological claim is that experiments are
+    pre-registered, that is the one failure the parser must never produce
+    quietly. PyYAML is a hard dependency as of v0.14; the fallback now refuses
+    a block scalar instead of mangling it.
+    """
+
+    def _folded_spec(self, tmp_path: Path) -> Path:
+        spec = tmp_path / "spec.yaml"
+        spec.write_text(
+            "name: pilot_test\n"
+            "hypothesis: >\n"
+            "  The LLM arm beats the random control on mean net spread P&L\n"
+            "  per thesis, at N per arm.\n"
+            "primary_metric: mean_net_spread_pnl\n"
+            "minimum_n_per_arm: 75\n"
+        )
+        return spec
+
+    def test_folded_hypothesis_round_trips_when_pyyaml_present(self, tmp_path):
+        """With PyYAML (now a hard dep) the block scalar parses for real."""
+        pytest.importorskip("yaml")
+        from cents.experiments.registry import load_experiment_spec
+        data = load_experiment_spec(self._folded_spec(tmp_path))
+        assert data["hypothesis"].startswith("The LLM arm beats")
+        assert "spread P&L" in data["hypothesis"]
+        assert data["hypothesis"] != ">"
+
+    def test_fallback_parser_refuses_block_scalar_instead_of_mangling_it(self):
+        """Without PyYAML the fallback must FAIL LOUDLY, not store '>'.
+
+        This is the regression: it used to return {'hypothesis': '>'} and the
+        registration proceeded happily with an empty pre-registered hypothesis.
+        """
+        from cents.experiments.registry import _parse_simple_yaml
+        raw = "name: p\nhypothesis: >\n  real hypothesis text\nprimary_metric: m\n"
+        with pytest.raises(ExperimentSpecError, match="block scalar"):
+            _parse_simple_yaml(raw)
+
+    def test_fallback_parser_still_handles_plain_scalars(self):
+        """Guard against over-correcting: ordinary key: value specs still work,
+        including a quoted value containing '>' mid-string."""
+        from cents.experiments.registry import _parse_simple_yaml
+        raw = 'name: p\nstopping_rule: "later of 75 days AND N>=75"\nminimum_n_per_arm: 75\n'
+        out = _parse_simple_yaml(raw)
+        assert out["name"] == "p"
+        assert out["minimum_n_per_arm"] == 75
+        assert out["stopping_rule"] == "later of 75 days AND N>=75"
+
+
+class TestPayloadCanonicalisation:
+    """The behavioural-payload SHA must not move for non-behavioural reasons.
+
+    A spurious SHA change aborts every run of a live pilot — and with no webhook
+    configured, silently. That is exactly how pilot_v2 died (16 consecutive
+    silent FAILs). `ambient_tags` is consumed as a SET (membership tests in
+    premise.py), so its ORDER carries no behaviour; hashing it as an ordered
+    list meant a cosmetic reorder in factory.toml killed the pilot.
+    """
+
+    def test_ambient_tags_order_does_not_change_the_sha(self, tmp_path, monkeypatch):
+        from cents.experiments.registry import compute_factory_config_payload
+
+        def _write(tags: list[str]) -> str:
+            cfg = tmp_path / "factory.toml"
+            cfg.write_text(
+                'universe = "default"\n'
+                f"ambient_tags = {json.dumps(tags)}\n"
+            )
+            sha, _, _ = compute_factory_config_payload(cfg)
+            return sha
+
+        a = _write(["fed_policy", "rates", "tariffs.universal"])
+        b = _write(["tariffs.universal", "fed_policy", "rates"])
+        assert a == b, "reordering ambient_tags must not move the payload SHA"
+
+    def test_ambient_tags_membership_still_changes_the_sha(self, tmp_path):
+        """Guard against over-correcting: a genuine change must still be caught."""
+        from cents.experiments.registry import compute_factory_config_payload
+
+        def _write(tags: list[str]) -> str:
+            cfg = tmp_path / "factory.toml"
+            cfg.write_text('universe = "default"\n' f"ambient_tags = {json.dumps(tags)}\n")
+            sha, _, _ = compute_factory_config_payload(cfg)
+            return sha
+
+        a = _write(["fed_policy", "rates"])
+        b = _write(["fed_policy", "rates", "tariffs.universal"])
+        assert a != b, "adding an ambient tag MUST move the payload SHA"

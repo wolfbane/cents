@@ -5,6 +5,8 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import logging
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from cents.factory.config import get_factory_config_path, load_factory_config
 from cents.factory.universe_resolver import resolve_symbols
 from cents.models import Experiment, ThesisStatus, UniverseSource
 
+logger = logging.getLogger(__name__)
 
 REQUIRED_FIELDS = ("name", "hypothesis", "primary_metric", "minimum_n_per_arm")
 
@@ -45,8 +48,16 @@ def _gather_behavioural_inputs(cfg) -> dict:
     from cents.agents.event import _SYSTEM_PROMPT as EVENT_PROMPT
     from cents.factory.premise import _SYSTEM_PROMPT as PREMISE_PROMPT
 
+    factory_config = dataclasses.asdict(cfg)
+    # `ambient_tags` is consumed as a SET (membership tests in premise.py), so
+    # its order carries no behaviour. Hash it sorted — the same treatment
+    # EVENT_TAGS already gets. Otherwise a purely cosmetic reorder in
+    # factory.toml changes the SHA and aborts every run of a live pilot,
+    # and payload_drift_detail even reports it as "reordered" while doing so.
+    factory_config["ambient_tags"] = sorted(factory_config.get("ambient_tags") or [])
+
     payload: dict = {
-        "factory_config": dataclasses.asdict(cfg),
+        "factory_config": factory_config,
         "model_snapshot": HAIKU_TAGGING,
         "prompt_sha256": {
             "sentiment": hashlib.sha256(SENTIMENT_PROMPT.encode("utf-8")).hexdigest(),
@@ -56,17 +67,23 @@ def _gather_behavioural_inputs(cfg) -> dict:
         "event_tags": sorted(EVENT_TAGS),
     }
     # Universe screener config (when the resolved universe is screener-sourced).
+    # NOTE: UniverseRepository exposes get(name), not get_by_name — the latter
+    # only exists on ExperimentRepository. Calling it raised AttributeError,
+    # which the bare except below swallowed, silently dropping the universe from
+    # the hashed payload AND leaving the universe unfrozen. Dormant only because
+    # pilot_v3 uses universe="default"; it armed the moment factory.toml named
+    # a universe. The except is narrowed so a repo bug can't hide here again.
     try:
         from cents.db import UniverseRepository
         urepo = UniverseRepository()
-        universe = urepo.get_default() if cfg.universe == "default" else urepo.get_by_name(cfg.universe)
+        universe = urepo.get_default() if cfg.universe == "default" else urepo.get(cfg.universe)
         if universe is not None:
             payload["universe"] = {
                 "name": universe.name,
                 "source": universe.source.value if hasattr(universe.source, "value") else str(universe.source),
                 "source_config": universe.source_config,
             }
-    except Exception:  # noqa: BLE001 — best-effort
+    except (OSError, sqlite3.Error):  # DB unreachable — best-effort, stay quiet
         payload["universe"] = None
     return payload
 
@@ -220,11 +237,20 @@ def load_experiment_spec(spec_path: Path) -> dict:
 def _parse_simple_yaml(raw: str) -> dict:
     """Minimal YAML parser — top-level `key: value` pairs only.
 
-    Sufficient for the experiment spec schema; avoids the PyYAML soft-dep.
-    Strips inline ``#`` comments and trims quotes.
+    Emergency fallback for when PyYAML is missing (it is a hard dependency as
+    of v0.14; see pyproject). It cannot parse block scalars, so it REFUSES a
+    spec that uses one rather than silently mangling it.
+
+    History: PyYAML was a soft dep and was not installed on the pilot host, so
+    this parser silently handled every registration. `hypothesis: >` (a YAML
+    folded scalar) parsed as the literal string ">" and the indented body was
+    dropped — pilot_v1, pilot_v2 AND pilot_v3 all registered with
+    ``hypothesis = '>'``. For a project whose central claim is that experiments
+    are pre-registered, losing the hypothesis text is the one failure this
+    parser must never produce quietly.
     """
     result: dict = {}
-    for line in raw.splitlines():
+    for lineno, line in enumerate(raw.splitlines(), 1):
         # Strip line comments and trailing whitespace.
         if "#" in line:
             line = line[: line.index("#")]
@@ -234,6 +260,16 @@ def _parse_simple_yaml(raw: str) -> dict:
         key, _, value = line.partition(":")
         key = key.strip()
         value = value.strip()
+        # A bare '>' or '|' (optionally with a chomping/indent indicator) opens
+        # a multi-line block scalar this parser cannot represent. Fail loudly.
+        if value and value[0] in (">", "|"):
+            raise ExperimentSpecError(
+                f"Experiment spec line {lineno}: field {key!r} uses a YAML block "
+                f"scalar ({value!r}), which requires PyYAML. PyYAML is not "
+                f"installed, and the fallback parser would silently store "
+                f"{value!r} as the value — losing the field body. "
+                f"Install it: pip install pyyaml"
+            )
         if value.startswith(("'", '"')) and value.endswith(("'", '"')):
             value = value[1:-1]
         # Type-coerce common primitives.
@@ -307,6 +343,7 @@ def _resolve_frozen_universe(config_path: Path | None = None) -> str:
     raise on a missing universe because experiments can legitimately be
     registered before the universe is created (test fixtures, etc.).
     """
+    universe_name = "?"
     try:
         cfg = load_factory_config(config_path) if config_path is None else load_factory_config(config_path)
         universe_name = cfg.universe
@@ -314,12 +351,20 @@ def _resolve_frozen_universe(config_path: Path | None = None) -> str:
         if universe_name == "default":
             universe = urepo.get_default()
         else:
-            universe = urepo.get_by_name(universe_name)
+            # get(), not get_by_name() — see compute_factory_config_payload.
+            universe = urepo.get(universe_name)
         if universe is None:
             return ""
         symbols = resolve_symbols(universe)
         return json.dumps(sorted(set(symbols)))
     except Exception:  # noqa: BLE001 — universe freeze is best-effort
+        # Loud: a silent "" here means the experiment universe is NOT frozen and
+        # gets re-resolved live on every run — the exact daily-drift confound
+        # this function exists to prevent. Never let that pass unlogged.
+        logger.exception(
+            "Failed to freeze experiment universe %r — it will be resolved LIVE "
+            "on every run, which is NOT a frozen universe", universe_name,
+        )
         return ""
 
 

@@ -643,11 +643,28 @@ def init_db(db_path: Path | None = None) -> sqlite3.Connection:
     """Initialize database with schema and return connection."""
     path = db_path or get_db_path()
     # check_same_thread=False allows the factory engine's per-symbol watchdog
-    # worker thread (cents-87v) to read the singleton DB. Cents is single-
-    # process serial — the main thread is blocked on thread.join while the
-    # worker runs, so SQLite is never accessed concurrently.
+    # worker thread (cents-87v) to read the singleton DB. Within one process the
+    # main thread is blocked on thread.join while the worker runs, so there is
+    # no intra-process concurrency.
+    #
+    # ACROSS processes there is (v0.14). The two experiment arms are separate
+    # launchd jobs five minutes apart (factory-llm 03:30 PT, factory-random
+    # 03:35 PT) against the same DB, and an S&P-100 LLM run lasts far longer
+    # than five minutes — so they overlap every single day. The previous
+    # "cents is single-process serial" claim here was simply false under that
+    # topology, and with SQLite's default journal + zero busy timeout, any write
+    # contention raised "database is locked" immediately with no retry. That
+    # exception is swallowed into FactoryRun.error, so the losing arm silently
+    # opens nothing that day — asymmetric N accrual that nobody is paged about.
+    #
+    # WAL lets the reader and the writer proceed concurrently; busy_timeout
+    # makes a blocked writer retry for 30s instead of failing instantly.
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # journal_mode is persisted in the DB header (one-time), busy_timeout is
+    # per-connection and must be set on every connect.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
     _migrate_schema(conn)
