@@ -27,6 +27,27 @@ default_target_pct = 10.0      # close-position trigger as % off entry (positive
 max_new_per_run = 5            # rate-limit on new theses opened per run
 max_per_premise_tag = 2        # max open theses sharing any single premise tag (0 disables)
 
+# Premise-concentration scoping (v0.12). The per-tag cap above is meant to
+# police *idiosyncratic* premise clustering within one book (e.g. 5 secret
+# drug_pricing bets), not systematic macro exposure. Two corrections make it
+# measure that instead of degenerating the book:
+#   concentration_per_arm — count only the deciding arm's own open theses.
+#     Concentration is a property of a single book; in production one
+#     orchestrator runs one book. False restores the legacy shared ledger that
+#     let the two experiment arms crowd each other through one tag count.
+#   ambient_tag_prevalence — a tag carried by >= this fraction of the arm's
+#     recently-classified candidates is systematic ("the macro weather", e.g.
+#     fed_policy / tariffs.universal stapled onto every thesis), not a position.
+#     It is exempt from the cap — its exposure is already handled by the
+#     neutral-cohort hedge + gross/position caps. 0 disables the exemption.
+#   ambient_lookback_days / ambient_min_sample — window and minimum sample for
+#     the prevalence estimate. Below the minimum, no tag is treated as ambient
+#     (conservative cold-start: a fresh book gates on the plain per-tag cap).
+concentration_per_arm = true
+ambient_tag_prevalence = 0.6
+ambient_lookback_days = 14
+ambient_min_sample = 20
+
 # Premise-invalidation behaviour (v0.11). When a policy event opposes an open
 # thesis's premise the EventAgent records a PREMISE_INVALIDATION alert (a
 # covariate). By default the thesis is NOT closed — it runs to target / stop /
@@ -89,6 +110,14 @@ class FactoryConfig:
     default_target_pct: float = 10.0
     max_new_per_run: int = 5
     max_per_premise_tag: int = 2
+    # Premise-concentration scoping (v0.12). See DEFAULT_TOML for rationale.
+    # Per-arm ledger + ambient-tag exemption so the per-tag cap polices
+    # idiosyncratic premise clustering within one book, not systematic macro
+    # factors the cohort hedge + gross caps already manage.
+    concentration_per_arm: bool = True
+    ambient_tag_prevalence: float = 0.6
+    ambient_lookback_days: int = 14
+    ambient_min_sample: int = 20
     # Premise-invalidation (v0.11). False = record the alert but let the thesis
     # run to target/stop/horizon (research default); True = force-close on
     # invalidation (pre-v0.11 trading-style behaviour).

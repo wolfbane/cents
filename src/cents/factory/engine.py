@@ -69,7 +69,12 @@ from cents.db import (
     UniverseRepository,
 )
 from cents.factory.config import FactoryConfig, load_factory_config
-from cents.factory.premise import capture_regime_snapshot, classify_premise_tags
+from cents.factory.premise import (
+    capture_regime_snapshot,
+    classify_premise_tags,
+    compute_ambient_tags,
+    premise_concentration_exceeded,
+)
 from cents.finance.calibration import (
     CalibrationModel,
     build_predict_features,
@@ -816,6 +821,19 @@ class FactoryEngine:
                 "calibration_age_days": self._calibration_age_days,
             }
 
+        # Ambient (systematic) premise tags for this arm, computed once per
+        # open-phase. Tags carried by most of the arm's recently-classified
+        # candidates (the macro weather — e.g. fed_policy / tariffs.universal)
+        # are exempt from the per-tag concentration cap so it polices
+        # idiosyncratic clustering, not systematic exposure the cohort hedge
+        # already neutralises. See FactoryConfig.ambient_tag_prevalence (v0.12).
+        ambient_tags = self._arm_ambient_tags(orchestrator_label, self._clock())
+        if ambient_tags:
+            logger.debug(
+                "arm=%s ambient premise tags exempt from concentration cap: %s",
+                orchestrator_label, sorted(ambient_tags),
+            )
+
         # Note (research-mode): we intentionally do NOT gate the open phase
         # on portfolio drawdown. The point of cents is to *record* what
         # happens to a labeled outcomes dataset, not to halt trading at
@@ -938,14 +956,21 @@ class FactoryEngine:
                     source_sink=source_sink,
                 )
             )
-            # Per-premise-tag concentration cap applies to BOTH arms. The
-            # sector-fallback tag cap (premise.py _SECTOR_FALLBACK_TAG_CAP)
-            # keeps random-arm and LLM-arm tag-set sizes comparable so the
-            # same cap applies uniformly without breaking matched-cadence.
+            # Per-premise-tag concentration cap. Scoped to the deciding arm's
+            # own open book (concentration_per_arm) and skipping ambient macro
+            # tags (ambient_tags), so the cap throttles idiosyncratic premise
+            # clustering rather than systematic exposure the cohort hedge
+            # already neutralises. Pre-v0.12 this counted BOTH arms in one
+            # ledger and gated on any shared tag, which let ubiquitous macro
+            # tags saturate at 2 and freeze the book. See FactoryConfig.
+            cap_book = (
+                [t for t in open_theses if t.orchestrator_label == orchestrator_label]
+                if cfg.concentration_per_arm else open_theses
+            )
             apply_concentration_cap = cfg.max_per_premise_tag > 0
             if apply_concentration_cap and self._exceeds_premise_concentration(
-                premise_tags, open_theses, cfg.max_per_premise_tag,
-                candidate_direction=premise_direction,
+                premise_tags, cap_book, cfg.max_per_premise_tag,
+                candidate_direction=premise_direction, ambient_tags=ambient_tags,
             ):
                 logger.debug(
                     "Skipping %s — premise tags %s already at concentration cap",
@@ -1330,38 +1355,63 @@ class FactoryEngine:
         except Exception:  # pragma: no cover — observability must not break runs
             logger.exception("Failed to record shadow_open for %s", symbol)
 
+    def _arm_ambient_tags(self, arm: str, as_of: datetime) -> frozenset[str]:
+        """Ambient (systematic) premise tags for ``arm`` over the recent window.
+
+        Pools the arm's recently-classified candidates — opened factory theses
+        plus classified-but-rejected shadow rows — and delegates to
+        ``compute_ambient_tags``. Computed once per open-phase; the result
+        exempts macro-weather tags (carried by most of the arm's candidates)
+        from the per-tag concentration cap. Returns an empty set when the
+        exemption is disabled or the sample is too thin (see
+        ``compute_ambient_tags``).
+        """
+        cfg = self.config
+        if cfg.ambient_tag_prevalence <= 0:
+            return frozenset()
+        cutoff = as_of - timedelta(days=cfg.ambient_lookback_days)
+        tag_lists: list[list[str]] = []
+        for t in self.thesis_repo.list():
+            if TAG_FACTORY not in t.tags or t.orchestrator_label != arm:
+                continue
+            if t.created_at < cutoff:
+                continue
+            tag_lists.append(t.premise_tags)
+        for s in self.shadow_repo.list():
+            if s.orchestrator_label != arm or not s.premise_tags:
+                continue
+            if s.created_at < cutoff:
+                continue
+            tag_lists.append(s.premise_tags)
+        return compute_ambient_tags(
+            tag_lists,
+            threshold=cfg.ambient_tag_prevalence,
+            min_sample=cfg.ambient_min_sample,
+        )
+
     def _exceeds_premise_concentration(
         self,
         candidate_tags: list[str],
         open_theses: list[Thesis],
         cap: int,
         candidate_direction: dict[str, str] | None = None,
+        ambient_tags: frozenset[str] = frozenset(),
     ) -> bool:
         """True if any candidate tag+direction is already at the per-tag cap.
 
-        Buckets on ``(tag, direction)`` so a bullish ai_capex thesis and a
-        bearish ai_capex thesis don't count against each other (that's a
-        spread, not concentration). Legacy rows with no recorded direction
-        fall into the ``(tag, "*")`` bucket.
-
-        Counts theses from BOTH arms — the sector-fallback tag cap keeps the
-        random-arm tag distribution comparable to LLM-arm so a uniform cap
-        applies without breaking matched-cadence.
+        Thin adapter over ``premise_concentration_exceeded``. ``open_theses`` is
+        the cap's scope — already filtered to the deciding arm when
+        ``concentration_per_arm`` is on — and ``ambient_tags`` are the
+        systematic macro tags exempt from gating. See that function (and
+        FactoryConfig, v0.12) for the bucketing and ambient-exemption rules.
         """
-        if not candidate_tags:
-            return False
-        counts: dict[tuple[str, str], int] = {}
-        for t in open_theses:
-            t_dir = t.premise_direction or {}
-            for tag in t.premise_tags:
-                key = (tag, t_dir.get(tag, "*"))
-                counts[key] = counts.get(key, 0) + 1
-        candidate_direction = candidate_direction or {}
-        for tag in candidate_tags:
-            key = (tag, candidate_direction.get(tag, "*"))
-            if counts.get(key, 0) >= cap:
-                return True
-        return False
+        return premise_concentration_exceeded(
+            candidate_tags,
+            candidate_direction,
+            ((t.premise_tags, t.premise_direction) for t in open_theses),
+            cap,
+            ambient_tags=ambient_tags,
+        )
 
     def _open_new_thesis(
         self,

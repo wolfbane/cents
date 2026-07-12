@@ -13,6 +13,7 @@ from cents.db import (
     AlertRepository,
     FactoryRunRepository,
     PositionRepository,
+    ShadowOpenRepository,
     ThesisRepository,
     UniverseRepository,
 )
@@ -27,6 +28,7 @@ from cents.models import (
     Position,
     PositionSide,
     PositionStatus,
+    ShadowOpen,
     Thesis,
     ThesisCohort,
     ThesisOutcome,
@@ -255,17 +257,9 @@ class TestPremiseConcentration:
         assert run.theses_opened == 1
 
 
-    def test_random_arm_theses_count_toward_cap(self, factory_db, monkeypatch):
-        """cents-2xd4: the random arm's sector fallback is now capped at
-        _SECTOR_FALLBACK_TAG_CAP tags, so its tag-set size is comparable to
-        the LLM arm's typical 1-3. With that asymmetry gone, the per-tag
-        concentration cap applies uniformly to BOTH arms — keeping the
-        matched-cadence promise (random arm can't pile unbounded on the
-        same regime variable while LLM hits the cap at 2).
-        """
+    def _seed_other_arm_aicapex(self):
+        """Two random-arm theses saturating the ai_capex+positive bucket."""
         trepo = ThesisRepository()
-        # Two RANDOM-arm theses with overlapping post-cap tag — together
-        # they saturate the cap for the ai_capex+positive bucket.
         for sym in ("A", "B"):
             trepo.create(Thesis(
                 title=f"factory:{sym}",
@@ -276,8 +270,16 @@ class TestPremiseConcentration:
                 orchestrator_label="random",
             ))
 
+    def test_concentration_is_scoped_per_arm(self, factory_db, monkeypatch):
+        """v0.12: the per-tag cap is scoped to the deciding arm's own book.
+
+        Concentration is a property of a single book; in production one
+        orchestrator runs one book, so the two experiment arms must not crowd
+        each other through one shared tag ledger. Two random-arm theses on
+        ai_capex+positive must NOT block an LLM-arm candidate on the same tag.
+        """
+        self._seed_other_arm_aicapex()
         _seed_universe(["C"])
-        # LLM-arm candidate C overlaps the random arm's ai_capex tag.
         monkeypatch.setattr(
             "cents.factory.engine.classify_premise_tags",
             lambda *a, **kw: (["ai_capex"], {"ai_capex": "positive"}),
@@ -289,13 +291,112 @@ class TestPremiseConcentration:
                 max_per_premise_tag=2,
                 budget_usd=100000.0,
                 target_positions=20,
+                concentration_per_arm=True,
+                ambient_tag_prevalence=0.0,  # isolate the per-arm behaviour
             ),
             orchestrator=_orchestrator({"C": 6.0}),
             price_provider=_price_provider({"C": 100.0}),
         )
         run = engine.run()
-        # C must NOT open — random-arm theses count toward the cap now.
+        # C opens: the random arm's holdings don't gate the LLM arm's book.
+        assert run.theses_opened == 1
+
+    def test_concentration_legacy_shared_ledger_blocks_cross_arm(
+        self, factory_db, monkeypatch
+    ):
+        """concentration_per_arm=False restores the pre-v0.12 shared ledger
+        where the other arm's theses count toward the cap (cross-arm crowding).
+        """
+        self._seed_other_arm_aicapex()
+        _seed_universe(["C"])
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags",
+            lambda *a, **kw: (["ai_capex"], {"ai_capex": "positive"}),
+        )
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                max_per_premise_tag=2,
+                budget_usd=100000.0,
+                target_positions=20,
+                concentration_per_arm=False,
+                ambient_tag_prevalence=0.0,
+            ),
+            orchestrator=_orchestrator({"C": 6.0}),
+            price_provider=_price_provider({"C": 100.0}),
+        )
+        run = engine.run()
+        # C blocked: under the shared ledger the two random theses saturate the
+        # ai_capex+positive bucket the LLM candidate also carries.
         assert run.theses_opened == 0
+
+    def test_ambient_tag_exempt_from_concentration_cap(self, factory_db, monkeypatch):
+        """v0.12: a tag carried by most of the arm's recently-classified
+        candidates is systematic ("macro weather") and is exempt from the cap,
+        while a specific tag at the cap still blocks.
+
+        Setup (all LLM arm): two open theses carry BOTH fed_policy (ambient)
+        and drug_pricing (specific) — saturating each bucket at the cap of 2.
+        Three extra classified shadow rows carry fed_policy only, pushing
+        fed_policy prevalence to 5/5 (ambient) and drug_pricing to 2/5 (not).
+        A candidate on fed_policy opens (exempt); one on drug_pricing is blocked.
+        """
+        trepo = ThesisRepository()
+        srepo = ShadowOpenRepository()
+        for sym in ("A", "B"):
+            trepo.create(Thesis(
+                title=f"factory:{sym}",
+                symbol=sym,
+                tags=[TAG_FACTORY],
+                premise_tags=["fed_policy", "drug_pricing"],
+                premise_direction={"fed_policy": "positive", "drug_pricing": "negative"},
+                orchestrator_label="llm",
+            ))
+        for i in range(3):
+            srepo.create(ShadowOpen(
+                symbol=f"S{i}",
+                conviction_delta=9.0,
+                reason="concentration_cap",
+                primary_side="LONG",
+                premise_tags=["fed_policy"],
+                premise_direction={"fed_policy": "positive"},
+                orchestrator_label="llm",
+            ))
+
+        _seed_universe(["X", "Y"])
+
+        def fake_classify(symbol, *a, **kw):
+            if symbol == "X":  # ambient tag, already at cap → must still open
+                return (["fed_policy"], {"fed_policy": "positive"})
+            return (["drug_pricing"], {"drug_pricing": "negative"})  # specific → blocked
+
+        monkeypatch.setattr(
+            "cents.factory.engine.classify_premise_tags", fake_classify
+        )
+        engine = FactoryEngine(
+            config=_config(
+                cohort_mode="directional_only",
+                entry_threshold=1.0,
+                max_per_premise_tag=2,
+                budget_usd=100000.0,
+                target_positions=20,
+                concentration_per_arm=True,
+                ambient_tag_prevalence=0.6,
+                ambient_min_sample=5,
+            ),
+            orchestrator=_orchestrator({"X": 6.0, "Y": 6.0}),
+            price_provider=_price_provider({"X": 100.0, "Y": 100.0}),
+        )
+        run = engine.run()
+        # Only X opens: fed_policy is ambient (exempt); drug_pricing (Y) is at cap.
+        assert run.theses_opened == 1
+        opened = [t for t in ThesisRepository().list() if TAG_FACTORY in t.tags
+                  and t.orchestrator_label == "llm" and t.symbol == "X"]
+        assert len(opened) == 1
+        blocked = [s for s in ShadowOpenRepository().list(reason="concentration_cap")
+                   if s.symbol == "Y"]
+        assert len(blocked) == 1
 
     def test_premise_tags_count_recorded_on_open(self, factory_db, monkeypatch):
         """cents-2xd4: every opened thesis carries the recorded tag count."""
