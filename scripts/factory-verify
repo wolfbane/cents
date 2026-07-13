@@ -7,7 +7,7 @@
 # common failure modes (network-skip, factory.toml SHA drift, beta-match
 # starvation of the LLM arm, spend pressure, zombie/SPY-fallback contamination).
 #
-# Scoped to pilot_v3 (experiment_id 668fcb77). Update EXP_ID when re-registering.
+# Scoped to pilot_v4 (experiment_id 4bd7d1cd). Update EXP_ID when re-registering.
 # Deployed to ~/.cents/bin/factory-verify; scheduled by
 # ~/Library/LaunchAgents/factory-verify.plist (see scripts/launchd/ template).
 #
@@ -24,8 +24,8 @@ export TZ="America/New_York"   # match the ET date the arms log under
 CB="${CENTS_BIN:-$HOME/.venvs/cents/bin/cents}"
 SQLITE=/usr/bin/sqlite3
 DB="$HOME/.cents/data/pilot.db"
-EXP_ID="668fcb77"   # pilot_v3
-EXP_NAME="pilot_v3"
+EXP_ID="4bd7d1cd"   # pilot_v4
+EXP_NAME="pilot_v4"
 
 DATE="$(date +%Y-%m-%d)"
 LOGDIR="$HOME/.cents/logs/$DATE"
